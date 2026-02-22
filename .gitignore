@@ -1,0 +1,55 @@
+# Environment variables (sensitive - never commit)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+
+# Graph data exports (may contain private code)
+*.json
+!*example*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# uv
+uv.lock
+
+# Generated output
+rag_output/
+tinycc_analysis/
+tinycc_kuzu/
+tinycc_memory/
+extracted_prompts/
