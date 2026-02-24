@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 class DefinitionProcessor:
     """Process file definitions (functions, classes, methods)."""
 
+    # C language storage class specifiers that indicate static (file-local) visibility
+    _C_STATIC_SPECIFIER = "storage_class_specifier"
+
     def __init__(
         self,
         ingestor: IngestorProtocol,
@@ -39,6 +42,8 @@ class DefinitionProcessor:
         self.import_processor = import_processor
         self.module_qn_to_file_path = module_qn_to_file_path
         self.class_inheritance: dict[str, list[str]] = {}
+        # Track function declarations found in header files for visibility resolution
+        self._header_declarations: set[str] = set()
 
     def process_file(
         self,
@@ -160,6 +165,11 @@ class DefinitionProcessor:
         if not func_query:
             return
 
+        # Determine the file path from module_qn for visibility analysis
+        file_path = self.module_qn_to_file_path.get(module_qn)
+        is_header = file_path is not None and file_path.suffix == cs.EXT_H
+        is_c_lang = language == cs.SupportedLanguage.C
+
         try:
             cursor = QueryCursor(func_query)
             captures = cursor.captures(root_node)
@@ -185,6 +195,24 @@ class DefinitionProcessor:
                     cs.KEY_START_LINE: func_node.start_point[0] + 1,
                     cs.KEY_END_LINE: func_node.end_point[0] + 1,
                 }
+
+                # Extract API interface properties for C language
+                if is_c_lang:
+                    return_type = self._extract_c_return_type(func_node)
+                    parameters = self._extract_c_parameters(func_node)
+                    visibility = self._extract_c_visibility(func_node, is_header)
+                    signature = self._build_c_signature(
+                        func_name, return_type, parameters
+                    )
+
+                    func_props[cs.KEY_RETURN_TYPE] = return_type
+                    func_props[cs.KEY_PARAMETERS] = parameters
+                    func_props[cs.KEY_SIGNATURE] = signature
+                    func_props[cs.KEY_VISIBILITY] = visibility
+
+                    # Track header declarations for cross-file visibility
+                    if is_header:
+                        self._header_declarations.add(func_name)
 
                 logger.info(f"  Found function: {func_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, func_props)
@@ -314,6 +342,100 @@ class DefinitionProcessor:
 
         except Exception as e:
             logger.debug(f"Error ingesting class methods: {e}")
+
+    # -----------------------------------------------------------------
+    # C language API interface extraction helpers
+    # -----------------------------------------------------------------
+
+    def _extract_c_return_type(self, func_node: Node) -> str | None:
+        """Extract the return type from a C function node.
+
+        For ``function_definition``, the return type is the ``type`` field.
+        For a forward ``declaration``, the type specifiers precede the declarator.
+        """
+        # function_definition → type field (e.g. "int", "void", "struct foo *")
+        type_node = func_node.child_by_field_name(cs.FIELD_TYPE)
+        if type_node and type_node.text:
+            return safe_decode_text(type_node)
+
+        # Fallback: collect all type-specifier children that appear before the
+        # declarator (covers ``static inline int func(…)`` patterns).
+        parts: list[str] = []
+        for child in func_node.children:
+            if child.type in (
+                "primitive_type",
+                "sized_type_specifier",
+                "type_identifier",
+                "struct_specifier",
+                "union_specifier",
+                "enum_specifier",
+            ):
+                text = safe_decode_text(child)
+                if text:
+                    parts.append(text)
+            elif child.type == cs.FIELD_DECLARATOR or child.type == "function_declarator":
+                break
+        return " ".join(parts) if parts else None
+
+    def _extract_c_parameters(self, func_node: Node) -> list[str]:
+        """Extract parameter list from a C function node.
+
+        Returns a list of parameter strings like ``["int fd", "const char *buf"]``.
+        """
+        # Navigate to parameter_list: may be nested under declarator → function_declarator
+        params_node = self._find_c_parameter_list(func_node)
+        if not params_node:
+            return []
+
+        params: list[str] = []
+        for child in params_node.children:
+            if child.type == "parameter_declaration":
+                text = safe_decode_text(child)
+                if text:
+                    params.append(text)
+            elif child.type == "variadic_parameter":
+                params.append("...")
+        return params
+
+    def _find_c_parameter_list(self, func_node: Node) -> Node | None:
+        """Locate the parameter_list node within a C function AST node."""
+        # Direct: function_definition → declarator → function_declarator → parameters
+        declarator = func_node.child_by_field_name(cs.FIELD_DECLARATOR)
+        if declarator:
+            if declarator.type == "function_declarator":
+                return declarator.child_by_field_name(cs.FIELD_PARAMETERS)
+            # pointer_declarator wrapping: int *func(…)
+            inner = declarator.child_by_field_name(cs.FIELD_DECLARATOR)
+            if inner and inner.type == "function_declarator":
+                return inner.child_by_field_name(cs.FIELD_PARAMETERS)
+        return None
+
+    def _extract_c_visibility(self, func_node: Node, is_header: bool) -> str:
+        """Determine C function visibility.
+
+        Rules:
+        - ``static`` keyword → "static" (file-local, private)
+        - Declared in a ``.h`` header file → "public"
+        - Otherwise → "public" (C functions default to external linkage)
+        """
+        # Check for ``static`` storage class specifier
+        for child in func_node.children:
+            if child.type == self._C_STATIC_SPECIFIER:
+                text = safe_decode_text(child)
+                if text and "static" in text:
+                    return "static"
+        return "public"
+
+    @staticmethod
+    def _build_c_signature(
+        name: str,
+        return_type: str | None,
+        parameters: list[str],
+    ) -> str:
+        """Build a full C function signature string."""
+        ret = return_type or "void"
+        params = ", ".join(parameters) if parameters else "void"
+        return f"{ret} {name}({params})"
 
     def _extract_function_name(self, func_node: Node) -> str | None:
         """Extract function name from a function node."""

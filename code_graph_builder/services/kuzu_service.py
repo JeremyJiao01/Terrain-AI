@@ -116,6 +116,10 @@ class KuzuIngestor:
                         start_line INT64,
                         end_line INT64,
                         docstring STRING,
+                        return_type STRING,
+                        signature STRING,
+                        visibility STRING,
+                        parameters STRING[],
                         PRIMARY KEY (qualified_name)
                     )
                 """)
@@ -211,6 +215,10 @@ class KuzuIngestor:
                 start_line = props.get("start_line", 0)
                 end_line = props.get("end_line", 0)
                 docstring = props.get("docstring", "")
+                return_type = props.get("return_type", "")
+                signature = props.get("signature", "")
+                visibility = props.get("visibility", "")
+                parameters = props.get("parameters")
 
                 try:
                     cypher = f"""
@@ -220,7 +228,11 @@ class KuzuIngestor:
                             path: {self._value_to_cypher(path)},
                             start_line: {start_line},
                             end_line: {end_line},
-                            docstring: {self._value_to_cypher(docstring)}
+                            docstring: {self._value_to_cypher(docstring)},
+                            return_type: {self._value_to_cypher(return_type)},
+                            signature: {self._value_to_cypher(signature)},
+                            visibility: {self._value_to_cypher(visibility)},
+                            parameters: {self._value_to_cypher(parameters if parameters else [])}
                         }})
                     """
                     self._conn.execute(cypher)
@@ -283,6 +295,52 @@ class KuzuIngestor:
             return rows
         except Exception as e:
             logger.error(f"Query error: {e}")
+            return []
+
+    def fetch_module_apis(
+        self,
+        module_qn: str | None = None,
+        visibility: str | None = "public",
+    ) -> list[ResultRow]:
+        """Fetch API interfaces (functions) for a module or the entire project.
+
+        Args:
+            module_qn: Qualified name of a module. If None, returns APIs across all modules.
+            visibility: Filter by visibility ("public", "static", or None for all).
+
+        Returns:
+            List of result rows with function name, signature, return_type, etc.
+        """
+        if not self._conn:
+            raise ConnectionError("Not connected to database")
+
+        conditions: list[str] = []
+        if module_qn:
+            safe_qn = module_qn.replace("'", "\\'")
+            conditions.append(f"m.qualified_name = '{safe_qn}'")
+        if visibility:
+            conditions.append(f"f.visibility = '{visibility}'")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        cypher = f"""
+            MATCH (m:Module)-[:DEFINES]->(f:Function)
+            {where_clause}
+            RETURN m.qualified_name AS module,
+                   f.name AS name,
+                   f.signature AS signature,
+                   f.return_type AS return_type,
+                   f.visibility AS visibility,
+                   f.parameters AS parameters,
+                   f.start_line AS start_line,
+                   f.end_line AS end_line
+            ORDER BY m.qualified_name, f.start_line
+        """
+
+        try:
+            return self.query(cypher)
+        except Exception as e:
+            logger.error(f"fetch_module_apis error: {e}")
             return []
 
     def clean_database(self) -> None:

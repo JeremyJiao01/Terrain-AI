@@ -445,6 +445,37 @@ class MCPToolsRegistry:
                     "required": ["file_path", "target_code", "replacement_code"],
                 },
             ),
+            ToolDefinition(
+                name="list_api_interfaces",
+                description=(
+                    "List public API interfaces (function signatures) for a module or "
+                    "the entire project. Returns function name, full signature, return "
+                    "type, parameters, and visibility. Particularly useful for C "
+                    "codebases to understand module boundaries."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "module": {
+                            "type": "string",
+                            "description": (
+                                "Module qualified name to query. "
+                                "If omitted, returns APIs across all modules."
+                            ),
+                        },
+                        "visibility": {
+                            "type": "string",
+                            "enum": ["public", "static", "all"],
+                            "description": (
+                                "Filter by visibility: 'public' (default) for externally "
+                                "visible functions, 'static' for file-local functions, "
+                                "'all' for both."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
         ]
 
         return defs
@@ -464,6 +495,7 @@ class MCPToolsRegistry:
             "locate_function": self._handle_locate_function,
             "get_function_diff": self._handle_get_function_diff,
             "surgical_replace_code": self._handle_surgical_replace_code,
+            "list_api_interfaces": self._handle_list_api_interfaces,
         }
         return handlers.get(name)
 
@@ -947,3 +979,61 @@ class MCPToolsRegistry:
         result = self._file_editor.replace_code_block(target, target_code, replacement_code)
         result["file_path"] = file_path
         return result
+
+    # -------------------------------------------------------------------------
+    # list_api_interfaces
+    # -------------------------------------------------------------------------
+
+    async def _handle_list_api_interfaces(
+        self,
+        module: str | None = None,
+        visibility: str = "public",
+    ) -> dict[str, Any]:
+        err = self._require_active()
+        if err:
+            return {"error": err}
+
+        assert self._ingestor is not None
+
+        vis_filter = None if visibility == "all" else visibility
+
+        try:
+            rows = self._ingestor.fetch_module_apis(
+                module_qn=module,
+                visibility=vis_filter,
+            )
+
+            # Group results by module for readability
+            by_module: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                raw = row.get("result", row)
+                if isinstance(raw, (list, tuple)) and len(raw) >= 8:
+                    mod_name = raw[0] or "unknown"
+                    entry: dict[str, Any] = {
+                        "name": raw[1],
+                        "signature": raw[2],
+                        "return_type": raw[3],
+                        "visibility": raw[4],
+                        "parameters": raw[5],
+                        "start_line": raw[6],
+                        "end_line": raw[7],
+                    }
+                else:
+                    # Fallback for dict-based results
+                    mod_name = raw.get("module", "unknown") if isinstance(raw, dict) else "unknown"
+                    entry = raw if isinstance(raw, dict) else {"raw": raw}
+
+                if mod_name not in by_module:
+                    by_module[mod_name] = []
+                by_module[mod_name].append(entry)
+
+            total = sum(len(v) for v in by_module.values())
+            return {
+                "total_apis": total,
+                "module_count": len(by_module),
+                "visibility_filter": visibility,
+                "modules": by_module,
+            }
+
+        except Exception as exc:
+            return {"error": f"Failed to list API interfaces: {exc}"}

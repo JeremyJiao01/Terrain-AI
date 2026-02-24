@@ -81,6 +81,10 @@ class FunctionInfo:
     decorators: list[str]
     is_method: bool
     parent_class: str | None
+    return_type: str | None = None
+    parameters: list[str] | None = None
+    signature: str | None = None
+    visibility: str | None = None
 
 
 @dataclass

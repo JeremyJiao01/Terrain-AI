@@ -264,6 +264,9 @@ KEY_PARAMETERS = "parameters"
 KEY_DECORATORS = "decorators"
 KEY_DOCSTRING = "docstring"
 KEY_IS_EXPORTED = "is_exported"
+KEY_RETURN_TYPE = "return_type"
+KEY_SIGNATURE = "signature"
+KEY_VISIBILITY = "visibility"
 
 # Node type constants
 NODE_PROJECT = NodeLabel.PROJECT
