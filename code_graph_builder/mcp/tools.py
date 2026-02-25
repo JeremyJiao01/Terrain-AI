@@ -38,7 +38,6 @@ from .file_editor import FileEditor
 from .pipeline import (
     ProgressCb,
     artifact_dir_for,
-    build_api_docs,
     build_graph,
     build_vector_index,
     run_wiki_generation,
@@ -533,9 +532,9 @@ class MCPToolsRegistry:
         max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
 
         try:
-            builder = build_graph(repo_path, db_path, rebuild, progress_cb, backend=backend)
-
-            build_api_docs(builder, artifact_dir, rebuild, progress_cb)
+            builder = build_graph(
+                repo_path, db_path, artifact_dir, rebuild, progress_cb, backend=backend,
+            )
 
             vector_store, embedder, func_map = build_vector_index(
                 builder, repo_path, vectors_path, rebuild, progress_cb
