@@ -38,6 +38,7 @@ from .file_editor import FileEditor
 from .pipeline import (
     ProgressCb,
     artifact_dir_for,
+    build_api_docs,
     build_graph,
     build_vector_index,
     run_wiki_generation,
@@ -420,6 +421,49 @@ class MCPToolsRegistry:
                     "required": [],
                 },
             ),
+            ToolDefinition(
+                name="list_api_docs",
+                description=(
+                    "List available API documentation. Returns the L1 module index "
+                    "or the L2 module detail page listing all interfaces in that module. "
+                    "Use this for efficient hierarchical browsing: first list modules, "
+                    "then drill into a specific module."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "module": {
+                            "type": "string",
+                            "description": (
+                                "Module qualified name (e.g. 'project.api'). "
+                                "If omitted, returns the L1 index listing all modules."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            ToolDefinition(
+                name="get_api_doc",
+                description=(
+                    "Read the detailed API documentation for a specific function. "
+                    "Includes signature, docstring, and full call graph "
+                    "(who calls it and what it calls)."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "qualified_name": {
+                            "type": "string",
+                            "description": (
+                                "Fully qualified function name "
+                                "(e.g. 'project.api.api_init')."
+                            ),
+                        },
+                    },
+                    "required": ["qualified_name"],
+                },
+            ),
         ]
 
         return defs
@@ -435,6 +479,8 @@ class MCPToolsRegistry:
             "get_wiki_page": self._handle_get_wiki_page,
             "locate_function": self._handle_locate_function,
             "list_api_interfaces": self._handle_list_api_interfaces,
+            "list_api_docs": self._handle_list_api_docs,
+            "get_api_doc": self._handle_get_api_doc,
         }
         return handlers.get(name)
 
@@ -488,6 +534,8 @@ class MCPToolsRegistry:
 
         try:
             builder = build_graph(repo_path, db_path, rebuild, progress_cb, backend=backend)
+
+            build_api_docs(builder, artifact_dir, rebuild, progress_cb)
 
             vector_store, embedder, func_map = build_vector_index(
                 builder, repo_path, vectors_path, rebuild, progress_cb
@@ -868,3 +916,75 @@ class MCPToolsRegistry:
 
         except Exception as exc:
             raise ToolError(f"Failed to list API interfaces: {exc}") from exc
+
+    # -------------------------------------------------------------------------
+    # list_api_docs / get_api_doc  (hierarchical API documentation)
+    # -------------------------------------------------------------------------
+
+    def _api_docs_dir(self) -> Path | None:
+        if self._active_artifact_dir is None:
+            return None
+        return self._active_artifact_dir / "api_docs"
+
+    async def _handle_list_api_docs(
+        self,
+        module: str | None = None,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        api_dir = self._api_docs_dir()
+        if api_dir is None or not (api_dir / "index.md").exists():
+            raise ToolError(
+                "API docs not generated yet. "
+                "Re-run initialize_repository to generate them."
+            )
+
+        if module:
+            # L2: module detail page
+            safe = module.replace("/", "_").replace("\\", "_")
+            target = api_dir / "modules" / f"{safe}.md"
+            if not target.exists():
+                raise ToolError({
+                    "error": f"Module doc not found: {module}",
+                    "module": module,
+                    "hint": "Use list_api_docs (no args) to see available modules.",
+                })
+            return {
+                "level": "module",
+                "module": module,
+                "content": target.read_text(encoding="utf-8", errors="ignore"),
+            }
+
+        # L1: global index
+        index_path = api_dir / "index.md"
+        return {
+            "level": "index",
+            "content": index_path.read_text(encoding="utf-8", errors="ignore"),
+        }
+
+    async def _handle_get_api_doc(
+        self,
+        qualified_name: str,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        api_dir = self._api_docs_dir()
+        if api_dir is None or not (api_dir / "index.md").exists():
+            raise ToolError(
+                "API docs not generated yet. "
+                "Re-run initialize_repository to generate them."
+            )
+
+        safe = qualified_name.replace("/", "_").replace("\\", "_")
+        target = api_dir / "funcs" / f"{safe}.md"
+        if not target.exists():
+            raise ToolError({
+                "error": f"API doc not found: {qualified_name}",
+                "qualified_name": qualified_name,
+                "hint": "Use list_api_docs to browse modules first.",
+            })
+
+        return {
+            "qualified_name": qualified_name,
+            "content": target.read_text(encoding="utf-8", errors="ignore"),
+        }

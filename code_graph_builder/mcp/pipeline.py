@@ -1,4 +1,4 @@
-"""Pipeline with progress callbacks for MCP: graph → embedding → wiki.
+"""Pipeline with progress callbacks for MCP: graph → embedding → api_docs → wiki.
 
 Each stage calls `progress_cb(message)` after every meaningful unit of work
 so the MCP server can relay real-time updates to the client.
@@ -194,6 +194,78 @@ def build_vector_index(
         progress_cb(f"[Step 2/3] Done — {len(records)} embeddings saved.")
 
     return vector_store, embedder, func_map
+
+
+# ---------------------------------------------------------------------------
+# Step 2.5: API docs generation (pure template, no LLM)
+# ---------------------------------------------------------------------------
+
+_FUNC_DOC_QUERY = """
+    MATCH (m:Module)-[:DEFINES]->(f:Function)
+    RETURN m.qualified_name, m.path,
+           f.qualified_name, f.name, f.signature, f.return_type,
+           f.visibility, f.parameters, f.docstring,
+           f.start_line, f.end_line, f.path
+    ORDER BY m.qualified_name, f.start_line
+"""
+
+_TYPE_DOC_QUERY_CLASS = """
+    MATCH (m:Module)-[:DEFINES]->(c:Class)
+    RETURN m.qualified_name, c.name, c.kind, c.signature,
+           c.parameters, c.start_line, c.end_line
+    ORDER BY m.qualified_name, c.start_line
+"""
+
+_TYPE_DOC_QUERY_TYPE = """
+    MATCH (m:Module)-[:DEFINES]->(t:Type)
+    RETURN m.qualified_name, t.name, t.kind, t.signature,
+           t.start_line, t.end_line
+    ORDER BY m.qualified_name, t.start_line
+"""
+
+_CALLS_QUERY = """
+    MATCH (caller:Function)-[:CALLS]->(callee:Function)
+    RETURN caller.qualified_name, callee.qualified_name,
+           callee.path, callee.start_line
+"""
+
+
+def build_api_docs(
+    builder: Any,
+    artifact_dir: Path,
+    rebuild: bool,
+    progress_cb: ProgressCb = None,
+) -> dict[str, Any]:
+    """Generate hierarchical API documentation from the knowledge graph."""
+    from .api_doc_generator import generate_api_docs
+
+    api_dir = artifact_dir / "api_docs"
+    index_file = api_dir / "index.md"
+
+    if not rebuild and index_file.exists():
+        if progress_cb:
+            progress_cb("[Step 2.5/3] Reusing cached API docs.")
+        return {"status": "cached"}
+
+    try:
+        func_rows = builder.query(_FUNC_DOC_QUERY)
+        type_rows = builder.query(_TYPE_DOC_QUERY_CLASS) + builder.query(_TYPE_DOC_QUERY_TYPE)
+        call_rows = builder.query(_CALLS_QUERY)
+    except Exception as exc:
+        logger.warning(f"API docs skipped — graph query failed: {exc}")
+        if progress_cb:
+            progress_cb(f"[Step 2.5/3] Skipped — graph query failed: {exc}")
+        return {"status": "skipped"}
+
+    result = generate_api_docs(func_rows, type_rows, call_rows, artifact_dir)
+    if progress_cb:
+        progress_cb(
+            f"[Step 2.5/3] API docs generated: "
+            f"{result['module_count']} modules, "
+            f"{result['func_count']} functions, "
+            f"{result['type_count']} types."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

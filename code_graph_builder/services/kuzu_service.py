@@ -410,6 +410,92 @@ class KuzuIngestor:
             logger.error(f"fetch_module_type_apis error: {e}")
             return []
 
+    def fetch_all_calls(self) -> list[ResultRow]:
+        """Fetch all CALLS relationships in the graph.
+
+        Returns a list of rows, each containing
+        [caller_qn, callee_qn, callee_path, callee_start_line].
+        """
+        if not self._conn:
+            raise ConnectionError("Not connected to database")
+
+        cypher = """
+            MATCH (caller:Function)-[:CALLS]->(callee:Function)
+            RETURN caller.qualified_name AS caller_qn,
+                   callee.qualified_name AS callee_qn,
+                   callee.path AS callee_path,
+                   callee.start_line AS callee_start_line
+        """
+        try:
+            return self.query(cypher)
+        except Exception as e:
+            logger.error(f"fetch_all_calls error: {e}")
+            return []
+
+    def fetch_all_functions_for_docs(self) -> list[ResultRow]:
+        """Fetch all functions with module info, docstring, and path for doc generation.
+
+        Returns rows with:
+        [module_qn, module_path, func_qn, func_name, signature, return_type,
+         visibility, parameters, docstring, start_line, end_line, path].
+        """
+        if not self._conn:
+            raise ConnectionError("Not connected to database")
+
+        cypher = """
+            MATCH (m:Module)-[:DEFINES]->(f:Function)
+            RETURN m.qualified_name AS module_qn,
+                   m.path AS module_path,
+                   f.qualified_name AS func_qn,
+                   f.name AS func_name,
+                   f.signature AS signature,
+                   f.return_type AS return_type,
+                   f.visibility AS visibility,
+                   f.parameters AS parameters,
+                   f.docstring AS docstring,
+                   f.start_line AS start_line,
+                   f.end_line AS end_line,
+                   f.path AS path
+            ORDER BY m.qualified_name, f.start_line
+        """
+        try:
+            return self.query(cypher)
+        except Exception as e:
+            logger.error(f"fetch_all_functions_for_docs error: {e}")
+            return []
+
+    def fetch_all_types_for_docs(self) -> list[ResultRow]:
+        """Fetch all type definitions (structs, unions, enums, typedefs) for doc generation."""
+        if not self._conn:
+            raise ConnectionError("Not connected to database")
+
+        class_cypher = """
+            MATCH (m:Module)-[:DEFINES]->(c:Class)
+            RETURN m.qualified_name AS module_qn,
+                   c.name AS name,
+                   c.kind AS kind,
+                   c.signature AS signature,
+                   c.parameters AS members,
+                   c.start_line AS start_line,
+                   c.end_line AS end_line
+            ORDER BY m.qualified_name, c.start_line
+        """
+        type_cypher = """
+            MATCH (m:Module)-[:DEFINES]->(t:Type)
+            RETURN m.qualified_name AS module_qn,
+                   t.name AS name,
+                   t.kind AS kind,
+                   t.signature AS signature,
+                   t.start_line AS start_line,
+                   t.end_line AS end_line
+            ORDER BY m.qualified_name, t.start_line
+        """
+        try:
+            return self.query(class_cypher) + self.query(type_cypher)
+        except Exception as e:
+            logger.error(f"fetch_all_types_for_docs error: {e}")
+            return []
+
     def clean_database(self) -> None:
         """Clean all data from the database."""
         if not self._conn:
