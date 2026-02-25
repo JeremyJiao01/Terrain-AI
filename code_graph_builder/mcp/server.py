@@ -7,9 +7,15 @@ Environment variables:
     CGB_WORKSPACE    Workspace directory (default: ~/.code-graph-builder/)
                      Stores all indexed repos, graphs, embeddings, and wikis.
 
-Optional (for LLM-backed tools):
-    MOONSHOT_API_KEY   Moonshot / Kimi API key (required for query_code_graph)
-    MOONSHOT_MODEL     Model name (default: kimi-k2.5)
+Optional (for LLM-backed tools — first match wins):
+    LLM_API_KEY        Generic LLM API key (highest priority)
+    LLM_BASE_URL       LLM API base URL
+    LLM_MODEL          LLM model name
+    OPENAI_API_KEY     OpenAI (or compatible) API key
+    OPENAI_BASE_URL    OpenAI-compatible base URL
+    OPENAI_MODEL       OpenAI model name
+    MOONSHOT_API_KEY   Moonshot / Kimi API key (legacy)
+    MOONSHOT_MODEL     Moonshot model name (default: kimi-k2.5)
     DASHSCOPE_API_KEY  DashScope API key (required for semantic_search embeddings)
 
 Usage:
@@ -27,11 +33,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from loguru import logger
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .tools import MCPToolsRegistry
+from .tools import MCPToolsRegistry, ToolError
 
 SERVER_NAME = "code-graph-builder"
 
@@ -77,7 +84,16 @@ async def main() -> None:
 
             kwargs["_progress_cb"] = _progress_cb
 
-        result = await handler(**kwargs)
+        try:
+            result = await handler(**kwargs)
+        except ToolError:
+            # ToolError already carries structured JSON in str(exc).
+            # Re-raise so the MCP framework returns isError=True to the agent.
+            raise
+        except Exception as exc:
+            # Unexpected exception — wrap into ToolError for consistent handling.
+            logger.exception(f"Tool '{name}' raised an unhandled exception")
+            raise ToolError({"error": str(exc), "tool": name}) from exc
 
         if name == "initialize_repository" and isinstance(result, dict) and result.get("status") == "success":
             try:

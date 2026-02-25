@@ -161,7 +161,7 @@ results = service.search("recursive fibonacci implementation", top_k=5)
 python3 -m code_graph_builder.mcp.server
 ```
 
-在 Claude Code 配置文件中添加：
+在 Claude Code 配置文件（`~/.claude/settings.json` 或项目 `.mcp.json`）中添加：
 
 ```json
 {
@@ -169,15 +169,22 @@ python3 -m code_graph_builder.mcp.server
     "code-graph-builder": {
       "command": "python3",
       "args": ["-m", "code_graph_builder.mcp.server"],
+      "cwd": "/path/to/CodeGraphWiki",
       "env": {
-        "CGB_WORKSPACE": "~/.code-graph-builder"
+        "CGB_WORKSPACE": "~/.code-graph-builder",
+        "LLM_API_KEY": "sk-你的LLM-Key",
+        "LLM_BASE_URL": "https://api.openai.com/v1",
+        "LLM_MODEL": "gpt-4o",
+        "DASHSCOPE_API_KEY": "sk-你的Embedding-Key"
       }
     }
   }
 }
 ```
 
-MCP 服务器提供的工具：`initialize_repository`、`query_code_graph`、`get_code_snippet`、`semantic_search`、`list_api_interfaces` 等。
+MCP 服务器提供 11 个工具：`initialize_repository`、`get_repository_info`、`query_code_graph`、`get_code_snippet`、`semantic_search`、`locate_function`、`list_api_interfaces`、`list_api_docs`、`get_api_doc`、`list_wiki_pages`、`get_wiki_page`。
+
+> **首次配置？** 请参阅 [CLAUDE_CODE_GUIDE.md](./CLAUDE_CODE_GUIDE.md) 第 0 节的交互式配置流程，由 AI Agent 自动完成 LLM / Embedding 连接测试和 MCP 配置。
 
 ### RAG Wiki 生成
 
@@ -198,12 +205,21 @@ python3 code_graph_builder/examples/test_rag_tinycc.py \
 
 ## 环境变量
 
+### LLM（优先级从高到低，首个匹配生效）
+
 | 变量名 | 用途 | 默认值 |
 |--------|------|--------|
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 通用 LLM（最高优先级） | 无 / `https://api.openai.com/v1` / `gpt-4o` |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI 或兼容平台 | 无 / `https://api.openai.com/v1` / `gpt-4o` |
+| `MOONSHOT_API_KEY` / `MOONSHOT_MODEL` | Moonshot / Kimi（旧版兼容） | 无 / `kimi-k2.5` |
+
+### Embedding & 其他
+
+| 变量名 | 用途 | 默认值 |
+|--------|------|--------|
+| `DASHSCOPE_API_KEY` | 阿里云 DashScope（Qwen3 Embedding） | 无 |
+| `DASHSCOPE_BASE_URL` | DashScope API 地址 | `https://dashscope.aliyuncs.com/api/v1` |
 | `CGB_WORKSPACE` | MCP 服务器工作目录 | `~/.code-graph-builder` |
-| `DASHSCOPE_API_KEY` | 阿里云 DashScope（Qwen3 嵌入） | 无 |
-| `MOONSHOT_API_KEY` | Moonshot AI（Kimi k2.5 RAG） | 无 |
-| `MOONSHOT_MODEL` | Kimi 模型名 | `kimi-k2.5` |
 | `MEMGRAPH_HOST` | Memgraph 主机（仅 Memgraph 后端） | `localhost` |
 | `MEMGRAPH_PORT` | Memgraph 端口 | `7687` |
 

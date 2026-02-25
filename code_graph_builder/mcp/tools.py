@@ -52,6 +52,21 @@ class ToolDefinition:
     input_schema: dict[str, Any]
 
 
+class ToolError(Exception):
+    """Error raised by tool handlers.
+
+    The MCP framework catches exceptions and returns ``CallToolResult`` with
+    ``isError=True``, so the agent can detect errors via the protocol-level
+    flag instead of having to parse JSON response bodies.
+    """
+
+    def __init__(self, error_data: dict[str, Any] | str) -> None:
+        if isinstance(error_data, str):
+            error_data = {"error": error_data}
+        self.error_data = error_data
+        super().__init__(json.dumps(error_data, ensure_ascii=False, default=str))
+
+
 def _load_vector_store(vectors_path: Path) -> MemoryVectorStore:
     """Load MemoryVectorStore from a pickle cache file."""
     if not vectors_path.exists():
@@ -155,7 +170,12 @@ class MCPToolsRegistry:
         ingestor.__enter__()
         self._ingestor = ingestor
 
-        cypher_gen = CypherGenerator(create_llm_backend())
+        llm = create_llm_backend()
+        cypher_gen: CypherGenerator | None = None
+        if llm.available:
+            cypher_gen = CypherGenerator(llm)
+        else:
+            logger.warning("LLM not configured — query_code_graph will be unavailable")
 
         semantic_service: SemanticSearchService | None = None
         if vectors_path.exists():
@@ -189,15 +209,15 @@ class MCPToolsRegistry:
             self._ingestor = None
         self._file_editor = None
 
-    def _require_active(self) -> str:
+    def _require_active(self) -> None:
+        """Raise :class:`ToolError` when no repository has been indexed."""
         if self._ingestor is None:
-            return "No repository indexed yet. Call initialize_repository first."
-        return ""
+            raise ToolError("No repository indexed yet. Call initialize_repository first.")
 
-    def _require_repo_path(self) -> str:
+    def _require_repo_path(self) -> None:
+        """Raise :class:`ToolError` when no repository path is set."""
         if self._active_repo_path is None:
-            return "No repository path set. Call initialize_repository first."
-        return ""
+            raise ToolError("No repository path set. Call initialize_repository first.")
 
     def tools(self) -> list[ToolDefinition]:
         defs: list[ToolDefinition] = [
@@ -231,13 +251,24 @@ class MCPToolsRegistry:
                                 "concise: 4-5 wiki pages."
                             ),
                         },
+                        "backend": {
+                            "type": "string",
+                            "enum": ["kuzu", "memgraph", "memory"],
+                            "description": (
+                                "Graph database backend. Default: kuzu (embedded, no Docker)."
+                            ),
+                        },
                     },
                     "required": ["repo_path"],
                 },
             ),
             ToolDefinition(
-                name="get_active_repository",
-                description="Return information about the currently active (indexed) repository.",
+                name="get_repository_info",
+                description=(
+                    "Return information about the currently active (indexed) repository, "
+                    "including graph statistics (node/relationship counts), wiki pages, "
+                    "and service availability."
+                ),
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
             ToolDefinition(
@@ -271,47 +302,6 @@ class MCPToolsRegistry:
                         }
                     },
                     "required": ["qualified_name"],
-                },
-            ),
-            ToolDefinition(
-                name="get_graph_stats",
-                description="Return statistics about the code knowledge graph (node/relationship counts).",
-                input_schema={"type": "object", "properties": {}, "required": []},
-            ),
-            ToolDefinition(
-                name="read_file",
-                description="Read the contents of a file within the indexed repository (paginated).",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path from the repository root.",
-                        },
-                        "start_line": {
-                            "type": "integer",
-                            "description": "First line to return (1-indexed). Default: 1.",
-                        },
-                        "end_line": {
-                            "type": "integer",
-                            "description": "Last line to return (inclusive). Default: all lines.",
-                        },
-                    },
-                    "required": ["path"],
-                },
-            ),
-            ToolDefinition(
-                name="list_directory",
-                description="List files and subdirectories within the indexed repository.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path from repository root. Default: '.'.",
-                        }
-                    },
-                    "required": [],
                 },
             ),
             ToolDefinition(
@@ -392,60 +382,6 @@ class MCPToolsRegistry:
                 },
             ),
             ToolDefinition(
-                name="get_function_diff",
-                description=(
-                    "Locate a function by AST and generate a unified diff between the "
-                    "original source and the provided new code."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Relative path from repo root.",
-                        },
-                        "function_name": {
-                            "type": "string",
-                            "description": "Function or method name.",
-                        },
-                        "new_code": {
-                            "type": "string",
-                            "description": "Proposed replacement source code.",
-                        },
-                        "line_number": {
-                            "type": "integer",
-                            "description": "Optional: line number to disambiguate overloads.",
-                        },
-                    },
-                    "required": ["file_path", "function_name", "new_code"],
-                },
-            ),
-            ToolDefinition(
-                name="surgical_replace_code",
-                description=(
-                    "Replace an exact code block in a file using diff-match-patch for "
-                    "validation. The target_code must be an exact substring of the file."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Relative path from repo root.",
-                        },
-                        "target_code": {
-                            "type": "string",
-                            "description": "Exact code block to replace (must match file content).",
-                        },
-                        "replacement_code": {
-                            "type": "string",
-                            "description": "New code to substitute in place of target_code.",
-                        },
-                    },
-                    "required": ["file_path", "target_code", "replacement_code"],
-                },
-            ),
-            ToolDefinition(
                 name="list_api_interfaces",
                 description=(
                     "List public API interfaces for a module or the entire project. "
@@ -484,6 +420,49 @@ class MCPToolsRegistry:
                     "required": [],
                 },
             ),
+            ToolDefinition(
+                name="list_api_docs",
+                description=(
+                    "List available API documentation. Returns the L1 module index "
+                    "or the L2 module detail page listing all interfaces in that module. "
+                    "Use this for efficient hierarchical browsing: first list modules, "
+                    "then drill into a specific module."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "module": {
+                            "type": "string",
+                            "description": (
+                                "Module qualified name (e.g. 'project.api'). "
+                                "If omitted, returns the L1 index listing all modules."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            ToolDefinition(
+                name="get_api_doc",
+                description=(
+                    "Read the detailed API documentation for a specific function. "
+                    "Includes signature, docstring, and full call graph "
+                    "(who calls it and what it calls)."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "qualified_name": {
+                            "type": "string",
+                            "description": (
+                                "Fully qualified function name "
+                                "(e.g. 'project.api.api_init')."
+                            ),
+                        },
+                    },
+                    "required": ["qualified_name"],
+                },
+            ),
         ]
 
         return defs
@@ -491,19 +470,16 @@ class MCPToolsRegistry:
     def get_handler(self, name: str):
         handlers: dict[str, Any] = {
             "initialize_repository": self._handle_initialize_repository,
-            "get_active_repository": self._handle_get_active_repository,
+            "get_repository_info": self._handle_get_repository_info,
             "query_code_graph": self._handle_query_code_graph,
             "get_code_snippet": self._handle_get_code_snippet,
             "semantic_search": self._handle_semantic_search,
-            "get_graph_stats": self._handle_get_graph_stats,
-            "read_file": self._handle_read_file,
-            "list_directory": self._handle_list_directory,
             "list_wiki_pages": self._handle_list_wiki_pages,
             "get_wiki_page": self._handle_get_wiki_page,
             "locate_function": self._handle_locate_function,
-            "get_function_diff": self._handle_get_function_diff,
-            "surgical_replace_code": self._handle_surgical_replace_code,
             "list_api_interfaces": self._handle_list_api_interfaces,
+            "list_api_docs": self._handle_list_api_docs,
+            "get_api_doc": self._handle_get_api_doc,
         }
         return handlers.get(name)
 
@@ -516,11 +492,12 @@ class MCPToolsRegistry:
         repo_path: str,
         rebuild: bool = False,
         wiki_mode: str = "comprehensive",
+        backend: str = "kuzu",
         _progress_cb: ProgressCb = None,
     ) -> dict[str, Any]:
         repo = Path(repo_path).resolve()
         if not repo.exists():
-            return {"error": f"Repository path does not exist: {repo}"}
+            raise ToolError(f"Repository path does not exist: {repo}")
 
         loop = asyncio.get_event_loop()
 
@@ -530,7 +507,7 @@ class MCPToolsRegistry:
 
         result = await loop.run_in_executor(
             None,
-            lambda: self._run_pipeline(repo, rebuild, wiki_mode, sync_progress),
+            lambda: self._run_pipeline(repo, rebuild, wiki_mode, sync_progress, backend=backend),
         )
         return result
 
@@ -540,6 +517,7 @@ class MCPToolsRegistry:
         rebuild: bool,
         wiki_mode: str,
         progress_cb: ProgressCb = None,
+        backend: str = "kuzu",
     ) -> dict[str, Any]:
         """Synchronous pipeline: graph → embeddings → wiki. Runs in thread pool."""
         from ..examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
@@ -554,7 +532,9 @@ class MCPToolsRegistry:
         max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
 
         try:
-            builder = build_graph(repo_path, db_path, rebuild, progress_cb)
+            builder = build_graph(
+                repo_path, db_path, artifact_dir, rebuild, progress_cb, backend=backend,
+            )
 
             vector_store, embedder, func_map = build_vector_index(
                 builder, repo_path, vectors_path, rebuild, progress_cb
@@ -587,18 +567,15 @@ class MCPToolsRegistry:
 
         except Exception as exc:
             logger.exception("Pipeline failed")
-            return {
-                "status": "error",
-                "error": str(exc),
-            }
+            raise ToolError({"error": str(exc), "status": "error"}) from exc
 
     # -------------------------------------------------------------------------
-    # get_active_repository
+    # get_repository_info (merged: active repo metadata + graph statistics)
     # -------------------------------------------------------------------------
 
-    async def _handle_get_active_repository(self) -> dict[str, Any]:
+    async def _handle_get_repository_info(self) -> dict[str, Any]:
         if self._active_artifact_dir is None:
-            return {"status": "no_active_repo", "message": "Call initialize_repository first."}
+            raise ToolError("No active repository. Call initialize_repository first.")
 
         meta_file = self._active_artifact_dir / "meta.json"
         meta = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
@@ -608,30 +585,42 @@ class MCPToolsRegistry:
         if wiki_subdir.exists():
             wiki_pages = [p.stem for p in sorted(wiki_subdir.glob("*.md"))]
 
-        return {
+        result: dict[str, Any] = {
             "repo_path": str(self._active_repo_path),
             "artifact_dir": str(self._active_artifact_dir),
             "indexed_at": meta.get("indexed_at"),
             "semantic_search_available": self._semantic_service is not None,
+            "cypher_query_available": self._cypher_gen is not None,
             "wiki_pages": wiki_pages,
         }
+
+        # Merge graph statistics
+        if self._ingestor is not None:
+            try:
+                result["graph_stats"] = self._ingestor.get_statistics()
+            except Exception as exc:
+                result["graph_stats"] = {"error": str(exc)}
+
+        return result
 
     # -------------------------------------------------------------------------
     # query_code_graph
     # -------------------------------------------------------------------------
 
     async def _handle_query_code_graph(self, question: str) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
-        assert self._cypher_gen is not None
+        if self._cypher_gen is None:
+            raise ToolError(
+                "LLM not configured. Set one of: LLM_API_KEY, OPENAI_API_KEY, "
+                "or MOONSHOT_API_KEY in the MCP server environment."
+            )
         assert self._ingestor is not None
 
         try:
             cypher = self._cypher_gen.generate(question)
         except Exception as exc:
-            return {"error": f"Cypher generation failed: {exc}", "question": question}
+            raise ToolError({"error": f"Cypher generation failed: {exc}", "question": question}) from exc
 
         try:
             rows = self._ingestor.query(cypher)
@@ -649,20 +638,18 @@ class MCPToolsRegistry:
                 "rows": serialisable,
             }
         except Exception as exc:
-            return {
+            raise ToolError({
                 "error": f"Query execution failed: {exc}",
                 "question": question,
                 "cypher": cypher,
-            }
+            }) from exc
 
     # -------------------------------------------------------------------------
     # get_code_snippet
     # -------------------------------------------------------------------------
 
     async def _handle_get_code_snippet(self, qualified_name: str) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
         assert self._ingestor is not None
 
@@ -676,10 +663,10 @@ class MCPToolsRegistry:
         try:
             rows = self._ingestor.query(cypher)
         except Exception as exc:
-            return {"error": f"Graph query failed: {exc}", "qualified_name": qualified_name}
+            raise ToolError({"error": f"Graph query failed: {exc}", "qualified_name": qualified_name}) from exc
 
         if not rows:
-            return {"error": "Not found", "qualified_name": qualified_name}
+            raise ToolError({"error": "Not found", "qualified_name": qualified_name})
 
         result = rows[0].get("result", [])
         qname = result[0] if len(result) > 0 else qualified_name
@@ -720,12 +707,10 @@ class MCPToolsRegistry:
         top_k: int = 5,
         entity_types: list[str] | None = None,
     ) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
         if self._semantic_service is None:
-            return {"error": "Semantic search not available. Re-run initialize_repository to build embeddings."}
+            raise ToolError("Semantic search not available. Re-run initialize_repository to build embeddings.")
 
         try:
             results = self._semantic_service.search(query, top_k=top_k, entity_types=entity_types)
@@ -747,26 +732,10 @@ class MCPToolsRegistry:
                 ],
             }
         except Exception as exc:
-            return {"error": f"Semantic search failed: {exc}", "query": query}
+            raise ToolError({"error": f"Semantic search failed: {exc}", "query": query}) from exc
 
     # -------------------------------------------------------------------------
-    # get_graph_stats
-    # -------------------------------------------------------------------------
-
-    async def _handle_get_graph_stats(self) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
-
-        assert self._ingestor is not None
-
-        try:
-            return self._ingestor.get_statistics()
-        except Exception as exc:
-            return {"error": f"Failed to get statistics: {exc}"}
-
-    # -------------------------------------------------------------------------
-    # read_file / list_directory  (path safety: must stay within repo root)
+    # path safety helper (used by locate_function)
     # -------------------------------------------------------------------------
 
     def _safe_path(self, rel_path: str) -> Path | None:
@@ -779,69 +748,6 @@ class MCPToolsRegistry:
             return None
         return target
 
-    async def _handle_read_file(
-        self,
-        path: str,
-        start_line: int = 1,
-        end_line: int | None = None,
-    ) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
-
-        target = self._safe_path(path)
-        if target is None:
-            return {"error": "Path is outside the repository root.", "path": path}
-        if not target.exists():
-            return {"error": "File not found.", "path": path}
-        if not target.is_file():
-            return {"error": "Path is not a file.", "path": path}
-
-        try:
-            lines = target.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
-            total = len(lines)
-            start_idx = max(0, start_line - 1)
-            end_idx = min(total, end_line) if end_line is not None else total
-            content = "".join(lines[start_idx:end_idx])
-            return {
-                "path": path,
-                "start_line": start_line,
-                "end_line": end_idx,
-                "total_lines": total,
-                "content": content,
-            }
-        except Exception as exc:
-            return {"error": f"Failed to read file: {exc}", "path": path}
-
-    async def _handle_list_directory(self, path: str = ".") -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
-
-        target = self._safe_path(path)
-        if target is None:
-            return {"error": "Path is outside the repository root.", "path": path}
-        if not target.exists():
-            return {"error": "Directory not found.", "path": path}
-        if not target.is_dir():
-            return {"error": "Path is not a directory.", "path": path}
-
-        try:
-            entries = sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name))
-            return {
-                "path": path,
-                "entries": [
-                    {
-                        "name": e.name,
-                        "type": "file" if e.is_file() else "directory",
-                        "size": e.stat().st_size if e.is_file() else None,
-                    }
-                    for e in entries
-                ],
-            }
-        except Exception as exc:
-            return {"error": f"Failed to list directory: {exc}", "path": path}
-
     # -------------------------------------------------------------------------
     # wiki tools
     # -------------------------------------------------------------------------
@@ -852,13 +758,11 @@ class MCPToolsRegistry:
         return self._active_artifact_dir / "wiki"
 
     async def _handle_list_wiki_pages(self) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
         wiki_dir = self._wiki_dir()
         if wiki_dir is None or not wiki_dir.exists():
-            return {"error": "Wiki not generated yet. Run initialize_repository first."}
+            raise ToolError("Wiki not generated yet. Run initialize_repository first.")
 
         pages = []
         wiki_subdir = wiki_dir / "wiki"
@@ -875,13 +779,11 @@ class MCPToolsRegistry:
         }
 
     async def _handle_get_wiki_page(self, page_id: str) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
         wiki_dir = self._wiki_dir()
         if wiki_dir is None or not wiki_dir.exists():
-            return {"error": "Wiki not generated yet. Run initialize_repository first."}
+            raise ToolError("Wiki not generated yet. Run initialize_repository first.")
 
         if page_id == "index":
             target = wiki_dir / "index.md"
@@ -889,7 +791,7 @@ class MCPToolsRegistry:
             target = wiki_dir / "wiki" / f"{page_id}.md"
 
         if not target.exists():
-            return {"error": f"Wiki page not found: {page_id}", "page_id": page_id}
+            raise ToolError({"error": f"Wiki page not found: {page_id}", "page_id": page_id})
 
         content = target.read_text(encoding="utf-8", errors="ignore")
         return {
@@ -899,7 +801,7 @@ class MCPToolsRegistry:
         }
 
     # -------------------------------------------------------------------------
-    # locate_function / get_function_diff / surgical_replace_code
+    # locate_function
     # -------------------------------------------------------------------------
 
     async def _handle_locate_function(
@@ -908,84 +810,23 @@ class MCPToolsRegistry:
         function_name: str,
         line_number: int | None = None,
     ) -> dict[str, Any]:
-        err = self._require_repo_path()
-        if err:
-            return {"error": err}
+        self._require_repo_path()
         if self._file_editor is None:
-            return {"error": "File editor not initialized."}
+            raise ToolError("File editor not initialized.")
 
         target = self._safe_path(file_path)
         if target is None:
-            return {"error": "Path outside repository root.", "file_path": file_path}
+            raise ToolError({"error": "Path outside repository root.", "file_path": file_path})
         if not target.exists():
-            return {"error": "File not found.", "file_path": file_path}
+            raise ToolError({"error": "File not found.", "file_path": file_path})
 
         result = self._file_editor.locate_function(target, function_name, line_number)
         if result is None:
-            return {
+            raise ToolError({
                 "error": f"Function '{function_name}' not found in {file_path}.",
                 "file_path": file_path,
                 "function_name": function_name,
-            }
-        return result
-
-    async def _handle_get_function_diff(
-        self,
-        file_path: str,
-        function_name: str,
-        new_code: str,
-        line_number: int | None = None,
-    ) -> dict[str, Any]:
-        err = self._require_repo_path()
-        if err:
-            return {"error": err}
-        if self._file_editor is None:
-            return {"error": "File editor not initialized."}
-
-        target = self._safe_path(file_path)
-        if target is None:
-            return {"error": "Path outside repository root.", "file_path": file_path}
-        if not target.exists():
-            return {"error": "File not found.", "file_path": file_path}
-
-        located = self._file_editor.locate_function(target, function_name, line_number)
-        if located is None:
-            return {
-                "error": f"Function '{function_name}' not found in {file_path}.",
-                "file_path": file_path,
-                "function_name": function_name,
-            }
-
-        diff = self._file_editor.get_diff(
-            located["source_code"], new_code, label=function_name
-        )
-        return {
-            "file_path": file_path,
-            "function_name": function_name,
-            "qualified_name": located["qualified_name"],
-            "start_line": located["start_line"],
-            "end_line": located["end_line"],
-            "diff": diff,
-        }
-
-    async def _handle_surgical_replace_code(
-        self,
-        file_path: str,
-        target_code: str,
-        replacement_code: str,
-    ) -> dict[str, Any]:
-        err = self._require_repo_path()
-        if err:
-            return {"error": err}
-        if self._file_editor is None:
-            return {"error": "File editor not initialized."}
-
-        target = self._safe_path(file_path)
-        if target is None:
-            return {"error": "Path outside repository root.", "file_path": file_path}
-
-        result = self._file_editor.replace_code_block(target, target_code, replacement_code)
-        result["file_path"] = file_path
+            })
         return result
 
     # -------------------------------------------------------------------------
@@ -998,9 +839,7 @@ class MCPToolsRegistry:
         visibility: str = "public",
         include_types: bool = True,
     ) -> dict[str, Any]:
-        err = self._require_active()
-        if err:
-            return {"error": err}
+        self._require_active()
 
         assert self._ingestor is not None
 
@@ -1075,4 +914,76 @@ class MCPToolsRegistry:
             }
 
         except Exception as exc:
-            return {"error": f"Failed to list API interfaces: {exc}"}
+            raise ToolError(f"Failed to list API interfaces: {exc}") from exc
+
+    # -------------------------------------------------------------------------
+    # list_api_docs / get_api_doc  (hierarchical API documentation)
+    # -------------------------------------------------------------------------
+
+    def _api_docs_dir(self) -> Path | None:
+        if self._active_artifact_dir is None:
+            return None
+        return self._active_artifact_dir / "api_docs"
+
+    async def _handle_list_api_docs(
+        self,
+        module: str | None = None,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        api_dir = self._api_docs_dir()
+        if api_dir is None or not (api_dir / "index.md").exists():
+            raise ToolError(
+                "API docs not generated yet. "
+                "Re-run initialize_repository to generate them."
+            )
+
+        if module:
+            # L2: module detail page
+            safe = module.replace("/", "_").replace("\\", "_")
+            target = api_dir / "modules" / f"{safe}.md"
+            if not target.exists():
+                raise ToolError({
+                    "error": f"Module doc not found: {module}",
+                    "module": module,
+                    "hint": "Use list_api_docs (no args) to see available modules.",
+                })
+            return {
+                "level": "module",
+                "module": module,
+                "content": target.read_text(encoding="utf-8", errors="ignore"),
+            }
+
+        # L1: global index
+        index_path = api_dir / "index.md"
+        return {
+            "level": "index",
+            "content": index_path.read_text(encoding="utf-8", errors="ignore"),
+        }
+
+    async def _handle_get_api_doc(
+        self,
+        qualified_name: str,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        api_dir = self._api_docs_dir()
+        if api_dir is None or not (api_dir / "index.md").exists():
+            raise ToolError(
+                "API docs not generated yet. "
+                "Re-run initialize_repository to generate them."
+            )
+
+        safe = qualified_name.replace("/", "_").replace("\\", "_")
+        target = api_dir / "funcs" / f"{safe}.md"
+        if not target.exists():
+            raise ToolError({
+                "error": f"API doc not found: {qualified_name}",
+                "qualified_name": qualified_name,
+                "hint": "Use list_api_docs to browse modules first.",
+            })
+
+        return {
+            "qualified_name": qualified_name,
+            "content": target.read_text(encoding="utf-8", errors="ignore"),
+        }
