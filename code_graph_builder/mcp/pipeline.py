@@ -233,12 +233,15 @@ def run_wiki_generation(
 
     structure_cache = output_dir / f"{project_name}_structure.pkl"
 
-    llm_backend = create_llm_backend(
-        api_key=os.getenv("MOONSHOT_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL"),
-        model=os.getenv("MOONSHOT_MODEL", "kimi-k2.5"),
-        temperature=1.0,
-    )
+    llm_backend = create_llm_backend(temperature=1.0)
+
+    if not llm_backend.available:
+        if progress_cb:
+            progress_cb(
+                "[Step 3/3] Skipped — no LLM API key configured. "
+                "Set LLM_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY to enable wiki generation."
+            )
+        return output_dir / "index.md", 0
     agent = CamelAgent(
         role=f"{project_name} 技术文档专家",
         goal=f"结合真实源码，为 {project_name} 生成专业、准确、图文并茂的技术 Wiki",

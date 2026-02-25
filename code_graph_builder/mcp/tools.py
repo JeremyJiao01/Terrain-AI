@@ -170,7 +170,12 @@ class MCPToolsRegistry:
         ingestor.__enter__()
         self._ingestor = ingestor
 
-        cypher_gen = CypherGenerator(create_llm_backend())
+        llm = create_llm_backend()
+        cypher_gen: CypherGenerator | None = None
+        if llm.available:
+            cypher_gen = CypherGenerator(llm)
+        else:
+            logger.warning("LLM not configured — query_code_graph will be unavailable")
 
         semantic_service: SemanticSearchService | None = None
         if vectors_path.exists():
@@ -644,7 +649,11 @@ class MCPToolsRegistry:
     async def _handle_query_code_graph(self, question: str) -> dict[str, Any]:
         self._require_active()
 
-        assert self._cypher_gen is not None
+        if self._cypher_gen is None:
+            raise ToolError(
+                "LLM not configured. Set one of: LLM_API_KEY, OPENAI_API_KEY, "
+                "or MOONSHOT_API_KEY in the MCP server environment."
+            )
         assert self._ingestor is not None
 
         try:

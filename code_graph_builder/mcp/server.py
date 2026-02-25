@@ -7,9 +7,15 @@ Environment variables:
     CGB_WORKSPACE    Workspace directory (default: ~/.code-graph-builder/)
                      Stores all indexed repos, graphs, embeddings, and wikis.
 
-Optional (for LLM-backed tools):
-    MOONSHOT_API_KEY   Moonshot / Kimi API key (required for query_code_graph)
-    MOONSHOT_MODEL     Model name (default: kimi-k2.5)
+Optional (for LLM-backed tools — first match wins):
+    LLM_API_KEY        Generic LLM API key (highest priority)
+    LLM_BASE_URL       LLM API base URL
+    LLM_MODEL          LLM model name
+    OPENAI_API_KEY     OpenAI (or compatible) API key
+    OPENAI_BASE_URL    OpenAI-compatible base URL
+    OPENAI_MODEL       OpenAI model name
+    MOONSHOT_API_KEY   Moonshot / Kimi API key (legacy)
+    MOONSHOT_MODEL     Moonshot model name (default: kimi-k2.5)
     DASHSCOPE_API_KEY  DashScope API key (required for semantic_search embeddings)
 
 Usage:
