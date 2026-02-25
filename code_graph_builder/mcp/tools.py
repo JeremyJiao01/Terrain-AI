@@ -463,6 +463,30 @@ class MCPToolsRegistry:
                     "required": ["qualified_name"],
                 },
             ),
+            ToolDefinition(
+                name="find_api",
+                description=(
+                    "Find relevant APIs by natural language description. "
+                    "Combines semantic vector search with API documentation lookup "
+                    "in a single call — returns matching functions along with their "
+                    "signatures, docstrings, and call graphs. "
+                    "Equivalent to running semantic_search + get_api_doc for each result."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural language description of the API to find.",
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results. Default: 5.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
         ]
 
         return defs
@@ -480,6 +504,7 @@ class MCPToolsRegistry:
             "list_api_interfaces": self._handle_list_api_interfaces,
             "list_api_docs": self._handle_list_api_docs,
             "get_api_doc": self._handle_get_api_doc,
+            "find_api": self._handle_find_api,
         }
         return handlers.get(name)
 
@@ -986,4 +1011,63 @@ class MCPToolsRegistry:
         return {
             "qualified_name": qualified_name,
             "content": target.read_text(encoding="utf-8", errors="ignore"),
+        }
+
+    # -------------------------------------------------------------------------
+    # find_api  (aggregated: semantic search + API doc lookup)
+    # -------------------------------------------------------------------------
+
+    async def _handle_find_api(
+        self,
+        query: str,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        if self._semantic_service is None:
+            raise ToolError(
+                "Semantic search not available. "
+                "Re-run initialize_repository to build embeddings."
+            )
+
+        try:
+            results = self._semantic_service.search(query, top_k=top_k)
+        except Exception as exc:
+            raise ToolError(
+                {"error": f"Semantic search failed: {exc}", "query": query}
+            ) from exc
+
+        api_dir = self._api_docs_dir()
+        funcs_dir = api_dir / "funcs" if api_dir else None
+        has_api_docs = funcs_dir is not None and funcs_dir.exists()
+
+        combined = []
+        for r in results:
+            entry: dict[str, Any] = {
+                "qualified_name": r.qualified_name,
+                "name": r.name,
+                "type": r.type,
+                "score": r.score,
+                "file_path": r.file_path,
+                "start_line": r.start_line,
+                "end_line": r.end_line,
+                "source_code": r.source_code,
+                "api_doc": None,
+            }
+
+            if has_api_docs and r.qualified_name:
+                safe_qn = r.qualified_name.replace("/", "_").replace("\\", "_")
+                doc_file = funcs_dir / f"{safe_qn}.md"
+                if doc_file.exists():
+                    entry["api_doc"] = doc_file.read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
+
+            combined.append(entry)
+
+        return {
+            "query": query,
+            "result_count": len(combined),
+            "api_docs_available": has_api_docs,
+            "results": combined,
         }

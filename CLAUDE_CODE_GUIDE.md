@@ -446,7 +446,7 @@ python3 -m code_graph_builder.commands_cli info
 | 语义向量搜索 | ✅ `/code-search` | ✅ `semantic_search` |
 | Wiki 浏览 | ✅ `/wiki-list` `/wiki-read` | ✅ `list_wiki_pages` `get_wiki_page` |
 | API 文档 | ✅ `/api-browse` `/api-detail` | ✅ `list_api_docs` `get_api_doc` |
-| 自然语言找 API | ✅ `/api-find` | 需组合 `semantic_search` + `get_api_doc` |
+| 自然语言找 API | ✅ `/api-find` | ✅ `find_api` |
 | 进度显示 | 直接 stdout 输出 | MCP log message |
 | 额外依赖 | 无（不需要 `mcp` 包） | 需要 `pip install mcp` |
 | 配置方式 | `.env` 文件 | MCP JSON 配置 + 环境变量 |
