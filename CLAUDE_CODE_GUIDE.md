@@ -6,7 +6,22 @@
 
 ## 0. Agent 交互式配置流程（首次安装必读）
 
-> **本节面向调用本项目的 AI Agent**：当用户首次配置 CodeGraphWiki MCP 时，请按照以下流程交互式引导用户完成配置。
+> **本节面向调用本项目的 AI Agent**：当用户首次使用 CodeGraphWiki 时，请按照以下流程交互式引导用户完成配置。
+
+### 0.0 第零步：询问用户选择集成方式
+
+首先询问用户希望使用哪种方式集成 CodeGraphWiki：
+
+| 方式 | 说明 | 适合场景 |
+|------|------|----------|
+| **Custom Commands（推荐）** | 通过 `.claude/commands/` 提供 `/init-repo`、`/search-code` 等斜杠命令，直接在对话中运行 | 本地开发、快速上手、无需额外配置 MCP |
+| **MCP Server** | 通过 MCP 协议暴露 11 个工具，Claude Code 自动发现和调用 | 需要 MCP 生态集成、多 Agent 协作 |
+
+> **推荐**：如果用户不确定，默认选择 **Custom Commands** 方式——配置更简单，功能完全相同。
+
+无论选择哪种方式，都需要完成后续的 LLM 平台选择（0.1）、Embedding 配置（0.2）、依赖安装（0.3）和连接测试（0.4）。之后根据选择的方式跳转到对应的配置步骤：
+- Custom Commands → 0.6 节
+- MCP Server → 0.5 节
 
 ### 0.1 第一步：询问用户选择 LLM 平台
 
@@ -351,11 +366,98 @@ Agent 在配置 MCP 时需要设置以下环境变量（根据用户在 0.1 和 
 
 > **优先级说明**：LLM 密钥检测优先级为 `LLM_API_KEY` > `OPENAI_API_KEY` > `MOONSHOT_API_KEY`，推荐统一使用 `LLM_API_KEY` + `LLM_BASE_URL` + `LLM_MODEL` 组合。
 
-### 0.6 完整交互流程总结
+### 0.6 第六步（Custom Commands 方式）：配置自定义命令
+
+> **本节仅适用于选择 Custom Commands 方式的用户。** 如果用户选择了 MCP Server，请跳过本节，参照 0.5 节配置。
+
+Custom Commands 方式无需配置 MCP Server，只需确保：
+1. 项目依赖已安装（0.3 节）
+2. 环境变量已配置（通过 `.env` 文件）
+3. `.claude/commands/` 目录存在（已随仓库提供）
+
+#### 6a. 写入 `.env` 文件
+
+Agent 应根据用户在 0.1 和 0.2 步骤中提供的信息，在项目根目录创建或更新 `.env` 文件：
+
+```bash
+# 在项目根目录创建 .env
+cat > .env << 'ENVEOF'
+# LLM 配置（Wiki 生成、Cypher 查询翻译）
+LLM_API_KEY=sk-用户提供的key
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o
+
+# Embedding 配置（语义搜索）
+DASHSCOPE_API_KEY=sk-用户提供的key
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+ENVEOF
+```
+
+> **重要**：`.env` 文件已在 `.gitignore` 中，不会被提交到版本控制。
+
+#### 6b. 验证命令可用
+
+运行以下命令确认 CLI 正常工作：
+
+```bash
+# 验证 CLI 帮助信息
+python3 -m code_graph_builder.commands_cli --help
+
+# 验证 info 命令（首次运行应报告 "No repository indexed"）
+python3 -m code_graph_builder.commands_cli info
+```
+
+#### 6c. 可用的自定义命令
+
+配置完成后，用户可在 Claude Code 中直接使用以下斜杠命令：
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `/init-repo` | 索引仓库（构建图 → 嵌入 → Wiki） | `/init-repo /path/to/repo` |
+| `/repo-info` | 查看当前活跃仓库信息和图统计 | `/repo-info` |
+| `/query-graph` | 自然语言 → Cypher 查询 | `/query-graph 哪些函数调用了 parse?` |
+| `/code-snippet` | 按 qualified name 获取源码 | `/code-snippet mymodule.MyClass.method` |
+| `/search-code` | 语义向量搜索 | `/search-code 递归树遍历` |
+| `/list-wiki` | 列出 Wiki 页面 | `/list-wiki` |
+| `/get-wiki` | 读取 Wiki 页面 | `/get-wiki page-1` |
+| `/locate-func` | Tree-sitter 定位函数 | `/locate-func src/parser.c parse_expr` |
+| `/list-api` | 列出 API 接口 | `/list-api --module project.parser` |
+| `/api-docs` | 浏览 API 文档（L1/L2） | `/api-docs --module project.parser` |
+| `/api-doc` | 查看函数详细文档（L3） | `/api-doc project.parser.parse_expr` |
+
+#### 6d. 典型使用流程
 
 ```
-Agent 引导用户完成 MCP 首次配置：
+1. /init-repo /path/to/target-repo          ← 首次索引（2-10 分钟）
+2. /repo-info                                ← 确认索引成功
+3. /search-code 用户认证逻辑                  ← 语义搜索
+4. /query-graph 哪些函数调用了 login?         ← 图查询
+5. /get-wiki index                           ← 阅读项目概览 Wiki
+6. /api-docs                                 ← 浏览 API 文档
+```
 
+#### Custom Commands vs MCP 功能对照
+
+| 功能 | Custom Commands | MCP Server |
+|------|----------------|------------|
+| 图构建 + 嵌入 + Wiki | ✅ `/init-repo` | ✅ `initialize_repository` |
+| 自然语言 Cypher 查询 | ✅ `/query-graph` | ✅ `query_code_graph` |
+| 语义向量搜索 | ✅ `/search-code` | ✅ `semantic_search` |
+| Wiki 浏览 | ✅ `/list-wiki` `/get-wiki` | ✅ `list_wiki_pages` `get_wiki_page` |
+| API 文档 | ✅ `/api-docs` `/api-doc` | ✅ `list_api_docs` `get_api_doc` |
+| 进度显示 | 直接 stdout 输出 | MCP log message |
+| 额外依赖 | 无（不需要 `mcp` 包） | 需要 `pip install mcp` |
+| 配置方式 | `.env` 文件 | MCP JSON 配置 + 环境变量 |
+| 磁盘缓存 | `~/.code-graph-builder/` | `~/.code-graph-builder/`（共用） |
+
+> **注意**：两种方式共用同一个 workspace 目录（`~/.code-graph-builder/`），已索引的仓库可以在两种模式间无缝切换。
+
+### 0.7 完整交互流程总结
+
+```
+Agent 引导用户完成首次配置：
+
+0. 选择 → 用户选择集成方式：Custom Commands（推荐）或 MCP Server
 1. 询问 → 用户选择 LLM 平台、提供 API Key 和 URL
 2. 询问 → 用户提供 Embedding (DashScope) API Key
 3. 依赖 → 检查并安装项目所需依赖（pip install . 及可选依赖）
@@ -365,9 +467,17 @@ Agent 引导用户完成 MCP 首次配置：
 5. 测试 → 运行测试脚本验证连接
    ├── 通过 → 继续下一步
    └── 失败 → 根据错误信息修改配置，重新测试
-6. 配置 → 自动写入 Claude Code MCP 配置文件
-7. 验证 → 提示用户重启或验证 MCP 连接
-8. 清理 → 删除临时测试脚本
+
+── Custom Commands 方式 ──
+6a. 配置 → 写入 .env 文件（LLM + Embedding 环境变量）
+6b. 验证 → 运行 python3 -m code_graph_builder.commands_cli --help
+6c. 完成 → 提示用户使用 /init-repo 开始索引
+
+── MCP Server 方式 ──
+6a. 配置 → 自动写入 Claude Code MCP 配置文件（含环境变量）
+6b. 验证 → 提示用户重启或运行 /mcp 查看状态
+
+7. 清理 → 删除临时测试脚本
 ```
 
 > **第三方模型用户提示**：CAMEL Agent 模块已支持自动检测多种 LLM 提供商。用户无需专门配置 `MOONSHOT_API_KEY`，只要设置了 `LLM_API_KEY` + `LLM_BASE_URL` + `LLM_MODEL`，所有功能（包括 CAMEL 多 Agent 分析）均可正常使用。
@@ -498,10 +608,24 @@ CodeGraphWiki/
 ├── README.md                     # 项目说明
 ├── CLAUDE_CODE_GUIDE.md          # 本文档
 │
+├── .claude/commands/             # Claude Code 自定义命令（斜杠命令）
+│   ├── init-repo.md              # /init-repo — 索引仓库
+│   ├── repo-info.md              # /repo-info — 仓库信息
+│   ├── query-graph.md            # /query-graph — 图查询
+│   ├── code-snippet.md           # /code-snippet — 获取源码
+│   ├── search-code.md            # /search-code — 语义搜索
+│   ├── list-wiki.md              # /list-wiki — 列出 Wiki
+│   ├── get-wiki.md               # /get-wiki — 读取 Wiki
+│   ├── locate-func.md            # /locate-func — 定位函数
+│   ├── list-api.md               # /list-api — 列出 API
+│   ├── api-docs.md               # /api-docs — API 文档浏览
+│   └── api-doc.md                # /api-doc — 函数详细文档
+│
 └── code_graph_builder/           # 主 Python 包
     ├── __init__.py               # 包入口，导出核心 API
     ├── builder.py                # CodeGraphBuilder 主类
     ├── cli.py                    # CLI 命令行接口
+    ├── commands_cli.py           # Custom Commands CLI（斜杠命令后端）
     ├── config.py                 # 配置类（KuzuConfig、ScanConfig 等）
     ├── constants.py              # 枚举常量（NodeLabel、RelationshipType 等）
     ├── graph_updater.py          # 图更新逻辑
