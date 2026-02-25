@@ -11,4 +11,4 @@ The command will:
 
 Requires an LLM API key to be configured (LLM_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY).
 
-Example: `/query-graph which functions call parse_expression?`
+Example: `/graph-query which functions call parse_expression?`

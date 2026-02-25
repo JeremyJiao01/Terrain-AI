@@ -6,6 +6,6 @@ python3 -m code_graph_builder.commands_cli api-doc $ARGUMENTS
 
 The argument is the fully qualified function name.
 
-Example: `/api-doc project.parser.parse_expression`
+Example: `/api-detail project.parser.parse_expression`
 
-Use `/api-docs` first to browse available modules and functions.
+Use `/api-browse` first to browse available modules and functions.

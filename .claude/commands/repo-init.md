@@ -11,7 +11,7 @@ Supported options:
 - `--mode comprehensive|concise` : comprehensive = 8-10 pages (default), concise = 4-5 pages
 - `--backend kuzu|memgraph|memory` : Graph database backend (default: kuzu)
 
-Example: `/init-repo /home/user/my-project --mode concise`
+Example: `/repo-init /home/user/my-project --mode concise`
 
 This takes 2-10 minutes depending on repo size. Progress will be printed inline.
-After completion, other commands (`/query-graph`, `/search-code`, `/list-wiki`, etc.) become available.
+After completion, other commands (`/graph-query`, `/code-search`, `/wiki-list`, etc.) become available.

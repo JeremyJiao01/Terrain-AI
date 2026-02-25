@@ -9,4 +9,4 @@ Options:
 - `--visibility public|static|extern|all` : Visibility filter (default: public)
 - `--include-types` : Include struct/enum/typedef definitions (default: true)
 
-Example: `/list-api --module project.parser --visibility all`
+Example: `/api-list --module project.parser --visibility all`
