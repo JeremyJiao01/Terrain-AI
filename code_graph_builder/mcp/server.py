@@ -27,11 +27,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from loguru import logger
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .tools import MCPToolsRegistry
+from .tools import MCPToolsRegistry, ToolError
 
 SERVER_NAME = "code-graph-builder"
 
@@ -77,7 +78,16 @@ async def main() -> None:
 
             kwargs["_progress_cb"] = _progress_cb
 
-        result = await handler(**kwargs)
+        try:
+            result = await handler(**kwargs)
+        except ToolError:
+            # ToolError already carries structured JSON in str(exc).
+            # Re-raise so the MCP framework returns isError=True to the agent.
+            raise
+        except Exception as exc:
+            # Unexpected exception — wrap into ToolError for consistent handling.
+            logger.exception(f"Tool '{name}' raised an unhandled exception")
+            raise ToolError({"error": str(exc), "tool": name}) from exc
 
         if name == "initialize_repository" and isinstance(result, dict) and result.get("status") == "success":
             try:

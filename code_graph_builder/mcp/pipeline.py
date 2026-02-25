@@ -63,13 +63,19 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
 # Step 1: graph build
 # ---------------------------------------------------------------------------
 
-def build_graph(repo_path: Path, db_path: Path, rebuild: bool, progress_cb: ProgressCb = None) -> Any:
-    """Build or reuse a KùzuDB code knowledge graph."""
+def build_graph(
+    repo_path: Path,
+    db_path: Path,
+    rebuild: bool,
+    progress_cb: ProgressCb = None,
+    backend: str = "kuzu",
+) -> Any:
+    """Build or reuse a code knowledge graph."""
     from ..builder import CodeGraphBuilder
 
     builder = CodeGraphBuilder(
         repo_path=str(repo_path),
-        backend="kuzu",
+        backend=backend,
         backend_config={"db_path": str(db_path), "batch_size": 1000},
     )
 
