@@ -39,12 +39,18 @@ def _build_call_graph(
     """
     callers_of: dict[str, list[dict]] = defaultdict(list)
     callees_of: dict[str, list[dict]] = defaultdict(list)
+    seen_edges: set[tuple[str, str]] = set()
 
     for row in call_rows:
         r = _unpack_row(row)
         if len(r) < 2:
             continue
         caller_qn, callee_qn = r[0], r[1]
+        edge_key = (caller_qn, callee_qn)
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+
         callee_path = r[2] if len(r) > 2 else None
         callee_start = r[3] if len(r) > 3 else None
 
@@ -67,8 +73,22 @@ def _build_call_graph(
 # ---------------------------------------------------------------------------
 
 def _sanitise_filename(qn: str) -> str:
-    """Convert a qualified name to a safe filename (no path separators)."""
-    return qn.replace("/", "_").replace("\\", "_")
+    """Convert a qualified name to a safe filename (no path separators).
+
+    macOS / Linux limit filenames to 255 bytes.  For long C signatures that
+    include the full parameter list we truncate to 180 chars and append an
+    8-char hash so the name stays unique.
+    """
+    import hashlib
+    safe = qn.replace("/", "_").replace("\\", "_").replace("\n", " ").replace("\r", "")
+    # Encode to bytes to measure the real byte length (UTF-8)
+    encoded = safe.encode("utf-8")
+    if len(encoded) <= 200:
+        return safe
+    # Truncate to 180 bytes (safe UTF-8 boundary) + 8-char hex hash
+    truncated = encoded[:180].decode("utf-8", errors="ignore").rstrip()
+    suffix = hashlib.md5(qn.encode("utf-8")).hexdigest()[:8]
+    return f"{truncated}_{suffix}"
 
 
 def _render_func_detail(
@@ -247,6 +267,7 @@ def generate_api_docs(
     modules: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"files": set(), "funcs": [], "types": []}
     )
+    seen_funcs: set[str] = set()
 
     for row in func_rows:
         r = _unpack_row(row)
@@ -254,9 +275,13 @@ def generate_api_docs(
             continue
         module_qn = r[0] or "unknown"
         module_path = r[1] or ""
+        func_qn = r[2] or ""
+        if func_qn in seen_funcs:
+            continue
+        seen_funcs.add(func_qn)
         func = {
             "module_qn": module_qn,
-            "qn": r[2] or "",
+            "qn": func_qn,
             "name": r[3] or "",
             "signature": r[4],
             "return_type": r[5],

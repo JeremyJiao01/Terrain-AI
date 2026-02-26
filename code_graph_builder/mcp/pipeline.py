@@ -72,7 +72,7 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
 
 _FUNC_DOC_QUERY = """
     MATCH (m:Module)-[:DEFINES]->(f:Function)
-    RETURN m.qualified_name, m.path,
+    RETURN DISTINCT m.qualified_name, m.path,
            f.qualified_name, f.name, '' AS signature, '' AS return_type,
            '' AS visibility, '' AS parameters, f.docstring,
            f.start_line, f.end_line, f.path
@@ -81,21 +81,21 @@ _FUNC_DOC_QUERY = """
 
 _TYPE_DOC_QUERY_CLASS = """
     MATCH (m:Module)-[:DEFINES]->(c:Class)
-    RETURN m.qualified_name, c.name, 'struct' AS kind, '' AS signature,
+    RETURN DISTINCT m.qualified_name, c.name, 'struct' AS kind, '' AS signature,
            '' AS parameters, c.start_line, c.end_line
     ORDER BY m.qualified_name, c.start_line
 """
 
 _TYPE_DOC_QUERY_TYPE = """
     MATCH (m:Module)-[:DEFINES]->(t:Type)
-    RETURN m.qualified_name, t.name, t.kind, t.signature,
+    RETURN DISTINCT m.qualified_name, t.name, t.kind, t.signature,
            t.start_line, t.end_line
     ORDER BY m.qualified_name, t.start_line
 """
 
 _CALLS_QUERY = """
     MATCH (caller:Function)-[:CALLS]->(callee:Function)
-    RETURN caller.qualified_name, callee.qualified_name,
+    RETURN DISTINCT caller.qualified_name, callee.qualified_name,
            callee.path, callee.start_line
 """
 

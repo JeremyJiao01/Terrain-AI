@@ -250,9 +250,15 @@ class KuzuIngestor:
         if not self.relationship_buffer or not self._conn:
             return
 
+        seen: set[tuple] = set()
         for source, rel_type, target, _props in self.relationship_buffer:
             from_label, from_key, from_val = source
             to_label, to_key, to_val = target
+
+            dedup_key = (from_val, rel_type, to_val)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
 
             self._ensure_rel_schema(rel_type, from_label, to_label)
 
@@ -260,6 +266,7 @@ class KuzuIngestor:
                 cypher = f"""
                     MATCH (a:{from_label} {{{from_key}: {self._value_to_cypher(from_val)}}}),
                           (b:{to_label} {{{to_key}: {self._value_to_cypher(to_val)}}})
+                    WHERE NOT (a)-[:{rel_type}]->(b)
                     CREATE (a)-[:{rel_type}]->(b)
                 """
                 self._conn.execute(cypher)
@@ -430,7 +437,7 @@ class KuzuIngestor:
 
         cypher = """
             MATCH (caller:Function)-[:CALLS]->(callee:Function)
-            RETURN caller.qualified_name AS caller_qn,
+            RETURN DISTINCT caller.qualified_name AS caller_qn,
                    callee.qualified_name AS callee_qn,
                    callee.path AS callee_path,
                    callee.start_line AS callee_start_line
@@ -453,7 +460,7 @@ class KuzuIngestor:
 
         cypher = """
             MATCH (m:Module)-[:DEFINES]->(f:Function)
-            RETURN m.qualified_name AS module_qn,
+            RETURN DISTINCT m.qualified_name AS module_qn,
                    m.path AS module_path,
                    f.qualified_name AS func_qn,
                    f.name AS func_name,
