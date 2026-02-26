@@ -487,6 +487,36 @@ class MCPToolsRegistry:
                     "required": ["query"],
                 },
             ),
+            ToolDefinition(
+                name="generate_wiki",
+                description=(
+                    "Regenerate the wiki using existing graph and embeddings. "
+                    "Use this when wiki generation failed or you want to regenerate "
+                    "with different settings, without rebuilding the graph or embeddings. "
+                    "Requires initialize_repository to have been run at least once."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "wiki_mode": {
+                            "type": "string",
+                            "enum": ["comprehensive", "concise"],
+                            "description": (
+                                "comprehensive: 8-10 wiki pages (default). "
+                                "concise: 4-5 wiki pages."
+                            ),
+                        },
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, force-regenerate wiki structure and all pages "
+                                "even if cached. Default: false (regenerates pages only)."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
         ]
 
         return defs
@@ -505,6 +535,7 @@ class MCPToolsRegistry:
             "list_api_docs": self._handle_list_api_docs,
             "get_api_doc": self._handle_get_api_doc,
             "find_api": self._handle_find_api,
+            "generate_wiki": self._handle_generate_wiki,
         }
         return handlers.get(name)
 
@@ -1071,3 +1102,100 @@ class MCPToolsRegistry:
             "api_docs_available": has_api_docs,
             "results": combined,
         }
+
+    # -------------------------------------------------------------------------
+    # generate_wiki  (standalone wiki regeneration)
+    # -------------------------------------------------------------------------
+
+    async def _handle_generate_wiki(
+        self,
+        wiki_mode: str = "comprehensive",
+        rebuild: bool = False,
+        _progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        if self._active_artifact_dir is None or self._active_repo_path is None:
+            raise ToolError("No active repository. Call initialize_repository first.")
+
+        artifact_dir = self._active_artifact_dir
+        repo_path = self._active_repo_path
+        vectors_path = artifact_dir / "vectors.pkl"
+
+        if not vectors_path.exists():
+            raise ToolError(
+                "Embeddings not found. Run initialize_repository first "
+                "to build the graph and embeddings."
+            )
+
+        loop = asyncio.get_event_loop()
+
+        def sync_progress(msg: str, pct: float = 0.0) -> None:
+            if _progress_cb is not None:
+                asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._run_wiki_generation(
+                repo_path, artifact_dir, vectors_path,
+                wiki_mode, rebuild, sync_progress,
+            ),
+        )
+        return result
+
+    def _run_wiki_generation(
+        self,
+        repo_path: Path,
+        artifact_dir: Path,
+        vectors_path: Path,
+        wiki_mode: str,
+        rebuild: bool,
+        progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        """Synchronous wiki generation using existing graph + embeddings."""
+        from ..examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
+
+        comprehensive = wiki_mode != "concise"
+        max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
+        wiki_dir = artifact_dir / "wiki"
+
+        try:
+            # Load existing embeddings
+            with open(vectors_path, "rb") as fh:
+                cache = pickle.load(fh)
+            vector_store = cache["vector_store"]
+            func_map: dict[int, dict] = cache["func_map"]
+            embedder = Qwen3Embedder()
+
+            # Delete structure cache if rebuild
+            structure_cache = wiki_dir / f"{repo_path.name}_structure.pkl"
+            if rebuild and structure_cache.exists():
+                structure_cache.unlink()
+
+            assert self._ingestor is not None
+
+            index_path, page_count = run_wiki_generation(
+                builder=self._ingestor,
+                repo_path=repo_path,
+                output_dir=wiki_dir,
+                max_pages=max_pages,
+                rebuild=rebuild,
+                comprehensive=comprehensive,
+                vector_store=vector_store,
+                embedder=embedder,
+                func_map=func_map,
+                progress_cb=progress_cb,
+            )
+
+            save_meta(artifact_dir, repo_path, page_count)
+
+            return {
+                "status": "success",
+                "repo_path": str(repo_path),
+                "wiki_index": str(index_path),
+                "wiki_pages": page_count,
+            }
+
+        except Exception as exc:
+            logger.exception("Wiki generation failed")
+            raise ToolError({"error": str(exc), "status": "error"}) from exc

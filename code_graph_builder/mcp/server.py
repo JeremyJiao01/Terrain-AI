@@ -33,6 +33,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from ..settings import load_settings  # noqa: E402
+
+load_settings()
+
 from loguru import logger
 from mcp.server import Server
 from mcp.server.stdio import stdio_server

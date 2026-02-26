@@ -372,12 +372,33 @@ Agent 在配置 MCP 时需要设置以下环境变量（根据用户在 0.1 和 
 
 Custom Commands 方式无需配置 MCP Server，只需确保：
 1. 项目依赖已安装（0.3 节）
-2. 环境变量已配置（通过 `.env` 文件）
+2. 环境变量已配置（通过 `~/.claude/settings.json` 或 `.env` 文件）
 3. `.claude/commands/` 目录存在（已随仓库提供）
 
-#### 6a. 写入 `.env` 文件
+#### 6a. 写入全局配置 `~/.claude/settings.json`（推荐）
 
-Agent 应根据用户在 0.1 和 0.2 步骤中提供的信息，在项目根目录创建或更新 `.env` 文件：
+Agent 应根据用户在 0.1 和 0.2 步骤中提供的信息，创建或更新 `~/.claude/settings.json` 文件：
+
+```json
+{
+  "env": {
+    "LLM_API_KEY": "sk-用户提供的key",
+    "LLM_BASE_URL": "https://api.openai.com/v1",
+    "LLM_MODEL": "gpt-4o",
+    "DASHSCOPE_API_KEY": "sk-用户提供的key",
+    "DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com/api/v1"
+  }
+}
+```
+
+> **优势**：全局生效，无需在每个项目中重复配置 `.env` 文件。所有使用 CodeGraphWiki 的项目自动读取。
+
+**优先级**：环境变量 > `.env` 文件 > `~/.claude/settings.json`（settings.json 作为 fallback）。
+
+如果不想使用全局配置，也可以用传统的 `.env` 文件方式：
+
+<details>
+<summary>备选方案：使用 .env 文件（点击展开）</summary>
 
 ```bash
 # 在项目根目录创建 .env
@@ -394,6 +415,8 @@ ENVEOF
 ```
 
 > **重要**：`.env` 文件已在 `.gitignore` 中，不会被提交到版本控制。
+
+</details>
 
 #### 6b. 验证命令可用
 
@@ -419,6 +442,7 @@ python3 -m code_graph_builder.commands_cli info
 | `/code-snippet` | 按 qualified name 获取源码 | `/code-snippet mymodule.MyClass.method` |
 | `/code-search` | 语义向量搜索 | `/code-search 递归树遍历` |
 | `/code-locate` | Tree-sitter 定位函数 | `/code-locate src/parser.c parse_expr` |
+| `/wiki-gen` | 单独重新生成 Wiki（复用已有图和嵌入） | `/wiki-gen --rebuild` |
 | `/wiki-list` | 列出 Wiki 页面 | `/wiki-list` |
 | `/wiki-read` | 读取 Wiki 页面 | `/wiki-read page-1` |
 | `/api-list` | 列出 API 接口 | `/api-list --module project.parser` |
@@ -444,12 +468,13 @@ python3 -m code_graph_builder.commands_cli info
 | 图构建 + 嵌入 + Wiki | ✅ `/repo-init` | ✅ `initialize_repository` |
 | 自然语言 Cypher 查询 | ✅ `/graph-query` | ✅ `query_code_graph` |
 | 语义向量搜索 | ✅ `/code-search` | ✅ `semantic_search` |
+| Wiki 单独生成 | ✅ `/wiki-gen` | ✅ `generate_wiki` |
 | Wiki 浏览 | ✅ `/wiki-list` `/wiki-read` | ✅ `list_wiki_pages` `get_wiki_page` |
 | API 文档 | ✅ `/api-browse` `/api-detail` | ✅ `list_api_docs` `get_api_doc` |
 | 自然语言找 API | ✅ `/api-find` | ✅ `find_api` |
 | 进度显示 | 直接 stdout 输出 | MCP log message |
 | 额外依赖 | 无（不需要 `mcp` 包） | 需要 `pip install mcp` |
-| 配置方式 | `.env` 文件 | MCP JSON 配置 + 环境变量 |
+| 配置方式 | `~/.claude/settings.json` 或 `.env` | MCP JSON 配置 + 环境变量 |
 | 磁盘缓存 | `~/.code-graph-builder/` | `~/.code-graph-builder/`（共用） |
 
 > **注意**：两种方式共用同一个 workspace 目录（`~/.code-graph-builder/`），已索引的仓库可以在两种模式间无缝切换。
@@ -471,7 +496,7 @@ Agent 引导用户完成首次配置：
    └── 失败 → 根据错误信息修改配置，重新测试
 
 ── Custom Commands 方式 ──
-6a. 配置 → 写入 .env 文件（LLM + Embedding 环境变量）
+6a. 配置 → 写入 ~/.claude/settings.json（LLM + Embedding 环境变量，全局生效）
 6b. 验证 → 运行 python3 -m code_graph_builder.commands_cli --help
 6c. 完成 → 提示用户使用 /repo-init 开始索引
 
@@ -617,6 +642,7 @@ CodeGraphWiki/
 │   ├── code-snippet.md           # /code-snippet — 获取源码
 │   ├── code-search.md            # /code-search — 语义搜索
 │   ├── code-locate.md            # /code-locate — 定位函数
+│   ├── wiki-gen.md               # /wiki-gen — 单独重新生成 Wiki
 │   ├── wiki-list.md              # /wiki-list — 列出 Wiki
 │   ├── wiki-read.md              # /wiki-read — 读取 Wiki
 │   ├── api-list.md               # /api-list — 列出 API
@@ -957,6 +983,6 @@ python3 -c "from code_graph_builder import CodeGraphBuilder; print('OK')"
 | `No language parsers could be loaded` | 未安装 tree-sitter 语言语法包 | `pip install tree-sitter-python tree-sitter-c` 等 |
 | `ModuleNotFoundError: No module named 'loguru'` | 未安装核心依赖 | `pip install loguru` |
 | `ImportError: No module named 'kuzu'` | 未安装 Kuzu | `pip install kuzu` |
-| `MOONSHOT_API_KEY 未设置` | 环境变量未配置 | 创建 `.env` 文件或 `set MOONSHOT_API_KEY=sk-xxx` |
+| `MOONSHOT_API_KEY 未设置` | 环境变量未配置 | 配置 `~/.claude/settings.json` 或创建 `.env` 文件 |
 | `error: Microsoft Visual C++ 14.0 or greater is required` | 缺少 C++ 编译器 | 安装 Visual Studio Build Tools |
 | Kuzu 数据库锁定错误 | 上次进程未正常退出 | 删除 `.db` 目录重新构建 |

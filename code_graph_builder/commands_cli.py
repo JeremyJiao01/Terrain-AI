@@ -34,6 +34,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from .settings import load_settings  # noqa: E402
+
+load_settings()
+
 
 # ---------------------------------------------------------------------------
 # Workspace helper
@@ -711,6 +715,96 @@ def cmd_api_find(args: argparse.Namespace, ws: Workspace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: wiki-gen (standalone wiki regeneration)
+# ---------------------------------------------------------------------------
+
+def cmd_wiki_gen(args: argparse.Namespace, ws: Workspace) -> None:
+    from .examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
+    from .mcp.pipeline import build_vector_index, run_wiki_generation, save_meta
+
+    artifact_dir = ws.require_active()
+    meta = ws.load_meta()
+    if meta is None:
+        _die("No metadata found. Run /repo-init first.")
+
+    repo_path = Path(meta["repo_path"]).resolve()
+    if not repo_path.exists():
+        _die(f"Repository path no longer exists: {repo_path}")
+
+    db_path = artifact_dir / "graph.db"
+    if not db_path.exists():
+        _die("Graph database not found. Run /repo-init first to build the graph.")
+
+    vectors_path = artifact_dir / "vectors.pkl"
+    if not vectors_path.exists():
+        _die("Embeddings not found. Run /repo-init first to build embeddings.")
+
+    wiki_mode = args.mode
+    comprehensive = wiki_mode != "concise"
+    max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
+    wiki_dir = artifact_dir / "wiki"
+    rebuild = args.rebuild
+
+    def progress_cb(msg: str, pct: float = 0.0) -> None:
+        prefix = f"[{pct:.0f}%] " if pct > 0 else ""
+        _progress(f"{prefix}{msg}")
+
+    _progress(f"=== Wiki Generation: {repo_path.name} ===")
+    _progress(f"    Mode: {wiki_mode} | Rebuild: {rebuild}")
+    _progress("")
+
+    try:
+        # Open existing graph (read-only)
+        ingestor = _open_ingestor(artifact_dir)
+
+        # Load existing embeddings (no re-computation)
+        with open(vectors_path, "rb") as fh:
+            cache = pickle.load(fh)
+        vector_store = cache["vector_store"]
+        func_map = cache["func_map"]
+
+        from .embeddings.qwen3_embedder import Qwen3Embedder
+        embedder = Qwen3Embedder()
+
+        _progress("Loaded existing graph and embeddings. Starting wiki generation...")
+        _progress("")
+
+        # Delete structure cache if rebuild requested
+        structure_cache = wiki_dir / f"{repo_path.name}_structure.pkl"
+        if rebuild and structure_cache.exists():
+            structure_cache.unlink()
+
+        index_path, page_count = run_wiki_generation(
+            builder=ingestor,
+            repo_path=repo_path,
+            output_dir=wiki_dir,
+            max_pages=max_pages,
+            rebuild=rebuild,
+            comprehensive=comprehensive,
+            vector_store=vector_store,
+            embedder=embedder,
+            func_map=func_map,
+            progress_cb=progress_cb,
+        )
+
+        save_meta(artifact_dir, repo_path, page_count)
+        ingestor.__exit__(None, None, None)
+
+        _progress("")
+        _progress("=== Done ===")
+        _result_json({
+            "status": "success",
+            "repo_path": str(repo_path),
+            "wiki_index": str(index_path),
+            "wiki_pages": page_count,
+        })
+
+    except Exception as exc:
+        _progress(f"\nERROR: Wiki generation failed: {exc}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Main — argparse
 # ---------------------------------------------------------------------------
 
@@ -780,6 +874,12 @@ def main() -> None:
     p.add_argument("query", help="Natural language description of what API to find")
     p.add_argument("--top-k", type=int, default=5, help="Number of results (default: 5)")
 
+    # wiki-gen
+    p = subparsers.add_parser("wiki-gen", help="Regenerate wiki only (reuses existing graph + embeddings)")
+    p.add_argument("--rebuild", action="store_true", help="Force regenerate wiki structure and pages")
+    p.add_argument("--mode", choices=["comprehensive", "concise"], default="comprehensive",
+                   help="Wiki mode: comprehensive (8-10 pages) or concise (4-5 pages)")
+
     args = parser.parse_args()
 
     ws = Workspace()
@@ -797,6 +897,7 @@ def main() -> None:
         "api-docs": cmd_api_docs,
         "api-doc": cmd_api_doc,
         "api-find": cmd_api_find,
+        "wiki-gen": cmd_wiki_gen,
     }
 
     handler = dispatch.get(args.command)
