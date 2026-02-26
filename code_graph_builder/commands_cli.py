@@ -34,6 +34,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from .settings import load_settings  # noqa: E402
+
+load_settings()
+
 
 # ---------------------------------------------------------------------------
 # Workspace helper
