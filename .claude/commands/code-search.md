@@ -1,7 +1,7 @@
 Search the codebase semantically using vector embeddings. Returns the most relevant functions/classes for the query.
 
 ```bash
-python3 -m code_graph_builder.commands_cli search "$ARGUMENTS"
+python3 ~/.claude/commands/code-graph/cgb_cli.py search "$ARGUMENTS"
 ```
 
 Add `--top-k N` to control the number of results (default: 5).

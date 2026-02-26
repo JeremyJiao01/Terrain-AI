@@ -3,7 +3,7 @@ Index a code repository: build knowledge graph, generate vector embeddings, and 
 Run the following command (adjust options as needed based on user input):
 
 ```bash
-python3 -m code_graph_builder.commands_cli init $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py init $ARGUMENTS
 ```
 
 Supported options:

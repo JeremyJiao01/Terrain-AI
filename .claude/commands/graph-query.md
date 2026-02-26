@@ -1,7 +1,7 @@
 Translate a natural-language question into Cypher and execute it against the code knowledge graph.
 
 ```bash
-python3 -m code_graph_builder.commands_cli query "$ARGUMENTS"
+python3 ~/.claude/commands/code-graph/cgb_cli.py query "$ARGUMENTS"
 ```
 
 The command will:

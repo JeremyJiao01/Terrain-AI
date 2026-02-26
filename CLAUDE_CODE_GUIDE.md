@@ -373,9 +373,42 @@ Agent 在配置 MCP 时需要设置以下环境变量（根据用户在 0.1 和 
 Custom Commands 方式无需配置 MCP Server，只需确保：
 1. 项目依赖已安装（0.3 节）
 2. 环境变量已配置（通过 `~/.claude/settings.json` 或 `.env` 文件）
-3. `.claude/commands/` 目录存在（已随仓库提供）
+3. 全局命令已安装到 `~/.claude/commands/code-graph/`
 
-#### 6a. 写入全局配置 `~/.claude/settings.json`（推荐）
+#### 6a. 安装全局命令
+
+运行安装脚本，将自定义命令和 CLI 入口安装到 `~/.claude/commands/code-graph/`：
+
+```bash
+python3 scripts/install_global.py --editable
+```
+
+> `--editable` 表示开发模式安装，代码修改后无需重新安装。
+> 不加 `--editable` 则为正常安装（适合最终用户）。
+
+安装完成后的目录结构：
+
+```
+~/.claude/commands/code-graph/
+├── cgb_cli.py              # CLI 入口（wrapper）
+├── repo-init.md            # /repo-init 命令
+├── repo-info.md            # /repo-info 命令
+├── graph-query.md          # /graph-query 命令
+├── code-search.md          # /code-search 命令
+├── code-snippet.md         # /code-snippet 命令
+├── code-locate.md          # /code-locate 命令
+├── wiki-gen.md             # /wiki-gen 命令
+├── wiki-list.md            # /wiki-list 命令
+├── wiki-read.md            # /wiki-read 命令
+├── api-list.md             # /api-list 命令
+├── api-browse.md           # /api-browse 命令
+├── api-detail.md           # /api-detail 命令
+└── api-find.md             # /api-find 命令
+```
+
+> **全局可用**：命令安装在 `~/.claude/commands/` 下，Claude Code 在任意项目目录中都可使用 `/repo-init` 等命令。
+
+#### 6b. 写入全局配置 `~/.claude/settings.json`（推荐）
 
 Agent 应根据用户在 0.1 和 0.2 步骤中提供的信息，创建或更新 `~/.claude/settings.json` 文件：
 
@@ -418,19 +451,19 @@ ENVEOF
 
 </details>
 
-#### 6b. 验证命令可用
+#### 6c. 验证命令可用
 
 运行以下命令确认 CLI 正常工作：
 
 ```bash
-# 验证 CLI 帮助信息
-python3 -m code_graph_builder.commands_cli --help
+# 验证全局入口可用
+python3 ~/.claude/commands/code-graph/cgb_cli.py --help
 
 # 验证 info 命令（首次运行应报告 "No repository indexed"）
-python3 -m code_graph_builder.commands_cli info
+python3 ~/.claude/commands/code-graph/cgb_cli.py info
 ```
 
-#### 6c. 可用的自定义命令
+#### 6d. 可用的自定义命令
 
 配置完成后，用户可在 Claude Code 中直接使用以下斜杠命令：
 
@@ -450,7 +483,7 @@ python3 -m code_graph_builder.commands_cli info
 | `/api-detail` | 查看函数详细文档（L3） | `/api-detail project.parser.parse_expr` |
 | `/api-find` | 自然语言查找 API（搜索 + 文档聚合） | `/api-find 用户认证逻辑` |
 
-#### 6d. 典型使用流程
+#### 6e. 典型使用流程
 
 ```
 1. /repo-init /path/to/target-repo          ← 首次索引（2-10 分钟）
@@ -496,9 +529,10 @@ Agent 引导用户完成首次配置：
    └── 失败 → 根据错误信息修改配置，重新测试
 
 ── Custom Commands 方式 ──
-6a. 配置 → 写入 ~/.claude/settings.json（LLM + Embedding 环境变量，全局生效）
-6b. 验证 → 运行 python3 -m code_graph_builder.commands_cli --help
-6c. 完成 → 提示用户使用 /repo-init 开始索引
+6a. 安装 → 运行 python3 scripts/install_global.py --editable（安装到 ~/.claude/commands/code-graph/）
+6b. 配置 → 写入 ~/.claude/settings.json（LLM + Embedding 环境变量，全局生效）
+6c. 验证 → 运行 python3 ~/.claude/commands/code-graph/cgb_cli.py --help
+6d. 完成 → 提示用户使用 /repo-init 开始索引
 
 ── MCP Server 方式 ──
 6a. 配置 → 自动写入 Claude Code MCP 配置文件（含环境变量）
@@ -633,6 +667,8 @@ CodeGraphWiki/
 ├── .env.example                  # 环境变量模板
 ├── .env                          # 实际环境变量（不入库）
 ├── README.md                     # 项目说明
+├── scripts/
+│   └── install_global.py         # 一键安装全局命令到 ~/.claude/commands/code-graph/
 ├── CLAUDE_CODE_GUIDE.md          # 本文档
 │
 ├── .claude/commands/             # Claude Code 自定义命令（斜杠命令）
@@ -655,6 +691,7 @@ CodeGraphWiki/
     ├── builder.py                # CodeGraphBuilder 主类
     ├── cli.py                    # CLI 命令行接口
     ├── commands_cli.py           # Custom Commands CLI（斜杠命令后端）
+    ├── cgb_cli.py                # 全局 CLI 入口（安装到 ~/.claude/commands/code-graph/）
     ├── config.py                 # 配置类（KuzuConfig、ScanConfig 等）
     ├── constants.py              # 枚举常量（NodeLabel、RelationshipType 等）
     ├── graph_updater.py          # 图更新逻辑

@@ -1,7 +1,7 @@
 Browse the hierarchical API documentation. Without arguments, returns the L1 module index. With a module name, returns the L2 module detail page.
 
 ```bash
-python3 -m code_graph_builder.commands_cli api-docs $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py api-docs $ARGUMENTS
 ```
 
 Options:

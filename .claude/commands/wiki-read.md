@@ -1,7 +1,7 @@
 Read the content of a generated wiki page.
 
 ```bash
-python3 -m code_graph_builder.commands_cli get-wiki $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py get-wiki $ARGUMENTS
 ```
 
 Use `index` for the summary page, or a specific page ID like `page-1`, `page-2`, etc.

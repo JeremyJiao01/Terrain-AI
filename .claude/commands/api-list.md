@@ -1,7 +1,7 @@
 List public API interfaces for a module or the entire project. Returns function signatures, struct/enum definitions, and type declarations.
 
 ```bash
-python3 -m code_graph_builder.commands_cli list-api $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py list-api $ARGUMENTS
 ```
 
 Options:

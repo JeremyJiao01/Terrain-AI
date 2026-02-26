@@ -1,7 +1,7 @@
 Locate a function or method in the repository using Tree-sitter AST parsing. Returns source code, line numbers, and qualified name.
 
 ```bash
-python3 -m code_graph_builder.commands_cli locate $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py locate $ARGUMENTS
 ```
 
 Arguments:

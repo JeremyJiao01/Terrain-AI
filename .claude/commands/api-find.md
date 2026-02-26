@@ -1,7 +1,7 @@
 Find relevant APIs by natural language description. Combines semantic search with API documentation lookup — returns matching functions along with their signatures, docstrings, and call graphs.
 
 ```bash
-python3 -m code_graph_builder.commands_cli api-find "$ARGUMENTS"
+python3 ~/.claude/commands/code-graph/cgb_cli.py api-find "$ARGUMENTS"
 ```
 
 Add `--top-k N` to control the number of results (default: 5).

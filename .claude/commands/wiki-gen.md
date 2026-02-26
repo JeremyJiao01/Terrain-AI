@@ -1,7 +1,7 @@
 Regenerate wiki pages using existing graph and embeddings. Use this when wiki generation failed during `/repo-init`, or when you want to regenerate with different settings — without rebuilding the graph or recomputing embeddings.
 
 ```bash
-python3 -m code_graph_builder.commands_cli wiki-gen $ARGUMENTS
+python3 ~/.claude/commands/code-graph/cgb_cli.py wiki-gen $ARGUMENTS
 ```
 
 Supported options:
