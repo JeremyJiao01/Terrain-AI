@@ -637,6 +637,80 @@ def cmd_api_doc(args: argparse.Namespace, ws: Workspace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: api-find (aggregated: semantic search + API doc lookup)
+# ---------------------------------------------------------------------------
+
+def cmd_api_find(args: argparse.Namespace, ws: Workspace) -> None:
+    artifact_dir = ws.require_active()
+
+    vectors_path = artifact_dir / "vectors.pkl"
+    if not vectors_path.exists():
+        _die("Embeddings not found. Run /repo-init first to build vector index.")
+
+    from .embeddings.qwen3_embedder import Qwen3Embedder
+    from .tools.semantic_search import SemanticSearchService
+
+    vector_store = _load_vector_store(vectors_path)
+    if vector_store is None:
+        _die("Failed to load vector store.")
+
+    ingestor = _open_ingestor(artifact_dir)
+    embedder = Qwen3Embedder()
+    service = SemanticSearchService(
+        embedder=embedder, vector_store=vector_store, graph_service=ingestor,
+    )
+
+    query = args.query
+    top_k = args.top_k
+    _progress(f"Searching APIs: \"{query}\" (top {top_k})")
+
+    try:
+        results = service.search(query, top_k=top_k)
+    except Exception as exc:
+        ingestor.__exit__(None, None, None)
+        _die(f"Semantic search failed: {exc}")
+
+    api_dir = artifact_dir / "api_docs"
+    funcs_dir = api_dir / "funcs"
+    has_api_docs = funcs_dir.exists()
+
+    combined = []
+    for r in results:
+        entry: dict = {
+            "qualified_name": r.qualified_name,
+            "name": r.name,
+            "type": r.type,
+            "score": r.score,
+            "file_path": r.file_path,
+            "start_line": r.start_line,
+            "end_line": r.end_line,
+            "source_code": r.source_code,
+        }
+
+        # Try to attach API doc content
+        if has_api_docs and r.qualified_name:
+            safe_qn = r.qualified_name.replace("/", "_").replace("\\", "_")
+            doc_file = funcs_dir / f"{safe_qn}.md"
+            if doc_file.exists():
+                entry["api_doc"] = doc_file.read_text(encoding="utf-8", errors="ignore")
+            else:
+                entry["api_doc"] = None
+        else:
+            entry["api_doc"] = None
+
+        combined.append(entry)
+
+    ingestor.__exit__(None, None, None)
+
+    _result_json({
+        "query": query,
+        "result_count": len(combined),
+        "api_docs_available": has_api_docs,
+        "results": combined,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Main — argparse
 # ---------------------------------------------------------------------------
 
@@ -701,6 +775,11 @@ def main() -> None:
     p = subparsers.add_parser("api-doc", help="Read detailed API doc for a function (L3)")
     p.add_argument("qualified_name", help="Fully qualified function name")
 
+    # api-find
+    p = subparsers.add_parser("api-find", help="Find APIs by natural language (search + doc lookup)")
+    p.add_argument("query", help="Natural language description of what API to find")
+    p.add_argument("--top-k", type=int, default=5, help="Number of results (default: 5)")
+
     args = parser.parse_args()
 
     ws = Workspace()
@@ -717,6 +796,7 @@ def main() -> None:
         "list-api": cmd_list_api,
         "api-docs": cmd_api_docs,
         "api-doc": cmd_api_doc,
+        "api-find": cmd_api_find,
     }
 
     handler = dispatch.get(args.command)

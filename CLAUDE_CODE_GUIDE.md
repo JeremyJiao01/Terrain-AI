@@ -14,7 +14,7 @@
 
 | 方式 | 说明 | 适合场景 |
 |------|------|----------|
-| **Custom Commands（推荐）** | 通过 `.claude/commands/` 提供 `/init-repo`、`/search-code` 等斜杠命令，直接在对话中运行 | 本地开发、快速上手、无需额外配置 MCP |
+| **Custom Commands（推荐）** | 通过 `.claude/commands/` 提供 `/repo-init`、`/code-search` 等斜杠命令，直接在对话中运行 | 本地开发、快速上手、无需额外配置 MCP |
 | **MCP Server** | 通过 MCP 协议暴露 11 个工具，Claude Code 自动发现和调用 | 需要 MCP 生态集成、多 Agent 协作 |
 
 > **推荐**：如果用户不确定，默认选择 **Custom Commands** 方式——配置更简单，功能完全相同。
@@ -413,38 +413,40 @@ python3 -m code_graph_builder.commands_cli info
 
 | 命令 | 说明 | 示例 |
 |------|------|------|
-| `/init-repo` | 索引仓库（构建图 → 嵌入 → Wiki） | `/init-repo /path/to/repo` |
+| `/repo-init` | 索引仓库（构建图 → 嵌入 → Wiki） | `/repo-init /path/to/repo` |
 | `/repo-info` | 查看当前活跃仓库信息和图统计 | `/repo-info` |
-| `/query-graph` | 自然语言 → Cypher 查询 | `/query-graph 哪些函数调用了 parse?` |
+| `/graph-query` | 自然语言 → Cypher 查询 | `/graph-query 哪些函数调用了 parse?` |
 | `/code-snippet` | 按 qualified name 获取源码 | `/code-snippet mymodule.MyClass.method` |
-| `/search-code` | 语义向量搜索 | `/search-code 递归树遍历` |
-| `/list-wiki` | 列出 Wiki 页面 | `/list-wiki` |
-| `/get-wiki` | 读取 Wiki 页面 | `/get-wiki page-1` |
-| `/locate-func` | Tree-sitter 定位函数 | `/locate-func src/parser.c parse_expr` |
-| `/list-api` | 列出 API 接口 | `/list-api --module project.parser` |
-| `/api-docs` | 浏览 API 文档（L1/L2） | `/api-docs --module project.parser` |
-| `/api-doc` | 查看函数详细文档（L3） | `/api-doc project.parser.parse_expr` |
+| `/code-search` | 语义向量搜索 | `/code-search 递归树遍历` |
+| `/code-locate` | Tree-sitter 定位函数 | `/code-locate src/parser.c parse_expr` |
+| `/wiki-list` | 列出 Wiki 页面 | `/wiki-list` |
+| `/wiki-read` | 读取 Wiki 页面 | `/wiki-read page-1` |
+| `/api-list` | 列出 API 接口 | `/api-list --module project.parser` |
+| `/api-browse` | 浏览 API 文档（L1/L2） | `/api-browse --module project.parser` |
+| `/api-detail` | 查看函数详细文档（L3） | `/api-detail project.parser.parse_expr` |
+| `/api-find` | 自然语言查找 API（搜索 + 文档聚合） | `/api-find 用户认证逻辑` |
 
 #### 6d. 典型使用流程
 
 ```
-1. /init-repo /path/to/target-repo          ← 首次索引（2-10 分钟）
+1. /repo-init /path/to/target-repo          ← 首次索引（2-10 分钟）
 2. /repo-info                                ← 确认索引成功
-3. /search-code 用户认证逻辑                  ← 语义搜索
-4. /query-graph 哪些函数调用了 login?         ← 图查询
-5. /get-wiki index                           ← 阅读项目概览 Wiki
-6. /api-docs                                 ← 浏览 API 文档
+3. /api-find 用户认证逻辑                     ← 一步找到相关 API 及文档
+4. /graph-query 哪些函数调用了 login?         ← 图查询
+5. /wiki-read index                           ← 阅读项目概览 Wiki
+6. /api-browse                                ← 按模块浏览全部 API
 ```
 
 #### Custom Commands vs MCP 功能对照
 
 | 功能 | Custom Commands | MCP Server |
 |------|----------------|------------|
-| 图构建 + 嵌入 + Wiki | ✅ `/init-repo` | ✅ `initialize_repository` |
-| 自然语言 Cypher 查询 | ✅ `/query-graph` | ✅ `query_code_graph` |
-| 语义向量搜索 | ✅ `/search-code` | ✅ `semantic_search` |
-| Wiki 浏览 | ✅ `/list-wiki` `/get-wiki` | ✅ `list_wiki_pages` `get_wiki_page` |
-| API 文档 | ✅ `/api-docs` `/api-doc` | ✅ `list_api_docs` `get_api_doc` |
+| 图构建 + 嵌入 + Wiki | ✅ `/repo-init` | ✅ `initialize_repository` |
+| 自然语言 Cypher 查询 | ✅ `/graph-query` | ✅ `query_code_graph` |
+| 语义向量搜索 | ✅ `/code-search` | ✅ `semantic_search` |
+| Wiki 浏览 | ✅ `/wiki-list` `/wiki-read` | ✅ `list_wiki_pages` `get_wiki_page` |
+| API 文档 | ✅ `/api-browse` `/api-detail` | ✅ `list_api_docs` `get_api_doc` |
+| 自然语言找 API | ✅ `/api-find` | ✅ `find_api` |
 | 进度显示 | 直接 stdout 输出 | MCP log message |
 | 额外依赖 | 无（不需要 `mcp` 包） | 需要 `pip install mcp` |
 | 配置方式 | `.env` 文件 | MCP JSON 配置 + 环境变量 |
@@ -471,7 +473,7 @@ Agent 引导用户完成首次配置：
 ── Custom Commands 方式 ──
 6a. 配置 → 写入 .env 文件（LLM + Embedding 环境变量）
 6b. 验证 → 运行 python3 -m code_graph_builder.commands_cli --help
-6c. 完成 → 提示用户使用 /init-repo 开始索引
+6c. 完成 → 提示用户使用 /repo-init 开始索引
 
 ── MCP Server 方式 ──
 6a. 配置 → 自动写入 Claude Code MCP 配置文件（含环境变量）
@@ -609,17 +611,18 @@ CodeGraphWiki/
 ├── CLAUDE_CODE_GUIDE.md          # 本文档
 │
 ├── .claude/commands/             # Claude Code 自定义命令（斜杠命令）
-│   ├── init-repo.md              # /init-repo — 索引仓库
+│   ├── repo-init.md              # /repo-init — 索引仓库
 │   ├── repo-info.md              # /repo-info — 仓库信息
-│   ├── query-graph.md            # /query-graph — 图查询
+│   ├── graph-query.md            # /graph-query — 图查询
 │   ├── code-snippet.md           # /code-snippet — 获取源码
-│   ├── search-code.md            # /search-code — 语义搜索
-│   ├── list-wiki.md              # /list-wiki — 列出 Wiki
-│   ├── get-wiki.md               # /get-wiki — 读取 Wiki
-│   ├── locate-func.md            # /locate-func — 定位函数
-│   ├── list-api.md               # /list-api — 列出 API
-│   ├── api-docs.md               # /api-docs — API 文档浏览
-│   └── api-doc.md                # /api-doc — 函数详细文档
+│   ├── code-search.md            # /code-search — 语义搜索
+│   ├── code-locate.md            # /code-locate — 定位函数
+│   ├── wiki-list.md              # /wiki-list — 列出 Wiki
+│   ├── wiki-read.md              # /wiki-read — 读取 Wiki
+│   ├── api-list.md               # /api-list — 列出 API
+│   ├── api-browse.md             # /api-browse — API 文档浏览
+│   ├── api-detail.md             # /api-detail — 函数详细文档
+│   └── api-find.md               # /api-find — 自然语言查找 API
 │
 └── code_graph_builder/           # 主 Python 包
     ├── __init__.py               # 包入口，导出核心 API

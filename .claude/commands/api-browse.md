@@ -8,6 +8,6 @@ Options:
 - `--module <name>` : Show L2 detail for a specific module
 
 Workflow:
-1. `/api-docs` — see all modules (L1 index)
-2. `/api-docs --module project.parser` — see all functions in that module (L2)
-3. `/api-doc project.parser.parse_expr` — see detailed doc for one function (L3)
+1. `/api-browse` — see all modules (L1 index)
+2. `/api-browse --module project.parser` — see all functions in that module (L2)
+3. `/api-detail project.parser.parse_expr` — see detailed doc for one function (L3)

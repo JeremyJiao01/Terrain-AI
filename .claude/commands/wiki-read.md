@@ -5,6 +5,6 @@ python3 -m code_graph_builder.commands_cli get-wiki $ARGUMENTS
 ```
 
 Use `index` for the summary page, or a specific page ID like `page-1`, `page-2`, etc.
-Run `/list-wiki` first to see available page IDs.
+Run `/wiki-list` first to see available page IDs.
 
-Example: `/get-wiki index` or `/get-wiki page-3`
+Example: `/wiki-read index` or `/wiki-read page-3`

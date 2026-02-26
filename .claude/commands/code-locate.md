@@ -9,5 +9,5 @@ Arguments:
 - Second: function or method name (use `ClassName.method` for methods)
 - `--line N` : optional line number to disambiguate overloads
 
-Example: `/locate-func src/parser.c parse_expression`
-Example: `/locate-func src/main.py MyClass.run --line 42`
+Example: `/code-locate src/parser.c parse_expression`
+Example: `/code-locate src/main.py MyClass.run --line 42`
