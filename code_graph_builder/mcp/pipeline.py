@@ -100,51 +100,18 @@ _CALLS_QUERY = """
 """
 
 
-def _generate_api_docs(
-    builder: Any,
-    artifact_dir: Path,
-    rebuild: bool,
-    progress_cb: ProgressCb = None,
-) -> None:
-    """Sub-step of Step 1: generate hierarchical API docs from graph data."""
-    from .api_doc_generator import generate_api_docs
-
-    api_dir = artifact_dir / "api_docs"
-    index_file = api_dir / "index.md"
-
-    if not rebuild and index_file.exists():
-        if progress_cb:
-            progress_cb("[Step 1/3] Reusing cached API docs.", 15.0)
-        return
-
-    try:
-        func_rows = builder.query(_FUNC_DOC_QUERY)
-        type_rows = builder.query(_TYPE_DOC_QUERY_CLASS) + builder.query(_TYPE_DOC_QUERY_TYPE)
-        call_rows = builder.query(_CALLS_QUERY)
-    except Exception as exc:
-        logger.warning(f"API docs skipped — graph query failed: {exc}")
-        return
-
-    result = generate_api_docs(func_rows, type_rows, call_rows, artifact_dir)
-    if progress_cb:
-        progress_cb(
-            f"[Step 1/3] API docs generated: "
-            f"{result['module_count']} modules, "
-            f"{result['func_count']} functions, "
-            f"{result['type_count']} types.",
-            15.0,
-        )
-
-
 def build_graph(
     repo_path: Path,
     db_path: Path,
-    artifact_dir: Path,
     rebuild: bool,
     progress_cb: ProgressCb = None,
     backend: str = "kuzu",
 ) -> Any:
-    """Build or reuse a code knowledge graph, then generate API docs."""
+    """Build or reuse a code knowledge graph.
+
+    This step only creates the graph database.  API docs, embeddings, and
+    wiki generation are separate steps.
+    """
     from ..builder import CodeGraphBuilder
 
     builder = CodeGraphBuilder(
@@ -157,7 +124,7 @@ def build_graph(
         result = builder.build_graph(clean=rebuild)
         if progress_cb:
             progress_cb(
-                f"[Step 1/3] Graph built: "
+                f"Graph built: "
                 f"{result.nodes_created} nodes, "
                 f"{result.relationships_created} relationships, "
                 f"{result.files_processed} files processed.",
@@ -167,15 +134,60 @@ def build_graph(
         stats = builder.get_statistics()
         if progress_cb:
             progress_cb(
-                f"[Step 1/3] Reusing existing graph: "
+                f"Reusing existing graph: "
                 f"{stats.get('node_count', '?')} nodes, "
                 f"{stats.get('relationship_count', '?')} relationships.",
                 10.0,
             )
 
-    _generate_api_docs(builder, artifact_dir, rebuild, progress_cb)
-
     return builder
+
+
+# ---------------------------------------------------------------------------
+# Step 2: API docs generation (graph-only, no embeddings needed)
+# ---------------------------------------------------------------------------
+
+def generate_api_docs_step(
+    builder: Any,
+    artifact_dir: Path,
+    rebuild: bool,
+    progress_cb: ProgressCb = None,
+) -> dict[str, Any]:
+    """Generate hierarchical API docs from the knowledge graph.
+
+    Requires only a populated graph database — no embeddings or LLM needed.
+    """
+    from .api_doc_generator import generate_api_docs
+
+    api_dir = artifact_dir / "api_docs"
+    index_file = api_dir / "index.md"
+
+    if not rebuild and index_file.exists():
+        if progress_cb:
+            progress_cb("Reusing cached API docs.", 15.0)
+        return {"status": "cached"}
+
+    try:
+        func_rows = builder.query(_FUNC_DOC_QUERY)
+        type_rows = builder.query(_TYPE_DOC_QUERY_CLASS) + builder.query(_TYPE_DOC_QUERY_TYPE)
+        call_rows = builder.query(_CALLS_QUERY)
+    except Exception as exc:
+        msg = f"API docs skipped — graph query failed: {exc}"
+        logger.warning(msg)
+        if progress_cb:
+            progress_cb(msg, 15.0)
+        return {"status": "skipped", "error": str(exc)}
+
+    result = generate_api_docs(func_rows, type_rows, call_rows, artifact_dir)
+    if progress_cb:
+        progress_cb(
+            f"API docs generated: "
+            f"{result['module_count']} modules, "
+            f"{result['func_count']} functions, "
+            f"{result['type_count']} types.",
+            15.0,
+        )
+    return {"status": "success", **result}
 
 
 # ---------------------------------------------------------------------------

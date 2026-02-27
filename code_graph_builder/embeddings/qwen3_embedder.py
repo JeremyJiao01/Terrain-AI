@@ -48,6 +48,22 @@ class BaseEmbedder(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_embedding_dimension(self) -> int:
+        """Return the embedding vector dimension."""
+        ...
+
+    def embed_query(self, query: str) -> list[float]:
+        """Generate embedding for a search query.
+
+        Subclasses may override to add task instructions for better retrieval.
+        """
+        return self.embed_code(query)
+
+    def embed_documents(self, documents: list[str], show_progress: bool = True) -> list[list[float]]:
+        """Generate embeddings for documents (code snippets for indexing)."""
+        return self.embed_batch(documents)
+
 
 class Qwen3Embedder(BaseEmbedder):
     """Qwen3 embedding model wrapper using Alibaba Cloud Bailian API.
@@ -274,12 +290,15 @@ class Qwen3Embedder(BaseEmbedder):
                 batch_embeddings = self._extract_embeddings(response)
                 all_embeddings.extend(batch_embeddings)
             except Exception as e:
-                logger.error(f"Failed to embed batch {i // self.batch_size}: {e}")
-                # Return partial results on failure
-                if all_embeddings:
-                    logger.warning("Returning partial results due to failure")
-                    return all_embeddings
-                raise
+                batch_num = i // self.batch_size + 1
+                total_batches = (len(texts) + self.batch_size - 1) // self.batch_size
+                logger.error(
+                    f"Embedding batch {batch_num}/{total_batches} failed: {e}"
+                )
+                raise RuntimeError(
+                    f"Embedding API call failed at batch {batch_num}/{total_batches}: {e}. "
+                    f"Successfully embedded {len(all_embeddings)}/{len(texts)} texts before failure."
+                ) from e
 
         return all_embeddings
 
@@ -350,6 +369,126 @@ class Qwen3Embedder(BaseEmbedder):
             return False
 
 
+class OpenAIEmbedder(BaseEmbedder):
+    """OpenAI-compatible embedding client.
+
+    Works with OpenAI, Azure OpenAI, and any API implementing the
+    ``/v1/embeddings`` endpoint (e.g. local ollama, vLLM, LiteLLM).
+
+    Env vars (fallback order):
+        EMBEDDING_API_KEY / OPENAI_API_KEY / LLM_API_KEY
+        EMBEDDING_BASE_URL / OPENAI_BASE_URL / LLM_BASE_URL  (default: https://api.openai.com/v1)
+        EMBEDDING_MODEL  (default: text-embedding-3-small)
+    """
+
+    DEFAULT_MODEL = "text-embedding-3-small"
+    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    # text-embedding-3-small = 1536, text-embedding-3-large = 3072
+    _KNOWN_DIMS: dict[str, int] = {
+        "text-embedding-3-small": 1536,
+        "text-embedding-3-large": 3072,
+        "text-embedding-ada-002": 1536,
+    }
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        batch_size: int = 20,
+        max_retries: int = 3,
+        dimension: int | None = None,
+    ):
+        self.api_key = api_key or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "OpenAI API key required. Set EMBEDDING_API_KEY, OPENAI_API_KEY, "
+                "or LLM_API_KEY environment variable."
+            )
+
+        self.model = model or os.getenv("EMBEDDING_MODEL", self.DEFAULT_MODEL)
+        self.base_url = (
+            base_url
+            or os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("LLM_BASE_URL")
+            or self.DEFAULT_BASE_URL
+        ).rstrip("/")
+        self.batch_size = batch_size
+        self.max_retries = max_retries
+        self._dimension = dimension or self._KNOWN_DIMS.get(self.model, 1536)
+
+        logger.info(f"Initialized OpenAIEmbedder with model: {self.model}")
+
+    def _make_request(self, texts: list[str]) -> list[list[float]]:
+        url = f"{self.base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": texts,
+        }
+
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    sorted_items = sorted(data["data"], key=lambda x: x["index"])
+                    return [item["embedding"] for item in sorted_items]
+
+                if response.status_code == 429:
+                    import time
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Rate limited. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+
+                error_msg = f"OpenAI embeddings API error: {response.status_code}"
+                try:
+                    err = response.json()
+                    error_msg += f" - {err.get('error', {}).get('message', response.text[:200])}"
+                except Exception:
+                    error_msg += f" - {response.text[:200]}"
+
+                if attempt < self.max_retries - 1:
+                    logger.warning(f"{error_msg}, retrying...")
+                    continue
+                raise RuntimeError(error_msg)
+
+            except requests.exceptions.Timeout:
+                if attempt < self.max_retries - 1:
+                    logger.warning(f"Request timeout, retrying ({attempt + 1}/{self.max_retries})...")
+                    continue
+                raise RuntimeError("OpenAI embeddings API timeout after all retries")
+            except requests.exceptions.RequestException as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning(f"Request error: {e}, retrying...")
+                    continue
+                raise RuntimeError(f"OpenAI embeddings API request failed: {e}")
+
+        raise RuntimeError("All retries failed")
+
+    def embed_code(self, text: str) -> list[float]:
+        results = self._make_request([text])
+        return results[0] if results else []
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i : i + self.batch_size]
+            all_embeddings.extend(self._make_request(batch))
+        return all_embeddings
+
+    def get_embedding_dimension(self) -> int:
+        return self._dimension
+
+
 class DummyEmbedder(BaseEmbedder):
     """Dummy embedder for testing without API calls.
 
@@ -367,26 +506,50 @@ class DummyEmbedder(BaseEmbedder):
         """Return list of zero vectors."""
         return [[0.0] * self.dimension for _ in texts]
 
+    def get_embedding_dimension(self) -> int:
+        return self.dimension
+
 
 def create_embedder(
     api_key: str | None = None,
     model: str | None = None,
     use_dummy: bool = False,
+    provider: str | None = None,
     **kwargs: Any,
 ) -> BaseEmbedder:
-    """Factory function to create embedder.
+    """Factory function to create an embedder.
+
+    Provider detection order:
+        1. Explicit ``provider`` argument (``"qwen3"``, ``"openai"``, ``"dummy"``).
+        2. ``EMBEDDING_PROVIDER`` env var.
+        3. Auto-detect: if ``DASHSCOPE_API_KEY`` is set → Qwen3,
+           elif ``EMBEDDING_API_KEY`` or ``OPENAI_API_KEY`` or ``LLM_API_KEY`` → OpenAI-compatible,
+           else → DummyEmbedder (with a warning).
 
     Args:
-        api_key: DashScope API key (or from DASHSCOPE_API_KEY env var)
-        model: Model name (None for default text-embedding-v4)
-        use_dummy: Whether to use dummy embedder for testing
-        **kwargs: Additional arguments for Qwen3Embedder
+        api_key: API key override (passed to chosen embedder).
+        model: Model name override.
+        use_dummy: Force dummy embedder (for tests).
+        provider: Explicit provider name.
+        **kwargs: Extra arguments forwarded to the embedder constructor.
 
     Returns:
-        BaseEmbedder instance
+        BaseEmbedder instance.
     """
     if use_dummy:
         return DummyEmbedder()
+
+    chosen = (provider or os.getenv("EMBEDDING_PROVIDER", "")).lower()
+
+    if not chosen:
+        # Auto-detect
+        if os.getenv("DASHSCOPE_API_KEY"):
+            chosen = "qwen3"
+        elif os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY"):
+            chosen = "openai"
+        else:
+            logger.warning("No embedding API key found. Using DummyEmbedder (zero vectors).")
+            return DummyEmbedder()
 
     embedder_kwargs: dict[str, Any] = {}
     if api_key:
@@ -395,7 +558,12 @@ def create_embedder(
         embedder_kwargs["model"] = model
     embedder_kwargs.update(kwargs)
 
-    return Qwen3Embedder(**embedder_kwargs)
+    if chosen == "qwen3":
+        return Qwen3Embedder(**embedder_kwargs)
+    elif chosen == "openai":
+        return OpenAIEmbedder(**embedder_kwargs)
+    else:
+        raise ValueError(f"Unknown embedding provider: {chosen!r}. Use 'qwen3', 'openai', or 'dummy'.")
 
 
 # Keep last_token_pool for backward compatibility (not used in API mode)

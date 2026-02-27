@@ -40,6 +40,7 @@ from .pipeline import (
     artifact_dir_for,
     build_graph,
     build_vector_index,
+    generate_api_docs_step,
     run_wiki_generation,
     save_meta,
 )
@@ -181,7 +182,8 @@ class MCPToolsRegistry:
         if vectors_path.exists():
             try:
                 vector_store = _load_vector_store(vectors_path)
-                embedder = Qwen3Embedder()
+                from ..embeddings.qwen3_embedder import create_embedder
+                embedder = create_embedder(batch_size=10)
                 semantic_service = SemanticSearchService(
                     embedder=embedder,
                     vector_store=vector_store,
@@ -189,7 +191,10 @@ class MCPToolsRegistry:
                 )
                 logger.info(f"Loaded vector store: {vector_store.get_stats()}")
             except Exception as exc:
-                logger.warning(f"Semantic search unavailable: {exc}")
+                logger.warning(
+                    f"Semantic search unavailable: {exc}. "
+                    "Check DASHSCOPE_API_KEY or EMBEDDING_API_KEY / OPENAI_API_KEY."
+                )
 
         self._cypher_gen = cypher_gen
         self._semantic_service = semantic_service
@@ -256,6 +261,21 @@ class MCPToolsRegistry:
                             "enum": ["kuzu", "memgraph", "memory"],
                             "description": (
                                 "Graph database backend. Default: kuzu (embedded, no Docker)."
+                            ),
+                        },
+                        "skip_wiki": {
+                            "type": "boolean",
+                            "description": (
+                                "Skip wiki generation (graph + embeddings only). "
+                                "Use generate_wiki later to create wiki separately. "
+                                "Default: false."
+                            ),
+                        },
+                        "skip_embed": {
+                            "type": "boolean",
+                            "description": (
+                                "Skip embeddings and wiki (graph only, fastest). "
+                                "Semantic search will be unavailable. Default: false."
                             ),
                         },
                     },
@@ -517,6 +537,85 @@ class MCPToolsRegistry:
                     "required": [],
                 },
             ),
+            ToolDefinition(
+                name="rebuild_embeddings",
+                description=(
+                    "Rebuild vector embeddings using the existing knowledge graph. "
+                    "Use this when embeddings are missing, corrupted, or when you "
+                    "want to re-embed after changing the embedding model/config. "
+                    "Requires a graph to have been built first "
+                    "(via initialize_repository or build_graph)."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, force-rebuild embeddings even if cached. "
+                                "Default: false (reuses cache if available)."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            ToolDefinition(
+                name="build_graph",
+                description=(
+                    "Build the code knowledge graph from source code using "
+                    "Tree-sitter AST parsing. This is step 1 of the pipeline. "
+                    "After building, use generate_api_docs, rebuild_embeddings, "
+                    "and generate_wiki as separate steps."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Absolute path to the repository to index.",
+                        },
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, force-rebuild graph even if cached. "
+                                "Default: false."
+                            ),
+                        },
+                        "backend": {
+                            "type": "string",
+                            "enum": ["kuzu", "memgraph", "memory"],
+                            "description": (
+                                "Graph database backend. Default: kuzu (embedded)."
+                            ),
+                        },
+                    },
+                    "required": ["repo_path"],
+                },
+            ),
+            ToolDefinition(
+                name="generate_api_docs",
+                description=(
+                    "Generate hierarchical API documentation from the existing "
+                    "knowledge graph. Produces L1 module index, L2 per-module pages, "
+                    "and L3 per-function detail pages with call graphs. "
+                    "Requires only a graph database — no embeddings or LLM needed. "
+                    "This is step 2 of the pipeline."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, force-regenerate API docs even if cached. "
+                                "Default: false."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
         ]
 
         return defs
@@ -536,6 +635,9 @@ class MCPToolsRegistry:
             "get_api_doc": self._handle_get_api_doc,
             "find_api": self._handle_find_api,
             "generate_wiki": self._handle_generate_wiki,
+            "rebuild_embeddings": self._handle_rebuild_embeddings,
+            "build_graph": self._handle_build_graph,
+            "generate_api_docs": self._handle_generate_api_docs,
         }
         return handlers.get(name)
 
@@ -549,6 +651,8 @@ class MCPToolsRegistry:
         rebuild: bool = False,
         wiki_mode: str = "comprehensive",
         backend: str = "kuzu",
+        skip_wiki: bool = False,
+        skip_embed: bool = False,
         _progress_cb: ProgressCb = None,
     ) -> dict[str, Any]:
         repo = Path(repo_path).resolve()
@@ -563,7 +667,10 @@ class MCPToolsRegistry:
 
         result = await loop.run_in_executor(
             None,
-            lambda: self._run_pipeline(repo, rebuild, wiki_mode, sync_progress, backend=backend),
+            lambda: self._run_pipeline(
+                repo, rebuild, wiki_mode, sync_progress,
+                backend=backend, skip_wiki=skip_wiki, skip_embed=skip_embed,
+            ),
         )
         return result
 
@@ -574,9 +681,19 @@ class MCPToolsRegistry:
         wiki_mode: str,
         progress_cb: ProgressCb = None,
         backend: str = "kuzu",
+        skip_wiki: bool = False,
+        skip_embed: bool = False,
     ) -> dict[str, Any]:
-        """Synchronous pipeline: graph → embeddings → wiki. Runs in thread pool."""
+        """Synchronous pipeline orchestrator: graph → api_docs → embeddings → wiki.
+
+        Each step calls the same standalone pipeline functions that the
+        individual tool handlers use, so behaviour is identical whether
+        invoked from ``initialize_repository`` or step-by-step.
+        """
         from ..examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
+
+        if skip_embed:
+            skip_wiki = True  # wiki requires embeddings
 
         artifact_dir = artifact_dir_for(self._workspace, repo_path)
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -587,27 +704,61 @@ class MCPToolsRegistry:
         comprehensive = wiki_mode != "concise"
         max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
 
+        def _step_progress(step: int, total: int, msg: str, pct: float) -> None:
+            if progress_cb:
+                progress_cb(f"[Step {step}/{total}] {msg}", pct)
+
+        total_steps = 4
+        if skip_embed:
+            total_steps = 2  # graph + api_docs only
+        elif skip_wiki:
+            total_steps = 3  # graph + api_docs + embeddings
+
         try:
+            # Step 1: build graph
             builder = build_graph(
-                repo_path, db_path, artifact_dir, rebuild, progress_cb, backend=backend,
+                repo_path, db_path, rebuild, progress_cb=lambda msg, pct: _step_progress(1, total_steps, msg, pct),
+                backend=backend,
             )
 
-            vector_store, embedder, func_map = build_vector_index(
-                builder, repo_path, vectors_path, rebuild, progress_cb
+            # Step 2: generate API docs
+            generate_api_docs_step(
+                builder, artifact_dir, rebuild,
+                progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
             )
 
-            index_path, page_count = run_wiki_generation(
-                builder=builder,
-                repo_path=repo_path,
-                output_dir=wiki_dir,
-                max_pages=max_pages,
-                rebuild=rebuild,
-                comprehensive=comprehensive,
-                vector_store=vector_store,
-                embedder=embedder,
-                func_map=func_map,
-                progress_cb=progress_cb,
-            )
+            page_count = 0
+            index_path = wiki_dir / "index.md"
+            skipped = []
+
+            if not skip_embed:
+                # Step 3: build embeddings
+                vector_store, embedder, func_map = build_vector_index(
+                    builder, repo_path, vectors_path, rebuild,
+                    progress_cb=lambda msg, pct: _step_progress(3, total_steps, msg, pct),
+                )
+
+                if not skip_wiki:
+                    # Step 4: generate wiki
+                    index_path, page_count = run_wiki_generation(
+                        builder=builder,
+                        repo_path=repo_path,
+                        output_dir=wiki_dir,
+                        max_pages=max_pages,
+                        rebuild=rebuild,
+                        comprehensive=comprehensive,
+                        vector_store=vector_store,
+                        embedder=embedder,
+                        func_map=func_map,
+                        progress_cb=lambda msg, pct: _step_progress(4, total_steps, msg, pct),
+                    )
+                else:
+                    skipped.append("wiki")
+                    _step_progress(4, total_steps, "Wiki generation skipped.", 100.0)
+            else:
+                skipped.extend(["embed", "wiki"])
+                _step_progress(3, total_steps, "Embedding skipped.", 40.0)
+                _step_progress(4, total_steps, "Wiki skipped (requires embeddings).", 100.0)
 
             save_meta(artifact_dir, repo_path, page_count)
             self._set_active(artifact_dir)
@@ -619,6 +770,7 @@ class MCPToolsRegistry:
                 "artifact_dir": str(artifact_dir),
                 "wiki_index": str(index_path),
                 "wiki_pages": page_count,
+                "skipped": skipped,
             }
 
         except Exception as exc:
@@ -641,6 +793,18 @@ class MCPToolsRegistry:
         if wiki_subdir.exists():
             wiki_pages = [p.stem for p in sorted(wiki_subdir.glob("*.md"))]
 
+        warnings: list[str] = []
+        if self._semantic_service is None:
+            warnings.append(
+                "Semantic search unavailable — check embedding API keys "
+                "(DASHSCOPE_API_KEY or EMBEDDING_API_KEY/OPENAI_API_KEY)."
+            )
+        if self._cypher_gen is None:
+            warnings.append(
+                "Cypher query unavailable — set LLM_API_KEY, OPENAI_API_KEY, "
+                "or MOONSHOT_API_KEY to enable natural language queries."
+            )
+
         result: dict[str, Any] = {
             "repo_path": str(self._active_repo_path),
             "artifact_dir": str(self._active_artifact_dir),
@@ -649,13 +813,46 @@ class MCPToolsRegistry:
             "cypher_query_available": self._cypher_gen is not None,
             "wiki_pages": wiki_pages,
         }
+        if warnings:
+            result["warnings"] = warnings
 
-        # Merge graph statistics
+        # Merge graph statistics + language stats
         if self._ingestor is not None:
             try:
                 result["graph_stats"] = self._ingestor.get_statistics()
             except Exception as exc:
                 result["graph_stats"] = {"error": str(exc)}
+
+            # Language extraction stats
+            try:
+                file_rows = self._ingestor.query(
+                    "MATCH (f:File) RETURN f.path AS path"
+                )
+                from ..language_spec import get_language_for_extension
+                lang_counts: dict[str, int] = {}
+                total_files = 0
+                for row in file_rows:
+                    raw = row.get("result", row)
+                    fpath = raw[0] if isinstance(raw, (list, tuple)) else raw
+                    if isinstance(fpath, str):
+                        ext = Path(fpath).suffix.lower()
+                        lang = get_language_for_extension(ext)
+                        if lang:
+                            lang_counts[lang.value] = lang_counts.get(lang.value, 0) + 1
+                            total_files += 1
+                result["language_stats"] = {
+                    "total_code_files": total_files,
+                    "by_language": dict(sorted(lang_counts.items(), key=lambda x: -x[1])),
+                }
+            except Exception:
+                pass  # language stats are optional
+
+        # Supported languages
+        from ..constants import LANGUAGE_METADATA, LanguageStatus
+        result["supported_languages"] = {
+            "full": [m.display_name for _, m in LANGUAGE_METADATA.items() if m.status == LanguageStatus.FULL],
+            "in_development": [m.display_name for _, m in LANGUAGE_METADATA.items() if m.status == LanguageStatus.DEV],
+        }
 
         return result
 
@@ -1165,7 +1362,8 @@ class MCPToolsRegistry:
                 cache = pickle.load(fh)
             vector_store = cache["vector_store"]
             func_map: dict[int, dict] = cache["func_map"]
-            embedder = Qwen3Embedder()
+            from ..embeddings.qwen3_embedder import create_embedder
+            embedder = create_embedder()
 
             # Delete structure cache if rebuild
             structure_cache = wiki_dir / f"{repo_path.name}_structure.pkl"
@@ -1198,4 +1396,196 @@ class MCPToolsRegistry:
 
         except Exception as exc:
             logger.exception("Wiki generation failed")
+            raise ToolError({"error": str(exc), "status": "error"}) from exc
+
+    # -------------------------------------------------------------------------
+    # rebuild_embeddings  (standalone embedding rebuild)
+    # -------------------------------------------------------------------------
+
+    async def _handle_rebuild_embeddings(
+        self,
+        rebuild: bool = False,
+        _progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        if self._active_artifact_dir is None or self._active_repo_path is None:
+            raise ToolError("No active repository. Call initialize_repository first.")
+
+        artifact_dir = self._active_artifact_dir
+        repo_path = self._active_repo_path
+        db_path = artifact_dir / "graph.db"
+
+        if not db_path.exists():
+            raise ToolError(
+                "Graph database not found. Run initialize_repository first "
+                "to build the knowledge graph."
+            )
+
+        loop = asyncio.get_event_loop()
+
+        def sync_progress(msg: str, pct: float = 0.0) -> None:
+            if _progress_cb is not None:
+                asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._run_rebuild_embeddings(
+                repo_path, artifact_dir, rebuild, sync_progress,
+            ),
+        )
+
+        # Reload services so semantic search picks up new embeddings
+        self._load_services(artifact_dir)
+
+        return result
+
+    def _run_rebuild_embeddings(
+        self,
+        repo_path: Path,
+        artifact_dir: Path,
+        rebuild: bool,
+        progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        """Synchronous embedding rebuild using existing graph."""
+        vectors_path = artifact_dir / "vectors.pkl"
+
+        try:
+            assert self._ingestor is not None
+
+            vector_store, embedder, func_map = build_vector_index(
+                self._ingestor, repo_path, vectors_path, rebuild, progress_cb
+            )
+
+            # Preserve existing wiki_page_count in meta
+            meta_file = artifact_dir / "meta.json"
+            page_count = 0
+            if meta_file.exists():
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                page_count = meta.get("wiki_page_count", 0)
+
+            save_meta(artifact_dir, repo_path, page_count)
+
+            return {
+                "status": "success",
+                "repo_path": str(repo_path),
+                "vectors_path": str(vectors_path),
+                "embedding_count": len(vector_store),
+            }
+
+        except Exception as exc:
+            logger.exception("Embedding rebuild failed")
+            raise ToolError({"error": str(exc), "status": "error"}) from exc
+
+    # -------------------------------------------------------------------------
+    # build_graph  (standalone graph build)
+    # -------------------------------------------------------------------------
+
+    async def _handle_build_graph(
+        self,
+        repo_path: str,
+        rebuild: bool = False,
+        backend: str = "kuzu",
+        _progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        repo = Path(repo_path).resolve()
+        if not repo.exists():
+            raise ToolError(f"Repository path does not exist: {repo}")
+
+        loop = asyncio.get_event_loop()
+
+        def sync_progress(msg: str, pct: float = 0.0) -> None:
+            if _progress_cb is not None:
+                asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._run_build_graph(repo, rebuild, backend, sync_progress),
+        )
+        return result
+
+    def _run_build_graph(
+        self,
+        repo_path: Path,
+        rebuild: bool,
+        backend: str,
+        progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        """Synchronous graph build. Runs in thread pool."""
+        artifact_dir = artifact_dir_for(self._workspace, repo_path)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        db_path = artifact_dir / "graph.db"
+
+        try:
+            builder = build_graph(
+                repo_path, db_path, rebuild, progress_cb, backend=backend,
+            )
+
+            stats = builder.get_statistics()
+            save_meta(artifact_dir, repo_path, 0)
+            self._set_active(artifact_dir)
+            self._load_services(artifact_dir)
+
+            return {
+                "status": "success",
+                "repo_path": str(repo_path),
+                "artifact_dir": str(artifact_dir),
+                "node_count": stats.get("node_count", 0),
+                "relationship_count": stats.get("relationship_count", 0),
+            }
+
+        except Exception as exc:
+            logger.exception("Graph build failed")
+            raise ToolError({"error": str(exc), "status": "error"}) from exc
+
+    # -------------------------------------------------------------------------
+    # generate_api_docs  (standalone API doc generation)
+    # -------------------------------------------------------------------------
+
+    async def _handle_generate_api_docs(
+        self,
+        rebuild: bool = False,
+        _progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        self._require_active()
+
+        if self._active_artifact_dir is None or self._active_repo_path is None:
+            raise ToolError("No active repository. Call build_graph or initialize_repository first.")
+
+        artifact_dir = self._active_artifact_dir
+
+        loop = asyncio.get_event_loop()
+
+        def sync_progress(msg: str, pct: float = 0.0) -> None:
+            if _progress_cb is not None:
+                asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._run_generate_api_docs(artifact_dir, rebuild, sync_progress),
+        )
+        return result
+
+    def _run_generate_api_docs(
+        self,
+        artifact_dir: Path,
+        rebuild: bool,
+        progress_cb: ProgressCb = None,
+    ) -> dict[str, Any]:
+        """Synchronous API docs generation from existing graph."""
+        try:
+            assert self._ingestor is not None
+
+            result = generate_api_docs_step(
+                self._ingestor, artifact_dir, rebuild, progress_cb,
+            )
+
+            return {
+                "status": result.get("status", "success"),
+                "artifact_dir": str(artifact_dir),
+                **{k: v for k, v in result.items() if k != "status"},
+            }
+
+        except Exception as exc:
+            logger.exception("API docs generation failed")
             raise ToolError({"error": str(exc), "status": "error"}) from exc
