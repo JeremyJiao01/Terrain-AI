@@ -8,17 +8,21 @@ Usage:
     python3 -m code_graph_builder.commands_cli <command> [args...]
 
 Commands:
-    init        Initialize repository (graph → embeddings → wiki)
-    info        Show active repository info and graph statistics
-    query       Translate natural-language question to Cypher and execute
-    snippet     Retrieve source code by qualified name
-    search      Semantic vector search
-    list-wiki   List generated wiki pages
-    get-wiki    Read a wiki page
-    locate      Locate function via Tree-sitter AST
-    list-api    List public API interfaces from graph
-    api-docs    Browse hierarchical API documentation (L1/L2)
-    api-doc     Read detailed API doc for a function (L3)
+    init         Initialize repository (graph → api-docs → embeddings → wiki)
+    graph-build  Build knowledge graph only (step 1)
+    api-doc-gen  Generate API docs from existing graph (step 2)
+    embed-gen    Rebuild embeddings only (step 3, reuses graph)
+    wiki-gen     Regenerate wiki only (step 4, reuses graph + embeddings)
+    info         Show active repository info and graph statistics
+    query        Translate natural-language question to Cypher and execute
+    snippet      Retrieve source code by qualified name
+    search       Semantic vector search
+    list-wiki    List generated wiki pages
+    get-wiki     Read a wiki page
+    locate       Locate function via Tree-sitter AST
+    list-api     List public API interfaces from graph
+    api-docs     Browse hierarchical API documentation (L1/L2)
+    api-doc      Read detailed API doc for a function (L3)
 """
 
 from __future__ import annotations
@@ -143,11 +147,13 @@ def _load_vector_store(vectors_path: Path):
 # ---------------------------------------------------------------------------
 
 def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
+    """Orchestrate: graph-build → api-doc-gen → embed-gen → wiki-gen."""
     from .examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
     from .mcp.pipeline import (
         artifact_dir_for,
         build_graph,
         build_vector_index,
+        generate_api_docs_step,
         run_wiki_generation,
         save_meta,
     )
@@ -170,33 +176,54 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
     vectors_path = artifact_dir / "vectors.pkl"
     wiki_dir = artifact_dir / "wiki"
 
-    def progress_cb(msg: str, pct: float = 0.0) -> None:
+    total_steps = 4
+    if skip_embed:
+        total_steps = 2  # graph + api_docs only
+    elif skip_wiki:
+        total_steps = 3  # graph + api_docs + embeddings
+
+    def step_progress(step: int, msg: str, pct: float = 0.0) -> None:
         prefix = f"[{pct:.0f}%] " if pct > 0 else ""
-        _progress(f"{prefix}{msg}")
+        _progress(f"{prefix}[Step {step}/{total_steps}] {msg}")
 
-    steps = "graph"
+    step_names = "graph → api-docs"
     if not skip_embed:
-        steps += " + embeddings"
+        step_names += " → embeddings"
     if not skip_wiki:
-        steps += " + wiki"
+        step_names += " → wiki"
 
-    _progress(f"=== Initializing: {repo_path.name} ({steps}) ===")
+    _progress(f"=== Initializing: {repo_path.name} ({step_names}) ===")
     _progress(f"    Workspace: {artifact_dir}")
     _progress(f"    Mode: {wiki_mode} | Backend: {backend} | Rebuild: {rebuild}")
     _progress("")
 
     try:
-        builder = build_graph(repo_path, db_path, artifact_dir, rebuild, progress_cb, backend=backend)
+        # Step 1: build graph
+        builder = build_graph(
+            repo_path, db_path, rebuild,
+            progress_cb=lambda msg, pct: step_progress(1, msg, pct),
+            backend=backend,
+        )
+
+        # Step 2: generate API docs
+        generate_api_docs_step(
+            builder, artifact_dir, rebuild,
+            progress_cb=lambda msg, pct: step_progress(2, msg, pct),
+        )
 
         page_count = 0
         index_path = wiki_dir / "index.md"
+        skipped = []
 
         if not skip_embed:
+            # Step 3: build embeddings
             vector_store, embedder, func_map = build_vector_index(
-                builder, repo_path, vectors_path, rebuild, progress_cb
+                builder, repo_path, vectors_path, rebuild,
+                progress_cb=lambda msg, pct: step_progress(3, msg, pct),
             )
 
             if not skip_wiki:
+                # Step 4: generate wiki
                 index_path, page_count = run_wiki_generation(
                     builder=builder,
                     repo_path=repo_path,
@@ -207,24 +234,21 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
                     vector_store=vector_store,
                     embedder=embedder,
                     func_map=func_map,
-                    progress_cb=progress_cb,
+                    progress_cb=lambda msg, pct: step_progress(4, msg, pct),
                 )
             else:
-                _progress("[Step 3/3] Wiki generation skipped (--no-wiki).")
+                skipped.append("wiki")
+                step_progress(4, "Wiki generation skipped (--no-wiki).")
         else:
-            _progress("[Step 2/3] Embedding generation skipped (--no-embed).")
-            _progress("[Step 3/3] Wiki generation skipped (requires embeddings).")
+            skipped.extend(["embed", "wiki"])
+            step_progress(3, "Embedding generation skipped (--no-embed).")
+            step_progress(4, "Wiki generation skipped (requires embeddings).")
 
         save_meta(artifact_dir, repo_path, page_count)
         ws.set_active(artifact_dir)
 
         _progress("")
         _progress("=== Done ===")
-        skipped = []
-        if skip_embed:
-            skipped.append("embed")
-        if skip_wiki:
-            skipped.append("wiki")
         _result_json({
             "status": "success",
             "repo_path": str(repo_path),
@@ -236,6 +260,105 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
 
     except Exception as exc:
         _progress(f"\nERROR: Pipeline failed: {exc}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: graph-build
+# ---------------------------------------------------------------------------
+
+def cmd_graph_build(args: argparse.Namespace, ws: Workspace) -> None:
+    """Build the code knowledge graph only (step 1)."""
+    from .mcp.pipeline import artifact_dir_for, build_graph, save_meta
+
+    repo_path = Path(args.repo_path).resolve()
+    if not repo_path.exists():
+        _die(f"Repository path does not exist: {repo_path}")
+
+    rebuild = args.rebuild
+    backend = args.backend
+
+    artifact_dir = artifact_dir_for(ws.root, repo_path)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    db_path = artifact_dir / "graph.db"
+
+    def progress_cb(msg: str, pct: float = 0.0) -> None:
+        prefix = f"[{pct:.0f}%] " if pct > 0 else ""
+        _progress(f"{prefix}{msg}")
+
+    _progress(f"=== Graph Build: {repo_path.name} ===")
+    _progress(f"    Workspace: {artifact_dir}")
+    _progress(f"    Backend: {backend} | Rebuild: {rebuild}")
+    _progress("")
+
+    try:
+        builder = build_graph(repo_path, db_path, rebuild, progress_cb, backend=backend)
+
+        stats = builder.get_statistics()
+        save_meta(artifact_dir, repo_path, 0)
+        ws.set_active(artifact_dir)
+
+        _progress("")
+        _progress("=== Done ===")
+        _result_json({
+            "status": "success",
+            "repo_path": str(repo_path),
+            "artifact_dir": str(artifact_dir),
+            "node_count": stats.get("node_count", 0),
+            "relationship_count": stats.get("relationship_count", 0),
+        })
+
+    except Exception as exc:
+        _progress(f"\nERROR: Graph build failed: {exc}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: api-doc-gen
+# ---------------------------------------------------------------------------
+
+def cmd_api_doc_gen(args: argparse.Namespace, ws: Workspace) -> None:
+    """Generate API docs from existing knowledge graph (step 2)."""
+    from .mcp.pipeline import generate_api_docs_step, save_meta
+
+    artifact_dir = ws.require_active()
+    meta = ws.load_meta()
+    if meta is None:
+        _die("No metadata found. Run /graph-build or /repo-init first.")
+
+    repo_path = Path(meta["repo_path"]).resolve()
+    db_path = artifact_dir / "graph.db"
+    if not db_path.exists():
+        _die("Graph database not found. Run /graph-build or /repo-init first.")
+
+    rebuild = args.rebuild
+
+    def progress_cb(msg: str, pct: float = 0.0) -> None:
+        prefix = f"[{pct:.0f}%] " if pct > 0 else ""
+        _progress(f"{prefix}{msg}")
+
+    _progress(f"=== API Doc Generation: {repo_path.name} ===")
+    _progress(f"    Rebuild: {rebuild}")
+    _progress("")
+
+    try:
+        ingestor = _open_ingestor(artifact_dir)
+
+        result = generate_api_docs_step(ingestor, artifact_dir, rebuild, progress_cb)
+
+        ingestor.__exit__(None, None, None)
+
+        _progress("")
+        _progress("=== Done ===")
+        _result_json({
+            "status": result.get("status", "success"),
+            "repo_path": str(repo_path),
+            "artifact_dir": str(artifact_dir),
+            **{k: v for k, v in result.items() if k != "status"},
+        })
+
+    except Exception as exc:
+        _progress(f"\nERROR: API doc generation failed: {exc}")
         sys.exit(1)
 
 
@@ -946,8 +1069,8 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # init
-    p = subparsers.add_parser("init", help="Initialize repository (graph + embeddings + wiki)")
+    # init (orchestrator: graph-build → api-doc-gen → embed-gen → wiki-gen)
+    p = subparsers.add_parser("init", help="Initialize repository (graph → api-docs → embeddings → wiki)")
     p.add_argument("repo_path", help="Absolute path to the repository")
     p.add_argument("--rebuild", action="store_true", help="Force rebuild everything")
     p.add_argument("--mode", choices=["comprehensive", "concise"], default="comprehensive",
@@ -955,9 +1078,20 @@ def main() -> None:
     p.add_argument("--backend", choices=["kuzu", "memgraph", "memory"], default="kuzu",
                    help="Graph database backend")
     p.add_argument("--no-wiki", action="store_true",
-                   help="Skip wiki generation (graph + embeddings only)")
+                   help="Skip wiki generation (graph + api-docs + embeddings only)")
     p.add_argument("--no-embed", action="store_true",
-                   help="Skip embeddings and wiki (graph only, fastest)")
+                   help="Skip embeddings and wiki (graph + api-docs only, fastest)")
+
+    # graph-build (step 1: standalone)
+    p = subparsers.add_parser("graph-build", help="Build knowledge graph only (step 1)")
+    p.add_argument("repo_path", help="Absolute path to the repository")
+    p.add_argument("--rebuild", action="store_true", help="Force rebuild graph")
+    p.add_argument("--backend", choices=["kuzu", "memgraph", "memory"], default="kuzu",
+                   help="Graph database backend")
+
+    # api-doc-gen (step 2: standalone)
+    p = subparsers.add_parser("api-doc-gen", help="Generate API docs from existing graph (step 2)")
+    p.add_argument("--rebuild", action="store_true", help="Force regenerate API docs")
 
     # info
     subparsers.add_parser("info", help="Show active repository info and graph statistics")
@@ -1025,6 +1159,8 @@ def main() -> None:
 
     dispatch = {
         "init": cmd_init,
+        "graph-build": cmd_graph_build,
+        "api-doc-gen": cmd_api_doc_gen,
         "info": cmd_info,
         "query": cmd_query,
         "snippet": cmd_snippet,

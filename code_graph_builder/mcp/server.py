@@ -75,7 +75,16 @@ async def main() -> None:
 
         kwargs = dict(arguments or {})
 
-        if name == "initialize_repository":
+        # Tools that run long and support progress callbacks
+        _PROGRESS_TOOLS = {
+            "initialize_repository",
+            "build_graph",
+            "generate_api_docs",
+            "rebuild_embeddings",
+            "generate_wiki",
+        }
+
+        if name in _PROGRESS_TOOLS:
             session = server.request_context.session
 
             # Extract progress token from request metadata (if client supports it)
@@ -120,7 +129,9 @@ async def main() -> None:
             logger.exception(f"Tool '{name}' raised an unhandled exception")
             raise ToolError({"error": str(exc), "tool": name}) from exc
 
-        if name == "initialize_repository" and isinstance(result, dict) and result.get("status") == "success":
+        # Notify client that tool list may have changed after state-changing ops
+        _STATE_CHANGING_TOOLS = {"initialize_repository", "build_graph"}
+        if name in _STATE_CHANGING_TOOLS and isinstance(result, dict) and result.get("status") == "success":
             try:
                 await server.request_context.session.send_tools_list_changed()
             except Exception:
