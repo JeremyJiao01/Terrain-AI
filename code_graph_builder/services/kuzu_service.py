@@ -295,13 +295,15 @@ class KuzuIngestor:
             raise ConnectionError("Not connected to database")
 
         try:
-            result = self._conn.execute(cypher_query)
-            # Convert Kùzu result to list of dicts
+            result = self._conn.execute(cypher_query, parameters=params or {})
+            col_names = result.get_column_names()
             rows = []
             while result.has_next():
                 row = result.get_next()
-                # Convert to dict (column names are not easily available in Kùzu)
-                rows.append({"result": row})
+                if col_names:
+                    rows.append(dict(zip(col_names, row)))
+                else:
+                    rows.append({"result": row})
             return rows
         except Exception as e:
             logger.error(f"Query error: {e}")

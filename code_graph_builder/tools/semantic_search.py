@@ -165,74 +165,52 @@ class SemanticSearchService:
         if not self.graph_service:
             return self._convert_results(vector_results)
 
-        results: list[SemanticSearchResult] = []
-        node_ids = [vr.node_id for vr in vector_results]
-
-        # Build query to get node details
-        query = self._build_nodes_query(node_ids)
+        qnames = [vr.qualified_name for vr in vector_results]
+        query = self._build_nodes_query(qnames)
 
         try:
-            graph_results = self.graph_service.fetch_all(query, {"node_ids": node_ids})
-            graph_data_map = {self._extract_node_id(row): row for row in graph_results}
-
-            for vr in vector_results:
-                graph_data = graph_data_map.get(vr.node_id, {})
-                name = graph_data.get("name") or (
-                    vr.qualified_name.split(".")[-1]
-                    if "." in vr.qualified_name
-                    else vr.qualified_name
-                )
-
-                results.append(
-                    SemanticSearchResult(
-                        node_id=vr.node_id,
-                        qualified_name=vr.qualified_name,
-                        name=name,
-                        type=graph_data.get("type", "Unknown"),
-                        score=vr.score,
-                        source_code=graph_data.get("source_code"),
-                        file_path=graph_data.get("path"),
-                        start_line=graph_data.get("start_line"),
-                        end_line=graph_data.get("end_line"),
-                    )
-                )
-
+            graph_results = self.graph_service.fetch_all(query, {"qnames": qnames})
+            graph_data_map = {
+                row.get("qualified_name", ""): row for row in graph_results
+            }
         except Exception as e:
             logger.warning(f"Failed to enrich results from graph: {e}")
-            # Fall back to basic conversion
             return self._convert_results(vector_results)
 
+        results: list[SemanticSearchResult] = []
+        for vr in vector_results:
+            graph_data = graph_data_map.get(vr.qualified_name, {})
+            name = graph_data.get("name") or (
+                vr.qualified_name.split(".")[-1]
+                if "." in vr.qualified_name
+                else vr.qualified_name
+            )
+            results.append(
+                SemanticSearchResult(
+                    node_id=vr.node_id,
+                    qualified_name=vr.qualified_name,
+                    name=name,
+                    type=graph_data.get("type", "Unknown"),
+                    score=vr.score,
+                    source_code=graph_data.get("source_code"),
+                    file_path=graph_data.get("path") or None,
+                    start_line=graph_data.get("start_line"),
+                    end_line=graph_data.get("end_line"),
+                )
+            )
         return results
 
-    def _build_nodes_query(self, node_ids: list[int]) -> str:
-        """Build Cypher query to fetch node details by IDs.
-
-        Compatible with both Memgraph and Kuzu.
-        """
+    def _build_nodes_query(self, qualified_names: list[str]) -> str:
+        """Build Cypher query to fetch node details by qualified names."""
         return """
-            MATCH (n)
-            WHERE n.node_id IN $node_ids
-               OR n.id IN $node_ids
-               OR id(n) IN $node_ids
-            RETURN n.node_id AS node_id,
-                   n.id AS id,
-                   n.qualified_name AS qualified_name,
-                   n.name AS name,
-                   labels(n) AS type,
-                   n.path AS path,
-                   n.start_line AS start_line,
-                   n.end_line AS end_line,
-                   n.source_code AS source_code
+            MATCH (m:Module)-[:DEFINES]->(f:Function)
+            WHERE f.qualified_name IN $qnames
+            RETURN DISTINCT f.qualified_name AS qualified_name,
+                   f.name AS name,
+                   m.path AS path,
+                   f.start_line AS start_line,
+                   f.end_line AS end_line
         """
-
-    def _extract_node_id(self, row: ResultRow) -> int:
-        """Extract node ID from query result row."""
-        for key in ["node_id", "id", "n.node_id", "n.id"]:
-            if key in row:
-                val = row[key]
-                if isinstance(val, int):
-                    return val
-        return 0
 
     def get_source_code(self, node_id: int) -> str | None:
         """Get source code for a specific node by ID.
