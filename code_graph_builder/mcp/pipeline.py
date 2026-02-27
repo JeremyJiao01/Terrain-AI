@@ -197,6 +197,32 @@ def generate_api_docs_step(
 _EMBED_BATCH_SIZE = 10
 
 
+def _build_embedding_text(
+    func: dict,
+    callers: list[str],
+    callees: list[str],
+    source: str,
+) -> str:
+    """Compose rich embedding text for a function.
+
+    Combines name, file location, docstring, call relationships, and source
+    code so that semantic search can match abstract descriptions even when
+    functions lack formal documentation.
+    """
+    parts: list[str] = [f"Function: {func['name']}"]
+    if func.get("path"):
+        parts.append(f"File: {func['path']}")
+    if func.get("docstring"):
+        parts.append(f"Description: {func['docstring']}")
+    if callers:
+        parts.append(f"Called by: {', '.join(callers[:10])}")
+    if callees:
+        parts.append(f"Calls: {', '.join(callees[:10])}")
+    parts.append("---")
+    parts.append(source)
+    return "\n".join(parts)
+
+
 def build_vector_index(
     builder: Any,
     repo_path: Path,
@@ -222,24 +248,65 @@ def build_vector_index(
             )
         return vector_store, embedder, func_map
 
-    rows = builder.query(
-        "MATCH (f:Function) RETURN f.name, f.qualified_name, f.start_line, f.end_line"
-    )
+    # ---- Query functions with docstring and module path ----
+    rows = builder.query("""
+        MATCH (m:Module)-[:DEFINES]->(f:Function)
+        RETURN DISTINCT f.name AS name,
+               f.qualified_name AS qualified_name,
+               f.start_line AS start_line,
+               f.end_line AS end_line,
+               f.docstring AS docstring,
+               m.path AS path
+    """)
     all_funcs: list[dict] = []
+    seen_qn: set[str] = set()
     for row in rows:
-        r = row["result"]
+        qn = row.get("qualified_name") or ""
+        if not qn or qn in seen_qn:
+            continue
+        seen_qn.add(qn)
         all_funcs.append({
-            "name": r[0],
-            "qualified_name": r[1],
-            "start_line": r[2] or 0,
-            "end_line": r[3] or 0,
+            "name": row.get("name") or "",
+            "qualified_name": qn,
+            "start_line": row.get("start_line") or 0,
+            "end_line": row.get("end_line") or 0,
+            "docstring": row.get("docstring") or "",
+            "path": row.get("path") or "",
         })
+
+    # ---- Build caller/callee maps for richer embedding context ----
+    from collections import defaultdict
+    call_rows = builder.query("""
+        MATCH (caller:Function)-[:CALLS]->(callee:Function)
+        RETURN DISTINCT caller.qualified_name AS caller_qn,
+               callee.qualified_name AS callee_qn
+    """)
+    callees_of: dict[str, list[str]] = defaultdict(list)
+    callers_of: dict[str, list[str]] = defaultdict(list)
+    seen_edges: set[tuple[str, str]] = set()
+    for row in call_rows:
+        caller_qn = row.get("caller_qn") or ""
+        callee_qn = row.get("callee_qn") or ""
+        if not caller_qn or not callee_qn:
+            continue
+        edge = (caller_qn, callee_qn)
+        if edge in seen_edges:
+            continue
+        seen_edges.add(edge)
+        callees_of[caller_qn].append(callee_qn.split(".")[-1])
+        callers_of[callee_qn].append(caller_qn.split(".")[-1])
 
     embeddable: list[tuple[int, dict, str]] = []
     for i, func in enumerate(all_funcs):
         source = _read_function_source(func, repo_path)
         if source:
-            embeddable.append((i, func, f"// {func['name']}\n{source}"))
+            text = _build_embedding_text(
+                func,
+                callers=callers_of.get(func["qualified_name"], []),
+                callees=callees_of.get(func["qualified_name"], []),
+                source=source,
+            )
+            embeddable.append((i, func, text))
 
     total = len(embeddable)
     if progress_cb:

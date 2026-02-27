@@ -23,9 +23,16 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 
 def _unpack_row(row: dict[str, Any]) -> list[Any]:
-    """Normalise a Kùzu result row to a flat list."""
-    raw = row.get("result", row)
-    return list(raw) if isinstance(raw, (list, tuple)) else [raw]
+    """Normalise a Kùzu result row to a flat list.
+
+    Handles two formats:
+    - Legacy: {"result": [v1, v2, ...]}
+    - Named-column: {"col1": v1, "col2": v2, ...}  (from KuzuIngestor.query())
+    """
+    if "result" in row:
+        raw = row["result"]
+        return list(raw) if isinstance(raw, (list, tuple)) else [raw]
+    return list(row.values())
 
 
 def _build_call_graph(
