@@ -13,6 +13,8 @@ Commands:
     api-doc-gen  Generate API docs from existing graph (step 2)
     embed-gen    Rebuild embeddings only (step 3, reuses graph)
     wiki-gen     Regenerate wiki only (step 4, reuses graph + embeddings)
+    list-repos   List all indexed repositories in the workspace
+    switch-repo  Switch active repository to a previously indexed one
     info         Show active repository info and graph statistics
     query        Translate natural-language question to Cypher and execute
     snippet      Retrieve source code by qualified name
@@ -360,6 +362,95 @@ def cmd_api_doc_gen(args: argparse.Namespace, ws: Workspace) -> None:
     except Exception as exc:
         _progress(f"\nERROR: API doc generation failed: {exc}")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: list-repos
+# ---------------------------------------------------------------------------
+
+def cmd_list_repos(_args: argparse.Namespace, ws: Workspace) -> None:
+    """List all indexed repositories in the workspace."""
+    active_file = ws.root / "active.txt"
+    active_name = ""
+    if active_file.exists():
+        active_name = active_file.read_text(encoding="utf-8").strip()
+
+    repos = []
+    for child in sorted(ws.root.iterdir()):
+        if not child.is_dir():
+            continue
+        meta_file = child / "meta.json"
+        if not meta_file.exists():
+            continue
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        repos.append({
+            "artifact_dir": child.name,
+            "repo_name": meta.get("repo_name", child.name),
+            "repo_path": meta.get("repo_path", "unknown"),
+            "indexed_at": meta.get("indexed_at"),
+            "wiki_page_count": meta.get("wiki_page_count", 0),
+            "steps": meta.get("steps", {}),
+            "active": child.name == active_name,
+        })
+
+    _result_json({
+        "workspace": str(ws.root),
+        "repository_count": len(repos),
+        "repositories": repos,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: switch-repo
+# ---------------------------------------------------------------------------
+
+def cmd_switch_repo(args: argparse.Namespace, ws: Workspace) -> None:
+    """Switch active repository to a previously indexed one."""
+    repo_name = args.repo_name
+
+    # Try exact match on artifact dir name
+    target = None
+    for child in ws.root.iterdir():
+        if not child.is_dir():
+            continue
+        if child.name == repo_name:
+            target = child
+            break
+
+    # Fallback: match by repo_name in meta.json
+    if target is None:
+        for child in sorted(ws.root.iterdir()):
+            if not child.is_dir():
+                continue
+            meta_file = child / "meta.json"
+            if not meta_file.exists():
+                continue
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if meta.get("repo_name") == repo_name:
+                target = child
+                break
+
+    if target is None or not (target / "meta.json").exists():
+        _die(f"Repository not found: {repo_name}. Run /list-repos to see available repos.")
+
+    ws.set_active(target)
+    meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+
+    _progress(f"Switched to: {meta.get('repo_name', target.name)}")
+    _result_json({
+        "status": "success",
+        "active_repo": meta.get("repo_name", target.name),
+        "repo_path": meta.get("repo_path"),
+        "artifact_dir": str(target),
+        "steps": meta.get("steps", {}),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1093,6 +1184,13 @@ def main() -> None:
     p = subparsers.add_parser("api-doc-gen", help="Generate API docs from existing graph (step 2)")
     p.add_argument("--rebuild", action="store_true", help="Force regenerate API docs")
 
+    # list-repos
+    subparsers.add_parser("list-repos", help="List all indexed repositories in the workspace")
+
+    # switch-repo
+    p = subparsers.add_parser("switch-repo", help="Switch active repository")
+    p.add_argument("repo_name", help="Repository name or artifact dir name (see /list-repos)")
+
     # info
     subparsers.add_parser("info", help="Show active repository info and graph statistics")
 
@@ -1161,6 +1259,8 @@ def main() -> None:
         "init": cmd_init,
         "graph-build": cmd_graph_build,
         "api-doc-gen": cmd_api_doc_gen,
+        "list-repos": cmd_list_repos,
+        "switch-repo": cmd_switch_repo,
         "info": cmd_info,
         "query": cmd_query,
         "snippet": cmd_snippet,

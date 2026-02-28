@@ -543,12 +543,39 @@ def run_wiki_generation(
 # ---------------------------------------------------------------------------
 
 def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None:
+    """Save or update artifact metadata.
+
+    Preserves existing fields (like step-completion flags) and updates
+    the timestamp and wiki page count.
+    """
+    meta_file = artifact_dir / "meta.json"
+    existing: dict = {}
+    if meta_file.exists():
+        try:
+            existing = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Auto-detect which artifacts exist
+    has_graph = (artifact_dir / "graph.db").exists()
+    has_api_docs = (artifact_dir / "api_docs" / "index.md").exists()
+    has_embeddings = (artifact_dir / "vectors.pkl").exists()
+    has_wiki = wiki_page_count > 0 or (artifact_dir / "wiki" / "index.md").exists()
+
     meta = {
+        **existing,
         "repo_path": str(repo_path),
+        "repo_name": repo_path.name,
         "indexed_at": datetime.now().isoformat(),
         "wiki_page_count": wiki_page_count,
+        "steps": {
+            "graph": has_graph,
+            "api_docs": has_api_docs,
+            "embeddings": has_embeddings,
+            "wiki": has_wiki,
+        },
     }
-    (artifact_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
 
 def artifact_dir_for(workspace: Path, repo_path: Path) -> Path:
