@@ -487,9 +487,9 @@ def run_wiki_generation(
 
     # Write index.md
     total_funcs_row = builder.query("MATCH (f:Function) RETURN count(f) AS cnt")
-    total_funcs = total_funcs_row[0]["result"][0] if total_funcs_row else 0
+    total_funcs = list(total_funcs_row[0].values())[0] if total_funcs_row else 0
     total_calls_row = builder.query("MATCH ()-[r:CALLS]->() RETURN count(r) AS cnt")
-    total_calls = total_calls_row[0]["result"][0] if total_calls_row else 0
+    total_calls = list(total_calls_row[0].values())[0] if total_calls_row else 0
 
     mode_label = "详细 Comprehensive" if comprehensive else "简洁 Concise"
     index_path = output_dir / "index.md"
