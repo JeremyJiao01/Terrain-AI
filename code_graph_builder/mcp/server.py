@@ -130,7 +130,7 @@ async def main() -> None:
             raise ToolError({"error": str(exc), "tool": name}) from exc
 
         # Notify client that tool list may have changed after state-changing ops
-        _STATE_CHANGING_TOOLS = {"initialize_repository", "build_graph"}
+        _STATE_CHANGING_TOOLS = {"initialize_repository", "build_graph", "switch_repository"}
         if name in _STATE_CHANGING_TOOLS and isinstance(result, dict) and result.get("status") == "success":
             try:
                 await server.request_context.session.send_tools_list_changed()

@@ -292,6 +292,40 @@ class MCPToolsRegistry:
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
             ToolDefinition(
+                name="list_repositories",
+                description=(
+                    "List all previously indexed repositories in the workspace. "
+                    "Shows repo name, path, last indexed time, which pipeline steps "
+                    "have been completed (graph, api_docs, embeddings, wiki), and "
+                    "which one is currently active. Use this to discover available "
+                    "repos and switch between them with switch_repository."
+                ),
+                input_schema={"type": "object", "properties": {}, "required": []},
+            ),
+            ToolDefinition(
+                name="switch_repository",
+                description=(
+                    "Switch the active repository to a previously indexed one. "
+                    "After switching, all query tools (query_code_graph, semantic_search, "
+                    "list_wiki_pages, etc.) will operate on the selected repo. "
+                    "Use list_repositories first to see available repos."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": (
+                                "Repository name or artifact directory name "
+                                "(e.g. 'my-project' or 'my-project_a1b2c3d4'). "
+                                "Use list_repositories to see available names."
+                            ),
+                        },
+                    },
+                    "required": ["repo_name"],
+                },
+            ),
+            ToolDefinition(
                 name="query_code_graph",
                 description=(
                     "Translate a natural-language question into Cypher and execute it "
@@ -624,6 +658,8 @@ class MCPToolsRegistry:
         handlers: dict[str, Any] = {
             "initialize_repository": self._handle_initialize_repository,
             "get_repository_info": self._handle_get_repository_info,
+            "list_repositories": self._handle_list_repositories,
+            "switch_repository": self._handle_switch_repository,
             "query_code_graph": self._handle_query_code_graph,
             "get_code_snippet": self._handle_get_code_snippet,
             "semantic_search": self._handle_semantic_search,
@@ -855,6 +891,98 @@ class MCPToolsRegistry:
         }
 
         return result
+
+    # -------------------------------------------------------------------------
+    # list_repositories / switch_repository
+    # -------------------------------------------------------------------------
+
+    async def _handle_list_repositories(self) -> dict[str, Any]:
+        active_name = None
+        active_file = self._workspace / "active.txt"
+        if active_file.exists():
+            active_name = active_file.read_text(encoding="utf-8").strip()
+
+        repos: list[dict[str, Any]] = []
+        for child in sorted(self._workspace.iterdir()):
+            if not child.is_dir():
+                continue
+            meta_file = child / "meta.json"
+            if not meta_file.exists():
+                continue
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            repos.append({
+                "artifact_dir": child.name,
+                "repo_name": meta.get("repo_name", child.name),
+                "repo_path": meta.get("repo_path", "unknown"),
+                "indexed_at": meta.get("indexed_at"),
+                "wiki_page_count": meta.get("wiki_page_count", 0),
+                "steps": meta.get("steps", {}),
+                "active": child.name == active_name,
+            })
+
+        return {
+            "workspace": str(self._workspace),
+            "repository_count": len(repos),
+            "repositories": repos,
+            "hint": (
+                "Use switch_repository with repo_name to change the active repo. "
+                "Use initialize_repository or build_graph to index a new repo."
+            ),
+        }
+
+    async def _handle_switch_repository(self, repo_name: str) -> dict[str, Any]:
+        # Try exact match on artifact_dir name first
+        target: Path | None = None
+        for child in self._workspace.iterdir():
+            if not child.is_dir():
+                continue
+            if child.name == repo_name:
+                target = child
+                break
+
+        # Fallback: match by repo_name in meta.json
+        if target is None:
+            for child in sorted(self._workspace.iterdir()):
+                if not child.is_dir():
+                    continue
+                meta_file = child / "meta.json"
+                if not meta_file.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if meta.get("repo_name") == repo_name:
+                    target = child
+                    break
+
+        if target is None or not (target / "meta.json").exists():
+            raise ToolError({
+                "error": f"Repository not found: {repo_name}",
+                "hint": "Use list_repositories to see available repos.",
+            })
+
+        try:
+            self._set_active(target)
+            self._load_services(target)
+        except Exception as exc:
+            raise ToolError({
+                "error": f"Failed to switch: {exc}",
+                "repo_name": repo_name,
+            }) from exc
+
+        meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+        return {
+            "status": "success",
+            "active_repo": meta.get("repo_name", target.name),
+            "repo_path": meta.get("repo_path"),
+            "artifact_dir": str(target),
+            "steps": meta.get("steps", {}),
+        }
 
     # -------------------------------------------------------------------------
     # query_code_graph
