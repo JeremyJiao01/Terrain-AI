@@ -59,3 +59,6 @@ extracted_prompts/
 # Project-specific files not for this repo
 core_system_prompt.md
 CLAUDE_CODE_GUIDE.md
+
+#claude
+.claude/
