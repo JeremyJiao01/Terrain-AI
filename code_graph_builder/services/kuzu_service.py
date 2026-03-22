@@ -128,23 +128,59 @@ class KuzuIngestor:
                 logger.debug(f"Table creation may have failed (could already exist): {e}")
 
     def _ensure_rel_schema(self, rel_type: str, from_label: str, to_label: str) -> None:
-        """Ensure relationship table exists."""
+        """Ensure relationship table exists for the given label combination.
+
+        Kùzu REL TABLEs are bound to specific (FROM, TO) node label pairs.
+        A single rel_type (e.g., DEFINES) may need multiple tables if it
+        connects different label pairs (Module→Function, Module→Class, etc.).
+        Kùzu supports REL TABLE GROUP for this purpose.
+        """
         if not self._conn:
             raise ConnectionError("Not connected to database")
 
+        cache_key = (rel_type, from_label, to_label)
+        if not hasattr(self, "_rel_schema_cache"):
+            self._rel_schema_cache: set[tuple[str, str, str]] = set()
+        if cache_key in self._rel_schema_cache:
+            return
+        self._rel_schema_cache.add(cache_key)
+
+        # Try to create the relationship. If the table already exists with the
+        # same (FROM, TO) pair, the CREATE will fail harmlessly.
+        # If the table exists but with a DIFFERENT pair, we need ALTER or GROUP.
         try:
-            self._conn.execute(f"MATCH ()-[r:{rel_type}]->() RETURN r LIMIT 1")
+            self._conn.execute(f"""
+                CREATE REL TABLE {rel_type} (
+                    FROM {from_label} TO {to_label},
+                    MANY_MANY
+                )
+            """)
+            logger.info(f"Created relationship table: {rel_type} ({from_label}→{to_label})")
         except Exception:
-            logger.info(f"Creating relationship table: {rel_type}")
+            # Table may already exist — check if it supports this label pair
             try:
-                self._conn.execute(f"""
-                    CREATE REL TABLE {rel_type} (
-                        FROM {from_label} TO {to_label},
-                        MANY_MANY
-                    )
-                """)
-            except Exception as e:
-                logger.debug(f"Rel table creation may have failed: {e}")
+                # Try a probe MATCH with the specific labels
+                self._conn.execute(
+                    f"MATCH (a:{from_label})-[r:{rel_type}]->(b:{to_label}) RETURN r LIMIT 1"
+                )
+            except Exception:
+                # Label pair not supported — try creating a REL TABLE GROUP
+                group_name = f"{rel_type}_{from_label}_{to_label}"
+                try:
+                    self._conn.execute(f"""
+                        CREATE REL TABLE {group_name} (
+                            FROM {from_label} TO {to_label},
+                            MANY_MANY
+                        )
+                    """)
+                    logger.info(f"Created additional rel table: {group_name} ({from_label}→{to_label})")
+                    # Update the relationship buffer to use the new table name
+                    # We need to intercept flush_relationships for this label pair
+                    if not hasattr(self, "_rel_table_overrides"):
+                        self._rel_table_overrides: dict[tuple[str, str, str], str] = {}
+                    self._rel_table_overrides[(rel_type, from_label, to_label)] = group_name
+                except Exception as e:
+                    logger.debug(f"Additional rel table creation failed: {e}")
 
     def ensure_node_batch(self, label: str, properties: PropertyDict) -> None:
         """Add a node to the batch buffer.
@@ -262,12 +298,18 @@ class KuzuIngestor:
 
             self._ensure_rel_schema(rel_type, from_label, to_label)
 
+            # Use override table name if one was created for this label pair
+            actual_rel = rel_type
+            overrides = getattr(self, "_rel_table_overrides", {})
+            override_key = (rel_type, from_label, to_label)
+            if override_key in overrides:
+                actual_rel = overrides[override_key]
+
             try:
                 cypher = f"""
                     MATCH (a:{from_label} {{{from_key}: {self._value_to_cypher(from_val)}}}),
                           (b:{to_label} {{{to_key}: {self._value_to_cypher(to_val)}}})
-                    WHERE NOT (a)-[:{rel_type}]->(b)
-                    CREATE (a)-[:{rel_type}]->(b)
+                    CREATE (a)-[:{actual_rel}]->(b)
                 """
                 self._conn.execute(cypher)
             except Exception as e:

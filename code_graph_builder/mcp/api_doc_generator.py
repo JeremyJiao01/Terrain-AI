@@ -641,9 +641,16 @@ def generate_api_docs(
         r = _unpack_row(row)
         if len(r) < 6:
             continue
-        module_qn = r[0] or "unknown"
+        # First column may be qualified_name (e.g., "mod.StructName") or module_qn
+        first_col = r[0] or "unknown"
+        type_name = r[1] or ""
+        # Derive module_qn: if first_col ends with ".type_name", strip it
+        if type_name and first_col.endswith(f".{type_name}"):
+            module_qn = first_col[: -(len(type_name) + 1)]
+        else:
+            module_qn = first_col
         type_info: dict[str, Any] = {
-            "name": r[1],
+            "name": type_name,
             "kind": r[2],
             "signature": r[3],
         }

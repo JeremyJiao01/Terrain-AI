@@ -79,24 +79,24 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
 _FUNC_DOC_QUERY = """
     MATCH (m:Module)-[:DEFINES]->(f:Function)
     RETURN DISTINCT m.qualified_name, m.path,
-           f.qualified_name, f.name, '' AS signature, '' AS return_type,
-           '' AS visibility, '' AS parameters, f.docstring,
-           f.start_line, f.end_line, f.path
+           f.qualified_name, f.name, f.signature, f.return_type,
+           f.visibility, f.parameters, f.docstring,
+           f.start_line, f.end_line, f.path, f.kind
     ORDER BY m.qualified_name, f.start_line
 """
 
 _TYPE_DOC_QUERY_CLASS = """
-    MATCH (m:Module)-[:DEFINES]->(c:Class)
-    RETURN DISTINCT m.qualified_name, c.name, 'struct' AS kind, '' AS signature,
-           '' AS parameters, c.start_line, c.end_line
-    ORDER BY m.qualified_name, c.start_line
+    MATCH (c:Class)
+    RETURN DISTINCT c.qualified_name, c.name, c.kind, c.signature,
+           c.parameters, c.start_line, c.end_line
+    ORDER BY c.qualified_name, c.start_line
 """
 
 _TYPE_DOC_QUERY_TYPE = """
-    MATCH (m:Module)-[:DEFINES]->(t:Type)
-    RETURN DISTINCT m.qualified_name, t.name, t.kind, t.signature,
+    MATCH (t:Type)
+    RETURN DISTINCT t.qualified_name, t.name, t.kind, t.signature,
            t.start_line, t.end_line
-    ORDER BY m.qualified_name, t.start_line
+    ORDER BY t.qualified_name, t.start_line
 """
 
 _CALLS_QUERY = """
