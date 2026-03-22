@@ -651,6 +651,30 @@ class MCPToolsRegistry:
                     "required": [],
                 },
             ),
+            ToolDefinition(
+                name="prepare_guidance",
+                description=(
+                    "Analyze a design document and generate a code generation "
+                    "guidance file. An internal LLM agent searches the codebase "
+                    "for relevant APIs, similar implementations, and dependency "
+                    "relationships, then synthesises a structured guidance "
+                    "Markdown document for downstream code generation."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "design_doc": {
+                            "type": "string",
+                            "description": (
+                                "The design document content (Markdown). "
+                                "The agent reads this, researches the codebase, "
+                                "and produces a guidance file."
+                            ),
+                        },
+                    },
+                    "required": ["design_doc"],
+                },
+            ),
         ]
 
         return defs
@@ -675,6 +699,7 @@ class MCPToolsRegistry:
             "rebuild_embeddings": self._handle_rebuild_embeddings,
             "build_graph": self._handle_build_graph,
             "generate_api_docs": self._handle_generate_api_docs,
+            "prepare_guidance": self._handle_prepare_guidance,
         }
         return handlers.get(name)
 
@@ -1736,3 +1761,40 @@ class MCPToolsRegistry:
         except Exception as exc:
             logger.exception("API docs generation failed")
             raise ToolError({"error": str(exc), "status": "error"}) from exc
+
+    # -------------------------------------------------------------------------
+    # prepare_guidance
+    # -------------------------------------------------------------------------
+
+    async def _handle_prepare_guidance(
+        self,
+        design_doc: str,
+    ) -> dict[str, Any]:
+        """Run the internal GuidanceAgent to produce a code generation guidance file."""
+        self._require_active()
+
+        llm = create_llm_backend()
+        if not llm.available:
+            raise ToolError(
+                "LLM not configured. Set one of: LLM_API_KEY, OPENAI_API_KEY, "
+                "or MOONSHOT_API_KEY to use prepare_guidance."
+            )
+
+        from ..guidance.agent import GuidanceAgent
+        from ..guidance.toolset import MCPToolSet
+
+        tool_set = MCPToolSet(
+            semantic_service=self._semantic_service,
+            cypher_gen=self._cypher_gen,
+            ingestor=self._ingestor,
+            artifact_dir=self._active_artifact_dir,
+        )
+        agent = GuidanceAgent(toolset=tool_set, llm=llm)
+
+        try:
+            guidance = await agent.run(design_doc)
+        except Exception as exc:
+            logger.exception("Guidance generation failed")
+            raise ToolError({"error": str(exc), "status": "error"}) from exc
+
+        return {"guidance": guidance}

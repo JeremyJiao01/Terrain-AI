@@ -14,7 +14,7 @@ variables in ``settings.json`` → ``mcpServers`` → ``env``.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
@@ -28,6 +28,24 @@ _PROVIDER_ENVS: list[tuple[str, str, str, str, str]] = [
     # Moonshot / Kimi (legacy default)
     ("MOONSHOT_API_KEY", "LLM_BASE_URL", "MOONSHOT_MODEL", "https://api.moonshot.cn/v1", "kimi-k2.5"),
 ]
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation returned by the LLM."""
+
+    id: str
+    function_name: str
+    arguments: str  # JSON-encoded string
+
+
+@dataclass
+class ChatMessage:
+    """Structured response from a chat completion that may contain tool calls."""
+
+    content: str | None
+    tool_calls: list[ToolCall] | None
+    finish_reason: str
 
 
 @dataclass
@@ -76,6 +94,71 @@ class LLMBackend:
         data = resp.json()
         message = data["choices"][0]["message"]
         return message.get("content") or message.get("reasoning_content", "")
+
+    def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> ChatMessage:
+        """Send a chat completion with optional tool definitions.
+
+        Returns a :class:`ChatMessage` that may contain ``tool_calls`` when the
+        LLM decides to invoke one or more tools.  If *tools* is ``None`` or
+        empty, behaves like :meth:`chat` but returns a structured message.
+        """
+        try:
+            import httpx
+        except ImportError:
+            raise ImportError(
+                "httpx is required for LLM backend. "
+                "Install it with: pip install httpx"
+            )
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", self.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = kwargs.get("tool_choice", "auto")
+
+        resp = httpx.post(
+            f"{self.base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=kwargs.get("timeout", 120.0),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        choice = data["choices"][0]
+        message = choice["message"]
+        finish_reason = choice.get("finish_reason", "stop")
+
+        parsed_calls: list[ToolCall] | None = None
+        raw_calls = message.get("tool_calls")
+        if raw_calls:
+            parsed_calls = [
+                ToolCall(
+                    id=tc["id"],
+                    function_name=tc["function"]["name"],
+                    arguments=tc["function"]["arguments"],
+                )
+                for tc in raw_calls
+            ]
+
+        return ChatMessage(
+            content=message.get("content"),
+            tool_calls=parsed_calls,
+            finish_reason=finish_reason,
+        )
 
 
 def create_llm_backend(**kwargs: Any) -> LLMBackend:
