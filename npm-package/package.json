@@ -1,0 +1,28 @@
+{
+  "name": "code-graph-builder",
+  "version": "0.2.0",
+  "description": "Code knowledge graph builder with MCP server for AI-assisted code navigation",
+  "license": "MIT",
+  "bin": {
+    "code-graph-builder": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "code-graph",
+    "knowledge-graph",
+    "code-navigation",
+    "ai-assistant"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeremyJiao01/CodeGraphWiki"
+  }
+}

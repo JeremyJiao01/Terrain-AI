@@ -30,6 +30,8 @@ ENV/
 # Graph data exports (may contain private code)
 *.json
 !*example*.json
+!mcp.json
+!npm-package/package.json
 
 # IDE
 .idea/
