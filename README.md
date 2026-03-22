@@ -1,289 +1,265 @@
-# code_graph_builder
+# Code Graph Builder
 
-多语言代码知识图谱构建库，支持从源码仓库提取函数、类、调用关系等，存储到图数据库，并提供 RAG（检索增强生成）能力用于代码分析。
+Build a knowledge graph from any codebase, generate API documentation, and search code semantically — all accessible as an MCP server for AI coding assistants.
 
-## 特性
-
-- **多语言解析**：Python、JavaScript/TypeScript、C/C++、Rust、Go、Java、Scala、C#、PHP、Lua
-- **多后端支持**：Kùzu（嵌入式，无需 Docker）、Memgraph（完整图数据库）、Memory（内存，测试用）
-- **语义搜索**：基于 Qwen3 Embedding（阿里云 DashScope API）的向量化代码检索
-- **RAG 引擎**：结合图数据和向量搜索，用 Kimi k2.5 生成代码分析报告
-
-## 目录结构
+## What It Does
 
 ```
-code_graph_builder/
-├── builder.py              # 主 API：CodeGraphBuilder
-├── cli.py                  # 命令行接口
-├── config.py               # 配置类（KuzuConfig、ScanConfig 等）
-├── constants.py            # 常量和 StrEnum
-├── graph_updater.py        # 图更新和批量写入
-├── language_spec.py        # 语言规范和 Tree-sitter 映射
-├── models.py               # 数据类
-├── parser_loader.py        # Tree-sitter 解析器加载
-├── types.py                # 类型定义（BuildResult、GraphData 等）
-│
-├── parsers/                # 各类解析器
-│   ├── factory.py          # 解析器工厂
-│   ├── structure_processor.py
-│   ├── definition_processor.py
-│   ├── call_processor.py
-│   ├── call_resolver.py
-│   ├── import_processor.py
-│   └── type_inference.py
-│
-├── services/               # 后端适配层
-│   ├── graph_service.py    # Memgraph 后端
-│   ├── kuzu_service.py     # Kùzu 后端
-│   └── memory_service.py   # 内存后端
-│
-├── embeddings/             # 向量化
-│   ├── qwen3_embedder.py   # Qwen3 嵌入器（阿里云 API）
-│   └── vector_store.py     # 向量存储抽象
-│
-├── tools/                  # 查询工具
-│   ├── graph_query.py      # 图查询
-│   └── semantic_search.py  # 语义搜索
-│
-├── rag/                    # RAG 模块
-│   ├── rag_engine.py       # RAG 引擎
-│   ├── kimi_client.py      # Kimi API 客户端
-│   ├── camel_agent.py      # CAMEL Agent
-│   ├── markdown_generator.py
-│   ├── prompt_templates.py # 提示词模板（移植自 deepwiki）
-│   └── config.py
-│
-├── utils/
-│   └── path_utils.py
-│
-├── tests/                  # 单元测试
-└── examples/               # 示例和演示脚本
+Your Code Repository
+    |
+    v
+[Tree-sitter AST Parsing]  ──>  Knowledge Graph (Kuzu)
+    |                               |
+    |                               v
+    |                        API Documentation (Markdown)
+    |                               |
+    |                               v
+    |                        Vector Embeddings
+    |                               |
+    v                               v
+MCP Server  <──────────────  Semantic Search
+    |
+    v
+Claude Code / OpenCode / Cursor / Any MCP Client
 ```
 
-## 快速开始
+## Quick Start
 
-### 安装
+### Install via npx (recommended)
 
 ```bash
-# 克隆项目
-git clone <repo-url>
-cd CodeGraphWiki
+# First run — interactive setup wizard
+npx code-graph-builder
 
-# 基础安装（含 Kùzu 后端）
-pip install .
-
-# 含 C/C++ Tree-sitter 语法
-pip install ".[treesitter-c]"
-
-# 含所有 Tree-sitter 语言语法
-pip install ".[treesitter-full]"
-
-# 含语义搜索（Qwen3 嵌入）
-pip install ".[semantic]"
-
-# 安装全部可选依赖
-pip install ".[treesitter-full,semantic,rag]"
+# Subsequent runs — MCP clients use this
+npx code-graph-builder --server
 ```
 
-> 如需在虚拟环境中安装：
-> ```bash
-> python3 -m venv .venv && source .venv/bin/activate
-> pip install ".[treesitter-full]"
-> ```
+The setup wizard guides you through:
+1. Workspace directory
+2. LLM provider (Moonshot / OpenAI / DeepSeek / OpenRouter / Custom)
+3. Embedding provider (DashScope / OpenAI / Custom)
 
-### 基本用法
-
-```python
-from code_graph_builder import CodeGraphBuilder
-
-# 构建代码图（Kùzu 后端，无需 Docker）
-builder = CodeGraphBuilder(
-    repo_path="/path/to/your/repo",
-    backend="kuzu",
-    backend_config={"db_path": "./code_graph.db"},
-)
-result = builder.build_graph()
-
-print(f"解析文件: {result.files_processed}")
-print(f"函数数量: {result.functions_found}")
-print(f"调用关系: {result.relationships_created}")
-
-# 导出图数据
-graph_data = builder.export_graph()
-
-# 执行 Cypher 查询
-rows = builder.query("MATCH (f:Function) RETURN f.name LIMIT 10")
-```
-
-### 内存模式（无持久化，适合测试）
-
-```python
-builder = CodeGraphBuilder(
-    repo_path="/path/to/repo",
-    backend="memory",
-)
-result = builder.build_graph()
-data = builder.export_graph()  # 返回完整图数据
-```
-
-### 语义搜索
-
-需要配置阿里云 DashScope API Key：
+### Install via pip
 
 ```bash
-export DASHSCOPE_API_KEY=sk-xxxxxx
+pip install "code-graph-builder[treesitter-c,semantic]"
+cgb-mcp  # Start MCP server
 ```
 
-```python
-from code_graph_builder import CodeGraphBuilder, create_embedder, create_vector_store
-from code_graph_builder.tools.semantic_search import SemanticSearchService
+### MCP Client Configuration
 
-builder = CodeGraphBuilder("/path/to/repo", backend="kuzu")
-builder.build_graph()
-
-embedder = create_embedder(provider="qwen3")
-vector_store = create_vector_store(backend="memory", dimension=1536)
-
-# 构建向量索引（首次需要调用 API）
-service = SemanticSearchService(
-    embedder=embedder,
-    vector_store=vector_store,
-)
-results = service.search("recursive fibonacci implementation", top_k=5)
-```
-
-### MCP 服务器
-
-项目内置 MCP（Model Context Protocol）服务器，可与 Claude Code 等 AI 工具集成：
-
-```bash
-# 启动 MCP 服务器（stdio 模式）
-python3 -m code_graph_builder.mcp.server
-```
-
-在 Claude Code 配置文件（`~/.claude/settings.json` 或项目 `.mcp.json`）中添加：
+Add to your MCP client config (Claude Code, OpenCode, Cursor, etc.):
 
 ```json
 {
   "mcpServers": {
     "code-graph-builder": {
-      "command": "python3",
-      "args": ["-m", "code_graph_builder.mcp.server"],
-      "cwd": "/path/to/CodeGraphWiki",
-      "env": {
-        "CGB_WORKSPACE": "~/.code-graph-builder",
-        "LLM_API_KEY": "sk-你的LLM-Key",
-        "LLM_BASE_URL": "https://api.openai.com/v1",
-        "LLM_MODEL": "gpt-4o",
-        "DASHSCOPE_API_KEY": "sk-你的Embedding-Key"
-      }
+      "command": "npx",
+      "args": ["-y", "code-graph-builder", "--server"]
     }
   }
 }
 ```
 
-MCP 服务器提供 11 个工具：`initialize_repository`、`get_repository_info`、`query_code_graph`、`get_code_snippet`、`semantic_search`、`locate_function`、`list_api_interfaces`、`list_api_docs`、`get_api_doc`、`list_wiki_pages`、`get_wiki_page`。
+## Pipeline
 
-> **首次配置？** 请参阅 [CLAUDE_CODE_GUIDE.md](./CLAUDE_CODE_GUIDE.md) 第 0 节的交互式配置流程，由 AI Agent 自动完成 LLM / Embedding 连接测试和 MCP 配置。
+| Step | What | Input | Output |
+|------|------|-------|--------|
+| 1. graph-build | Tree-sitter AST parsing | Source code | Kuzu graph database |
+| 2. api-doc-gen | Query graph, render docs | Graph | 3-level Markdown (index / module / function) |
+| 2b. desc-gen | LLM generates descriptions | Functions without comments | `> description` in Markdown |
+| 3. embed-gen | Vectorize function docs | L3 Markdown | Vector store (pickle) |
+| 4. wiki-gen | LLM generates wiki pages | Embeddings + graph | Multi-page wiki |
 
-### RAG Wiki 生成
+All steps run automatically via `initialize_repository`, or individually:
 
-需要配置 Moonshot API Key（Kimi k2.5）：
-
-```bash
-export MOONSHOT_API_KEY=sk-xxxxxx
+```
+initialize_repository  →  Steps 1-4 (full pipeline)
+build_graph            →  Step 1 only
+generate_api_docs      →  Step 2 + 2b
+rebuild_embeddings     →  Step 3
+generate_wiki          →  Step 4
 ```
 
-```bash
-# 参考 examples/test_rag_tinycc.py
-# 按模块批量生成代码 wiki，真实源码作为上下文
-python3 code_graph_builder/examples/test_rag_tinycc.py \
-    --repo-path /path/to/tinycc \
-    --max-pages 10 \
-    --output-dir ./rag_output
+## MCP Tools (19 tools)
+
+### Repository Management
+| Tool | Description |
+|------|-------------|
+| `initialize_repository` | Index a repo: graph + API docs + embeddings + wiki |
+| `get_repository_info` | Active repo metadata and graph statistics |
+| `list_repositories` | All indexed repos in workspace |
+| `switch_repository` | Switch active repo |
+
+### Code Search & Navigation
+| Tool | Description |
+|------|-------------|
+| `find_api` | Semantic search + API doc attachment (primary search tool) |
+| `semantic_search` | Vector similarity search across codebase |
+| `query_code_graph` | Natural language → Cypher → graph query |
+| `get_code_snippet` | Retrieve source code by qualified name |
+| `locate_function` | Find function in file using Tree-sitter |
+
+### API Documentation
+| Tool | Description |
+|------|-------------|
+| `list_api_docs` | Browse L1 index or L2 module details |
+| `get_api_doc` | L3 function detail (signature, call tree, source) |
+| `list_api_interfaces` | List public APIs by module/visibility |
+| `generate_api_docs` | Regenerate API documentation |
+
+### Wiki & Analysis
+| Tool | Description |
+|------|-------------|
+| `list_wiki_pages` | List generated wiki pages |
+| `get_wiki_page` | Read wiki page content |
+| `generate_wiki` | Regenerate wiki pages |
+| `rebuild_embeddings` | Rebuild vector embeddings |
+| `build_graph` | Build/rebuild knowledge graph |
+| `prepare_guidance` | Analyze design doc, generate code guidance |
+
+## API Documentation Format
+
+Generated docs are optimized for both AI agent reading and vector retrieval.
+
+### L3 Function Detail (embedding unit)
+
+```markdown
+# parse_btype
+
+> Parse base type declaration including struct/union/enum specifiers.
+
+- Signature: `int parse_btype(CType *type, AttributeDef *ad, int ignore_label)`
+- Return: `int`
+- Visibility: static | Header: tccgen.h
+- Location: tccgen.c:139-280
+- Module: tinycc.tccgen — C code generator
+
+## Call Tree
+
+parse_btype
+├── expr_const           [static]
+├── parse_btype_qualify   [static]
+├── struct_decl           [static]
+│   ├── expect
+│   └── next
+└── parse_attribute       [static]
+
+## Called by (5)
+
+- type_decl (tinycc.tccgen) → tccgen.c:1200
+- post_type (tinycc.tccgen) → tccgen.c:1350
+
+## Parameters & Memory
+
+| Parameter | Direction | Ownership |
+|-----------|-----------|-----------|
+| `CType *type` | in/out | borrowed, modified |
+| `AttributeDef *ad` | in/out | borrowed, modified |
+
+## Implementation
+
+​```c
+int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
+    // ... source code embedded
+}
+​```
 ```
 
-## 环境变量
+### C/C++ Specific Features
 
-### LLM（优先级从高到低，首个匹配生效）
+- Extracts `//` and `/* */` comments above functions as descriptions
+- Struct/union/enum members displayed with types
+- Macro definitions in dedicated section
+- Static/public/extern visibility classification
+- Memory ownership inference from signatures
+- Header/implementation file split
 
-| 变量名 | 用途 | 默认值 |
-|--------|------|--------|
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 通用 LLM（最高优先级） | 无 / `https://api.openai.com/v1` / `gpt-4o` |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI 或兼容平台 | 无 / `https://api.openai.com/v1` / `gpt-4o` |
-| `MOONSHOT_API_KEY` / `MOONSHOT_MODEL` | Moonshot / Kimi（旧版兼容） | 无 / `kimi-k2.5` |
+## Supported Languages
 
-### Embedding & 其他
+| Language | Functions | Classes/Structs | Calls | Imports | Types |
+|----------|-----------|-----------------|-------|---------|-------|
+| C / C++ | Yes | struct, union, enum, typedef, macro | Yes | #include | Yes |
+| Python | Yes | Yes | Yes | Yes | - |
+| JavaScript / TypeScript | Yes | Yes | Yes | Yes | - |
+| Rust | Yes | struct, enum, trait, impl | Yes | Yes | - |
+| Go | Yes | struct, interface | Yes | Yes | - |
+| Java | Yes | class, interface, enum | Yes | Yes | - |
+| Scala | Yes | class, object | Yes | Yes | - |
+| C# | Yes | class, namespace | Yes | - | - |
+| PHP | Yes | class | Yes | - | - |
+| Lua | Yes | - | Yes | - | - |
 
-| 变量名 | 用途 | 默认值 |
-|--------|------|--------|
-| `DASHSCOPE_API_KEY` | 阿里云 DashScope（Qwen3 Embedding） | 无 |
-| `DASHSCOPE_BASE_URL` | DashScope API 地址 | `https://dashscope.aliyuncs.com/api/v1` |
-| `CGB_WORKSPACE` | MCP 服务器工作目录 | `~/.code-graph-builder` |
-| `MEMGRAPH_HOST` | Memgraph 主机（仅 Memgraph 后端） | `localhost` |
-| `MEMGRAPH_PORT` | Memgraph 端口 | `7687` |
+## Graph Schema
 
-## 支持的编程语言
+**Nodes**: `Project`, `Package`, `Module`, `File`, `Folder`, `Class`, `Function`, `Method`, `Type`, `Enum`, `Union`
 
-| 语言 | 提取内容 |
-|------|----------|
-| Python | 函数、类、方法、导入、调用关系 |
-| JavaScript / TypeScript | 函数、类、模块、调用关系 |
-| C / C++ | 函数、结构体/联合体/枚举（含成员）、typedef、宏、调用关系 |
-| Rust | 函数、impl 块、trait、调用关系 |
-| Go | 函数、接口、调用关系 |
-| Java | 类、方法、继承、调用关系 |
-| Scala | 类、对象、方法 |
-| C# | 类、方法、命名空间 |
-| PHP | 函数、类、方法 |
-| Lua | 函数、调用关系 |
+**Relationships**: `CONTAINS_*`, `DEFINES`, `DEFINES_METHOD`, `CALLS`, `INHERITS`, `IMPLEMENTS`, `IMPORTS`, `OVERRIDES`
 
-## 图模式（Graph Schema）
+**Properties**: `qualified_name` (PK), `name`, `path`, `start_line`, `end_line`, `signature`, `return_type`, `visibility`, `parameters`, `kind`, `docstring`
 
-**节点类型**：`Project`、`Package`、`Module`、`File`、`Class`、`Function`、`Method`、`Type`、`Folder`
+## Environment Variables
 
-**关系类型**：`CONTAINS`、`DEFINES`、`CALLS`、`INHERITS`、`IMPORTS`
+### LLM (first match wins)
 
-**节点属性**：`qualified_name`（主键）、`name`、`path`、`start_line`、`end_line`、`signature`、`return_type`、`visibility`、`parameters`、`kind`、`docstring`
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `LLM_API_KEY` | Generic LLM key (highest priority) | - |
+| `LLM_BASE_URL` | API endpoint | `https://api.openai.com/v1` |
+| `LLM_MODEL` | Model name | `gpt-4o` |
+| `OPENAI_API_KEY` | OpenAI or compatible | - |
+| `MOONSHOT_API_KEY` | Moonshot / Kimi (legacy) | - |
 
-## 示例脚本
+### Embedding
 
-位于 `examples/` 目录：
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `DASHSCOPE_API_KEY` | DashScope (Qwen3 Embedding) | - |
+| `DASHSCOPE_BASE_URL` | DashScope endpoint | `https://dashscope.aliyuncs.com/api/v1` |
 
-| 脚本 | 用途 |
-|------|------|
-| `example_kuzu_usage.py` | Kùzu 后端完整示例 |
-| `example_configuration.py` | 各种配置方式演示 |
-| `test_tinycc.py` | 用 tinycc 仓库测试图构建 |
-| `test_kuzu_local.py` | Kùzu 后端功能测试 |
-| `test_tinycc_memory.py` | 内存模式解析测试 |
-| `test_rag_tinycc.py` | RAG wiki 生成（含真实源码上下文） |
-| `rag_example.py` | RAG 模块使用示例 |
-| `example_semantic_search_full.py` | 完整语义搜索流程 |
-| `test_embedding_api.py` | Qwen3 嵌入 API 测试 |
+### System
 
-## RAG 提示词模板
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `CGB_WORKSPACE` | Workspace directory | `~/.code-graph-builder` |
 
-`rag/prompt_templates.py` 移植自 [deepwiki-open](https://github.com/AsyncFuncAI/deepwiki-open)，包含：
-
-- `RAG_SYSTEM_PROMPT` / `RAG_TEMPLATE` — 标准 RAG 提示词
-- `DEEP_RESEARCH_*_ITERATION_PROMPT` — 多轮深度研究提示词
-- `SIMPLE_CHAT_SYSTEM_PROMPT` — 直接问答提示词
-
-源码上下文注入方案：通过 `qualified_name` 推导源文件路径，用 `start_line`/`end_line` 精确提取函数体，按 `## File Path: xxx.c` 格式组装进 prompt。
-
-## 运行测试
+## Installation Options
 
 ```bash
-# 安装测试依赖
-pip install pytest
+# Core only (graph building)
+pip install code-graph-builder
 
-# 单元测试（无需外部依赖）
+# With C/C++ support
+pip install "code-graph-builder[treesitter-c]"
+
+# With all languages
+pip install "code-graph-builder[treesitter-full]"
+
+# With semantic search
+pip install "code-graph-builder[semantic]"
+
+# Everything
+pip install "code-graph-builder[treesitter-full,semantic,rag]"
+```
+
+## Development
+
+```bash
+git clone https://github.com/JeremyJiao01/CodeGraphWiki.git
+cd CodeGraphWiki
+pip install -e ".[treesitter-full,semantic,rag]"
+
+# Run tests
 python3 -m pytest code_graph_builder/tests/ -v
 
-# RAG 模块测试
-python3 -m pytest code_graph_builder/rag/tests/ -v
-
-# C API 提取测试（需要 tree-sitter-c）
-python3 -m pytest code_graph_builder/tests/test_c_api_extraction.py -v
+# Integration tests (requires tinycc repo at ../tinycc)
+python3 -m pytest code_graph_builder/tests/test_step1_graph_build.py -v   # ~3 min
+python3 -m pytest code_graph_builder/tests/test_step2_api_docs.py -v      # ~3 min
+python3 -m pytest code_graph_builder/tests/test_step3_embedding.py -v     # ~27 min (API calls)
+python3 -m pytest code_graph_builder/tests/test_api_find_integration.py -v # ~47 min (full pipeline)
 ```
+
+## License
+
+MIT
