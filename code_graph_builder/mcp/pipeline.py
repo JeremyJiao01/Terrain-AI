@@ -16,6 +16,12 @@ from typing import Any
 
 from loguru import logger
 
+try:
+    from ..rag.kimi_client import create_kimi_client, KimiClient
+except ImportError:
+    create_kimi_client = None  # type: ignore[assignment,misc]
+    KimiClient = None  # type: ignore[assignment,misc]
+
 ProgressCb = Callable[[str, float], None] | None
 """Progress callback: (message, percentage_0_to_100) -> None.
 
@@ -73,16 +79,16 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
 _FUNC_DOC_QUERY = """
     MATCH (m:Module)-[:DEFINES]->(f:Function)
     RETURN DISTINCT m.qualified_name, m.path,
-           f.qualified_name, f.name, f.signature, f.return_type,
-           f.visibility, f.parameters, f.docstring,
-           f.start_line, f.end_line, f.path, f.kind
+           f.qualified_name, f.name, '' AS signature, '' AS return_type,
+           '' AS visibility, '' AS parameters, f.docstring,
+           f.start_line, f.end_line, f.path
     ORDER BY m.qualified_name, f.start_line
 """
 
 _TYPE_DOC_QUERY_CLASS = """
     MATCH (m:Module)-[:DEFINES]->(c:Class)
-    RETURN DISTINCT m.qualified_name, c.name, c.kind, c.signature,
-           c.parameters, c.start_line, c.end_line
+    RETURN DISTINCT m.qualified_name, c.name, 'struct' AS kind, '' AS signature,
+           '' AS parameters, c.start_line, c.end_line
     ORDER BY m.qualified_name, c.start_line
 """
 
@@ -97,19 +103,6 @@ _CALLS_QUERY = """
     MATCH (caller:Function)-[:CALLS]->(callee:Function)
     RETURN DISTINCT caller.qualified_name, callee.qualified_name,
            callee.path, callee.start_line
-"""
-
-_IMPORTS_QUERY = """
-    MATCH (m1:Module)-[:IMPORTS]->(m2:Module)
-    RETURN DISTINCT m1.qualified_name, m2.qualified_name
-"""
-
-_MULTI_LEVEL_CALLS_QUERY = """
-    MATCH (f:Function {qualified_name: $qn})-[:CALLS]->(c1:Function)
-    OPTIONAL MATCH (c1)-[:CALLS]->(c2:Function)
-    RETURN DISTINCT f.qualified_name, f.name,
-           c1.qualified_name, c1.name, c1.visibility, c1.path, c1.start_line,
-           c2.qualified_name, c2.name, c2.visibility, c2.path, c2.start_line
 """
 
 
@@ -165,7 +158,6 @@ def generate_api_docs_step(
     artifact_dir: Path,
     rebuild: bool,
     progress_cb: ProgressCb = None,
-    repo_path: Path | None = None,
 ) -> dict[str, Any]:
     """Generate hierarchical API docs from the knowledge graph.
 
@@ -185,7 +177,6 @@ def generate_api_docs_step(
         func_rows = builder.query(_FUNC_DOC_QUERY)
         type_rows = builder.query(_TYPE_DOC_QUERY_CLASS) + builder.query(_TYPE_DOC_QUERY_TYPE)
         call_rows = builder.query(_CALLS_QUERY)
-        import_rows = builder.query(_IMPORTS_QUERY)
     except Exception as exc:
         msg = f"API docs skipped — graph query failed: {exc}"
         logger.warning(msg)
@@ -193,14 +184,7 @@ def generate_api_docs_step(
             progress_cb(msg, 15.0)
         return {"status": "skipped", "error": str(exc)}
 
-    result = generate_api_docs(
-        func_rows=func_rows,
-        type_rows=type_rows,
-        call_rows=call_rows,
-        import_rows=import_rows,
-        output_dir=artifact_dir,
-        repo_path=repo_path,
-    )
+    result = generate_api_docs(func_rows, type_rows, call_rows, artifact_dir)
     if progress_cb:
         progress_cb(
             f"API docs generated: "
@@ -210,6 +194,192 @@ def generate_api_docs_step(
             15.0,
         )
     return {"status": "success", **result}
+
+
+# ---------------------------------------------------------------------------
+# Step 1b: LLM-powered description generation for undocumented functions
+# ---------------------------------------------------------------------------
+
+_DESC_SYSTEM_PROMPT = """\
+You are a code documentation assistant. Given a C/C++ function's signature, \
+source code, and module context, generate a single concise sentence (in the \
+same language as any existing comments in the code, defaulting to English) \
+describing what the function does. Focus on the function's PURPOSE, not its \
+implementation details. Do NOT include the function name in the description. \
+Reply with ONLY the description sentence, nothing else."""
+
+_DESC_BATCH_SIZE = 10
+
+
+def _build_desc_prompt(funcs: list[dict]) -> str:
+    """Build a batched prompt for multiple functions."""
+    parts: list[str] = []
+    for i, f in enumerate(funcs):
+        sig = f.get("signature") or f.get("name", "unknown")
+        source = f.get("source", "")
+        module = f.get("module_qn", "")
+        parts.append(
+            f"[{i+1}] Module: {module}\n"
+            f"    Signature: {sig}\n"
+            f"    Source:\n{source}\n"
+        )
+    parts.append(
+        f"\nGenerate exactly {len(funcs)} descriptions, one per line, "
+        f"numbered [1] to [{len(funcs)}]. Each description should be a "
+        f"single concise sentence."
+    )
+    return "\n".join(parts)
+
+
+def _parse_desc_response(response: str, count: int) -> list[str]:
+    """Parse numbered descriptions from LLM response."""
+    import re
+
+    descriptions: list[str] = [""] * count
+    for line in response.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Match "[N] desc", "N. desc", or "N) desc" with regex
+        m = re.match(r"^\[?(\d+)[.\)\]]\s*(.*)", line)
+        if m:
+            idx = int(m.group(1)) - 1  # 1-based to 0-based
+            desc = m.group(2).strip()
+            if 0 <= idx < count and desc:
+                descriptions[idx] = desc
+    return descriptions
+
+
+def generate_descriptions_step(
+    artifact_dir: Path,
+    repo_path: Path,
+    progress_cb: ProgressCb = None,
+) -> dict[str, Any]:
+    """Generate LLM descriptions for functions missing docstrings.
+
+    Reads L3 API doc files, finds those with TODO placeholders,
+    generates descriptions via LLM, and writes them back.
+
+    This step is optional -- skipped silently if no LLM API key is configured.
+
+    Returns:
+        Summary dict with generated_count, skipped_count, error_count.
+    """
+    if create_kimi_client is None:
+        logger.info("LLM client not available, skipping description generation")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    try:
+        client = create_kimi_client()
+    except (ValueError, RuntimeError) as e:
+        logger.info(f"No LLM API key configured, skipping description generation: {e}")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    funcs_dir = artifact_dir / "api_docs" / "funcs"
+    if not funcs_dir.exists():
+        logger.warning("No API docs found, skipping description generation")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    # Collect functions needing descriptions
+    todo_funcs: list[dict] = []  # {path, name, signature, source, module_qn, content}
+
+    for md_file in sorted(funcs_dir.glob("*.md")):
+        content = md_file.read_text(encoding="utf-8")
+        if "<!-- TODO:" not in content:
+            continue
+
+        # Parse minimal info from the markdown
+        func_info: dict = {"path": md_file, "content": content}
+        for line in content.splitlines():
+            if line.startswith("# "):
+                func_info["name"] = line[2:].strip()
+            elif line.startswith("- 签名:") or line.startswith("- 定义:"):
+                # Extract signature from backticks
+                start = line.find("`")
+                end = line.rfind("`")
+                if start != -1 and end > start:
+                    func_info["signature"] = line[start + 1 : end]
+            elif line.startswith("- 模块:"):
+                func_info["module_qn"] = (
+                    line[len("- 模块:") :].strip().split(" —")[0].strip()
+                )
+
+        # Read source from the implementation section
+        if "## 实现" in content:
+            source_start = content.index("## 实现")
+            # Extract code between ``` markers
+            code_start = content.find("```", source_start)
+            code_end = (
+                content.find("```", code_start + 3) if code_start != -1 else -1
+            )
+            if code_start != -1 and code_end != -1:
+                # Skip the ```c or ```cpp line
+                first_newline = content.index("\n", code_start)
+                func_info["source"] = content[first_newline + 1 : code_end].strip()
+
+        if "name" in func_info:
+            todo_funcs.append(func_info)
+
+    if not todo_funcs:
+        logger.info("All functions already have descriptions")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    logger.info(f"Generating descriptions for {len(todo_funcs)} functions")
+
+    generated = 0
+    errors = 0
+    total_batches = (len(todo_funcs) + _DESC_BATCH_SIZE - 1) // _DESC_BATCH_SIZE
+
+    for batch_idx in range(0, len(todo_funcs), _DESC_BATCH_SIZE):
+        batch = todo_funcs[batch_idx : batch_idx + _DESC_BATCH_SIZE]
+        current_batch = batch_idx // _DESC_BATCH_SIZE + 1
+
+        if progress_cb:
+            pct = int(current_batch / total_batches * 100)
+            progress_cb(
+                f"Generating descriptions: batch {current_batch}/{total_batches}",
+                float(pct),
+            )
+
+        prompt = _build_desc_prompt(batch)
+
+        try:
+            response = client.chat(
+                query=prompt,
+                system_prompt=_DESC_SYSTEM_PROMPT,
+                max_tokens=1024,
+                temperature=0.3,
+            )
+
+            descriptions = _parse_desc_response(response.content, len(batch))
+
+            for func_info, desc in zip(batch, descriptions):
+                if not desc:
+                    errors += 1
+                    continue
+
+                # Replace TODO placeholder with generated description
+                old_content = func_info["content"]
+                new_content = ""
+                for line in old_content.splitlines(keepends=True):
+                    if "<!-- TODO:" in line and "-->" in line:
+                        new_content += f"> {desc}\n"
+                    else:
+                        new_content += line
+
+                func_info["path"].write_text(new_content, encoding="utf-8")
+                generated += 1
+
+        except Exception as e:
+            logger.warning(f"LLM description generation failed for batch: {e}")
+            errors += len(batch)
+
+    logger.info(f"Generated {generated} descriptions, {errors} errors")
+    return {
+        "generated_count": generated,
+        "skipped_count": len(todo_funcs) - generated - errors,
+        "error_count": errors,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -224,40 +394,13 @@ def _build_embedding_text(
     callers: list[str],
     callees: list[str],
     source: str,
-    api_doc_path: Path | None = None,
 ) -> str:
     """Compose rich embedding text for a function.
 
-    Prefers the generated L3 API doc markdown (which contains natural language
-    descriptions, call trees, and source code) for better semantic retrieval.
-    Falls back to the legacy format when the doc file is not available.
+    Combines name, file location, docstring, call relationships, and source
+    code so that semantic search can match abstract descriptions even when
+    functions lack formal documentation.
     """
-    # Prefer L3 API doc if available — it contains semantic descriptions
-    if api_doc_path and api_doc_path.exists():
-        content = api_doc_path.read_text(encoding="utf-8")
-        # Truncate to embedding size limit while preserving the semantic header
-        if len(content) > _MAX_SOURCE_CHARS:
-            # Keep the header (title + description + signature + module) intact
-            lines = content.split("\n")
-            header_lines = []
-            body_lines = []
-            in_header = True
-            for line in lines:
-                if in_header and (line.startswith("#") or line.startswith(">") or line.startswith("-") or line.strip() == ""):
-                    header_lines.append(line)
-                else:
-                    in_header = False
-                    body_lines.append(line)
-            header = "\n".join(header_lines)
-            remaining = _MAX_SOURCE_CHARS - len(header) - 10
-            if remaining > 0:
-                body = "\n".join(body_lines)[:remaining]
-                content = header + "\n" + body
-            else:
-                content = content[:_MAX_SOURCE_CHARS]
-        return content
-
-    # Fallback: legacy format
     parts: list[str] = [f"Function: {func['name']}"]
     if func.get("path"):
         parts.append(f"File: {func['path']}")
@@ -278,7 +421,6 @@ def build_vector_index(
     vectors_path: Path,
     rebuild: bool,
     progress_cb: ProgressCb = None,
-    artifact_dir: Path | None = None,
 ) -> tuple[Any, Any, dict[int, dict]]:
     """Build or load vector embeddings, reporting after every API batch call."""
     from ..embeddings.qwen3_embedder import create_embedder
@@ -350,18 +492,11 @@ def build_vector_index(
     for i, func in enumerate(all_funcs):
         source = _read_function_source(func, repo_path)
         if source:
-            func_qn = func["qualified_name"]
-            api_doc_path = None
-            if artifact_dir:
-                from .api_doc_generator import _sanitise_filename
-                safe_qn = _sanitise_filename(func_qn)
-                api_doc_path = artifact_dir / "api_docs" / "funcs" / f"{safe_qn}.md"
             text = _build_embedding_text(
                 func,
-                callers=callers_of.get(func_qn, []),
-                callees=callees_of.get(func_qn, []),
+                callers=callers_of.get(func["qualified_name"], []),
+                callees=callees_of.get(func["qualified_name"], []),
                 source=source,
-                api_doc_path=api_doc_path,
             )
             embeddable.append((i, func, text))
 

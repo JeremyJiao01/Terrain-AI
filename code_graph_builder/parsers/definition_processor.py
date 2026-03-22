@@ -201,6 +201,12 @@ class DefinitionProcessor:
                     cs.KEY_END_LINE: func_node.end_point[0] + 1,
                 }
 
+                # Extract C/C++ comment as docstring
+                if is_c_lang:
+                    c_docstring = self._extract_c_comment(func_node)
+                    if c_docstring:
+                        func_props[cs.KEY_DOCSTRING] = c_docstring
+
                 # Extract API interface properties for C language
                 if is_c_lang:
                     return_type = self._extract_c_return_type(func_node)
@@ -274,6 +280,12 @@ class DefinitionProcessor:
                     cs.KEY_START_LINE: class_node.start_point[0] + 1,
                     cs.KEY_END_LINE: class_node.end_point[0] + 1,
                 }
+
+                # Extract C/C++ comment as docstring for struct/union/enum
+                if is_c_lang:
+                    c_docstring = self._extract_c_comment(class_node)
+                    if c_docstring:
+                        class_props[cs.KEY_DOCSTRING] = c_docstring
 
                 # Extract C struct/union/enum members and build signature
                 if is_c_lang:
@@ -359,6 +371,81 @@ class DefinitionProcessor:
 
         except Exception as e:
             logger.debug(f"Error ingesting class methods: {e}")
+
+    # -----------------------------------------------------------------
+    # C/C++ comment extraction
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _extract_c_comment(func_node: Node) -> str | None:
+        """Extract comment block immediately above a C/C++ function node.
+
+        Handles:
+        - Single-line: ``// comment``
+        - Multi-line:  ``/* comment */``
+        - Block of consecutive ``//`` lines
+        - Doxygen-style: ``/** ... */`` or ``/// ...``
+
+        Returns cleaned comment text or *None*.
+        """
+        comment_lines: list[str] = []
+
+        # Walk backwards through previous siblings to collect comment nodes
+        current = func_node.prev_named_sibling
+        if current is None:
+            current = func_node.prev_sibling
+
+        last_end_line = func_node.start_point[0]  # 0-based line number
+
+        while current is not None:
+            if current.type != "comment":
+                break
+
+            # Check adjacency: comment must be within 1 line of the function
+            # or the previous comment we already collected.
+            if last_end_line - current.end_point[0] > 1:
+                break
+
+            text = safe_decode_text(current)
+            if text is None:
+                break
+
+            comment_lines.insert(0, text)
+            last_end_line = current.start_point[0]
+
+            prev = current.prev_named_sibling
+            if prev is None:
+                prev = current.prev_sibling
+            current = prev
+
+        if not comment_lines:
+            return None
+
+        # Clean comment markers
+        cleaned: list[str] = []
+        for line in comment_lines:
+            line = line.strip()
+            # Block comment: /* ... */ or /** ... */
+            if line.startswith("/*"):
+                line = line[2:]
+                if line.startswith("*"):  # /** doxygen */
+                    line = line[1:]
+            if line.endswith("*/"):
+                line = line[:-2]
+            # Line comment: // or ///
+            if line.startswith("//"):
+                line = line[2:]
+                if line.startswith("/"):  # /// doxygen
+                    line = line[1:]
+            # Interior block comment lines: * text
+            if line.startswith("*"):
+                line = line[1:]
+
+            line = line.strip()
+            if line and not all(ch in "-=*#~" for ch in line):
+                cleaned.append(line)
+
+        return "\n".join(cleaned) if cleaned else None
 
     # -----------------------------------------------------------------
     # C language API interface extraction helpers
@@ -547,6 +634,8 @@ class DefinitionProcessor:
                 td_text = safe_decode_text(td_node)
                 signature = td_text.rstrip(";").strip() if td_text else f"typedef {td_name}"
 
+                c_docstring = self._extract_c_comment(td_node)
+
                 td_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: td_qn,
                     cs.KEY_NAME: td_name,
@@ -555,6 +644,8 @@ class DefinitionProcessor:
                     cs.KEY_SIGNATURE: signature,
                     cs.KEY_KIND: "typedef",
                 }
+                if c_docstring:
+                    td_props[cs.KEY_DOCSTRING] = c_docstring
 
                 logger.info(f"  Found typedef: {td_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.TYPE, td_props)
@@ -621,6 +712,8 @@ class DefinitionProcessor:
                 macro_text = safe_decode_text(macro_node)
                 signature = macro_text.strip() if macro_text else f"#define {macro_name}"
 
+                c_docstring = self._extract_c_comment(macro_node)
+
                 macro_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: macro_qn,
                     cs.KEY_NAME: macro_name,
@@ -630,6 +723,8 @@ class DefinitionProcessor:
                     cs.KEY_KIND: "macro",
                     cs.KEY_VISIBILITY: "public",
                 }
+                if c_docstring:
+                    macro_props[cs.KEY_DOCSTRING] = c_docstring
 
                 logger.info(f"  Found macro: {macro_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, macro_props)

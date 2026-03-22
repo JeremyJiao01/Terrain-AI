@@ -41,6 +41,7 @@ from .pipeline import (
     build_graph,
     build_vector_index,
     generate_api_docs_step,
+    generate_descriptions_step,
     run_wiki_generation,
     save_meta,
 )
@@ -760,6 +761,13 @@ class MCPToolsRegistry:
             # Step 2: generate API docs
             generate_api_docs_step(
                 builder, artifact_dir, rebuild,
+                progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
+            )
+
+            # Step 2b: LLM description generation for undocumented functions
+            generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
                 progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
             )
 
@@ -1688,15 +1696,17 @@ class MCPToolsRegistry:
             if _progress_cb is not None:
                 asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
 
+        repo_path = self._active_repo_path
         result = await loop.run_in_executor(
             None,
-            lambda: self._run_generate_api_docs(artifact_dir, rebuild, sync_progress),
+            lambda: self._run_generate_api_docs(artifact_dir, repo_path, rebuild, sync_progress),
         )
         return result
 
     def _run_generate_api_docs(
         self,
         artifact_dir: Path,
+        repo_path: Path | None,
         rebuild: bool,
         progress_cb: ProgressCb = None,
     ) -> dict[str, Any]:
@@ -1707,6 +1717,15 @@ class MCPToolsRegistry:
             result = generate_api_docs_step(
                 self._ingestor, artifact_dir, rebuild, progress_cb,
             )
+
+            # LLM description generation for undocumented functions
+            if repo_path is not None:
+                desc_stats = generate_descriptions_step(
+                    artifact_dir=artifact_dir,
+                    repo_path=repo_path,
+                    progress_cb=progress_cb,
+                )
+                result["desc_stats"] = desc_stats
 
             return {
                 "status": result.get("status", "success"),
