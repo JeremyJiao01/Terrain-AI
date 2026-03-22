@@ -1,0 +1,1609 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Graph Builder — 代码知识图谱引擎</title>
+
+    <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&f[]=satoshi@400,500,700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+    <style>
+        /* ===========================================
+           CSS CUSTOM PROPERTIES — CLEAN LIGHT THEME
+           =========================================== */
+        :root {
+            --bg-primary:    #f8f7f4;
+            --bg-secondary:  #ffffff;
+            --bg-card:       #ffffff;
+            --bg-muted:      #f1f0ed;
+
+            --accent-indigo: #4f46e5;
+            --accent-emerald:#059669;
+            --accent-amber:  #d97706;
+            --accent-rose:   #e11d48;
+            --accent-sky:    #0284c7;
+
+            --text-primary:  #18181b;
+            --text-secondary:#52525b;
+            --text-muted:    #a1a1aa;
+            --text-code:     #4f46e5;
+
+            --border:        #e4e4e7;
+            --border-strong: #d4d4d8;
+
+            --font-display: 'Clash Display', 'Satoshi', sans-serif;
+            --font-body:    'Satoshi', sans-serif;
+            --font-mono:    'JetBrains Mono', monospace;
+
+            --title-size:  clamp(2rem, 5.5vw, 5rem);
+            --h2-size:     clamp(1.4rem, 3.2vw, 2.8rem);
+            --body-size:   clamp(0.78rem, 1.35vw, 1.05rem);
+            --small-size:  clamp(0.62rem, 0.95vw, 0.82rem);
+            --code-size:   clamp(0.66rem, 1vw, 0.85rem);
+
+            --slide-padding: clamp(1.5rem, 4vw, 5rem);
+            --content-gap:   clamp(0.75rem, 2vw, 2rem);
+            --element-gap:   clamp(0.35rem, 0.9vw, 0.875rem);
+
+            --shadow-sm:  0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md:  0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.05);
+            --shadow-lg:  0 10px 30px rgba(0,0,0,0.1), 0 4px 8px rgba(0,0,0,0.06);
+
+            --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+            --duration:  0.65s;
+        }
+
+        /* ===========================================
+           BASE
+           =========================================== */
+        *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+        html {
+            height: 100%;
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100%;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ===========================================
+           SLIDE — VIEWPORT FITTING (MANDATORY)
+           =========================================== */
+        .slide {
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+            scroll-snap-align: start;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            padding: var(--slide-padding);
+        }
+
+        .slide-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            max-height: 100%;
+            overflow: hidden;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* Alternating backgrounds */
+        .slide-white  { background: var(--bg-secondary); }
+        .slide-cream  { background: var(--bg-primary); }
+        .slide-muted  { background: var(--bg-muted); }
+
+        /* Subtle dot pattern */
+        .bg-dots::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: radial-gradient(circle, #d4d4d8 1px, transparent 1px);
+            background-size: 28px 28px;
+            opacity: 0.45;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Subtle grid */
+        .bg-grid::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
+            background-size: 48px 48px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ===========================================
+           ANIMATIONS
+           =========================================== */
+        .reveal {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity var(--duration) var(--ease-expo),
+                        transform var(--duration) var(--ease-expo);
+        }
+        .reveal-left {
+            opacity: 0;
+            transform: translateX(calc(-1 * clamp(16px, 2.5vw, 32px)));
+            transition: opacity var(--duration) var(--ease-expo),
+                        transform var(--duration) var(--ease-expo);
+        }
+        .reveal-scale {
+            opacity: 0;
+            transform: scale(0.94);
+            transition: opacity var(--duration) var(--ease-expo),
+                        transform var(--duration) var(--ease-expo);
+        }
+
+        .d1 { transition-delay: 0.04s; }
+        .d2 { transition-delay: 0.12s; }
+        .d3 { transition-delay: 0.22s; }
+        .d4 { transition-delay: 0.32s; }
+        .d5 { transition-delay: 0.42s; }
+        .d6 { transition-delay: 0.52s; }
+        .d7 { transition-delay: 0.62s; }
+
+        .slide.visible .reveal,
+        .slide.visible .reveal-left,
+        .slide.visible .reveal-scale {
+            opacity: 1;
+            transform: none;
+        }
+
+        /* ===========================================
+           TYPOGRAPHY
+           =========================================== */
+        .title-main {
+            font-family: var(--font-display);
+            font-size: var(--title-size);
+            font-weight: 700;
+            line-height: 1.05;
+            letter-spacing: -0.025em;
+            color: var(--text-primary);
+        }
+
+        .title-accent {
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-sky));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .slide-heading {
+            font-family: var(--font-display);
+            font-size: var(--h2-size);
+            font-weight: 700;
+            line-height: 1.15;
+            letter-spacing: -0.02em;
+            color: var(--text-primary);
+        }
+
+        .section-tag {
+            font-family: var(--font-mono);
+            font-size: var(--small-size);
+            color: var(--accent-indigo);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-weight: 500;
+        }
+
+        .subtitle {
+            font-size: var(--body-size);
+            color: var(--text-secondary);
+            line-height: 1.65;
+        }
+
+        code, .mono {
+            font-family: var(--font-mono);
+            font-size: var(--code-size);
+            color: var(--text-code);
+            background: #eef2ff;
+            padding: 0.1em 0.4em;
+            border-radius: 4px;
+        }
+
+        /* ===========================================
+           UI COMPONENTS
+           =========================================== */
+
+        /* Divider */
+        .divider {
+            width: 48px;
+            height: 3px;
+            background: var(--accent-indigo);
+            border-radius: 2px;
+            margin: var(--element-gap) 0;
+            opacity: 0.7;
+        }
+
+        /* Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4em;
+            padding: 0.3em 0.85em;
+            border: 1.5px solid var(--border-strong);
+            border-radius: 100px;
+            font-family: var(--font-mono);
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Card */
+        .card {
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 12px;
+            padding: clamp(0.75rem, 1.5vw, 1.5rem);
+            box-shadow: var(--shadow-sm);
+            transition: box-shadow 0.25s, border-color 0.25s, transform 0.25s var(--ease-expo);
+        }
+        .card:hover {
+            box-shadow: var(--shadow-md);
+            border-color: var(--border-strong);
+            transform: translateY(-1px);
+        }
+
+        .card-title {
+            font-family: var(--font-display);
+            font-size: clamp(0.82rem, 1.35vw, 1.1rem);
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.3em;
+        }
+        .card-body {
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+
+        /* Accent left border on cards */
+        .card-indigo { border-left: 3px solid var(--accent-indigo); }
+        .card-emerald { border-left: 3px solid var(--accent-emerald); }
+        .card-amber  { border-left: 3px solid var(--accent-amber); }
+        .card-sky    { border-left: 3px solid var(--accent-sky); }
+        .card-rose   { border-left: 3px solid var(--accent-rose); }
+
+        /* Grids */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.5rem, 1.5vw, 1.25rem); }
+        .grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: clamp(0.5rem, 1.2vw, 1rem); }
+        .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: clamp(0.4rem, 1vw, 0.875rem); }
+
+        /* Tag chips */
+        .tag {
+            display: inline-block;
+            padding: 0.22em 0.65em;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: var(--small-size);
+            font-weight: 500;
+            border: 1px solid transparent;
+        }
+        .tag-indigo  { background:#eef2ff; color:#4338ca; border-color:#c7d2fe; }
+        .tag-emerald { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+        .tag-amber   { background:#fffbeb; color:#92400e; border-color:#fcd34d; }
+        .tag-sky     { background:#e0f2fe; color:#075985; border-color:#bae6fd; }
+        .tag-rose    { background:#fff1f2; color:#9f1239; border-color:#fecdd3; }
+        .tag-zinc    { background:#f4f4f5; color:#52525b; border-color:#d4d4d8; }
+
+        /* Tag cloud */
+        .tag-cloud { display:flex; flex-wrap:wrap; gap:clamp(0.3rem,0.6vw,0.55rem); }
+
+        /* Stats */
+        .stat-value {
+            font-family: var(--font-display);
+            font-size: clamp(1.8rem, 4vw, 4rem);
+            font-weight: 700;
+            line-height: 1;
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-sky));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .stat-label {
+            font-size: var(--small-size);
+            color: var(--text-muted);
+            margin-top: 0.3em;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+        }
+
+        /* Pipeline row */
+        .pipeline-step {
+            display: grid;
+            grid-template-columns: 2.2em 1fr auto;
+            align-items: center;
+            gap: clamp(0.5rem, 1.2vw, 1.2rem);
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.45rem, 1.1vw, 0.9rem) clamp(0.75rem, 1.5vw, 1.4rem);
+            box-shadow: var(--shadow-sm);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .pipeline-step:hover { border-color: var(--accent-indigo); box-shadow: var(--shadow-md); }
+
+        .ps-num {
+            font-family: var(--font-mono);
+            font-size: clamp(0.85rem, 1.4vw, 1.2rem);
+            font-weight: 700;
+            color: var(--accent-indigo);
+            text-align: center;
+        }
+        .ps-name {
+            font-family: var(--font-display);
+            font-size: clamp(0.78rem, 1.25vw, 1rem);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .ps-desc {
+            font-size: clamp(0.62rem, 0.95vw, 0.78rem);
+            color: var(--text-secondary);
+            margin-top: 0.12em;
+            line-height: 1.4;
+        }
+        .ps-output {
+            font-family: var(--font-mono);
+            font-size: clamp(0.58rem, 0.85vw, 0.72rem);
+            color: var(--accent-emerald);
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            border-radius: 6px;
+            padding: 0.2em 0.6em;
+            white-space: nowrap;
+        }
+
+        /* Doc level row */
+        .doc-level {
+            display: grid;
+            grid-template-columns: 3em 1fr;
+            align-items: center;
+            gap: clamp(0.5rem, 1.2vw, 1.2rem);
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.45rem, 1.1vw, 0.9rem) clamp(0.75rem, 1.5vw, 1.4rem);
+            box-shadow: var(--shadow-sm);
+        }
+        .doc-level-label {
+            font-family: var(--font-display);
+            font-size: clamp(1.1rem, 2.2vw, 1.8rem);
+            font-weight: 700;
+            color: var(--accent-sky);
+            text-align: center;
+        }
+        .doc-level-info .title {
+            font-family: var(--font-display);
+            font-size: clamp(0.78rem, 1.25vw, 1rem);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .doc-level-info .desc {
+            font-size: clamp(0.62rem, 0.95vw, 0.78rem);
+            color: var(--text-secondary);
+            margin-top: 0.12em;
+            line-height: 1.4;
+        }
+
+        /* Code block */
+        .code-block {
+            background: #f8f8fc;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.6rem, 1.2vw, 1.2rem);
+            font-family: var(--font-mono);
+            font-size: var(--code-size);
+            line-height: 1.65;
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Workspace tree */
+        .workspace-tree {
+            font-family: var(--font-mono);
+            font-size: clamp(0.62rem, 1vw, 0.85rem);
+            color: var(--text-secondary);
+            line-height: 1.85;
+            background: #f8f8fc;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.75rem, 1.5vw, 1.5rem);
+            box-shadow: var(--shadow-sm);
+        }
+        .tree-dir  { color: var(--accent-sky); font-weight: 500; }
+        .tree-hl   { color: var(--accent-indigo); font-weight: 600; }
+        .tree-comment { color: var(--text-muted); }
+
+        /* Feature list */
+        .feature-list { list-style:none; display:flex; flex-direction:column; gap:var(--element-gap); }
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.7em;
+            font-size: var(--body-size);
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+        .feature-list li::before { content:'▸'; color:var(--accent-indigo); flex-shrink:0; margin-top:0.1em; }
+        .feature-list li strong { color:var(--text-primary); font-weight:600; }
+
+        /* RAG step row */
+        .rag-step {
+            display: flex;
+            align-items: center;
+            gap: clamp(0.5rem, 1.2vw, 1.2rem);
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.4rem, 1vw, 0.875rem) clamp(0.75rem, 1.5vw, 1.4rem);
+            box-shadow: var(--shadow-sm);
+        }
+        .rag-step-icon { font-size:clamp(0.9rem,1.5vw,1.25rem); flex-shrink:0; width:2em; text-align:center; }
+        .rag-step-name { font-family:var(--font-display); font-size:clamp(0.75rem,1.2vw,1rem); font-weight:600; color:var(--text-primary); }
+        .rag-step-detail { font-family:var(--font-mono); font-size:clamp(0.58rem,0.88vw,0.74rem); color:var(--text-muted); margin-top:0.1em; }
+
+        /* Tool group */
+        .tool-group {
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.6rem, 1.2vw, 1.2rem);
+            box-shadow: var(--shadow-sm);
+        }
+        .tool-group-title {
+            font-family: var(--font-display);
+            font-size: clamp(0.78rem, 1.2vw, 1rem);
+            font-weight: 600;
+            color: var(--accent-indigo);
+            margin-bottom: 0.5em;
+        }
+        .tool-item { font-family:var(--font-mono); font-size:clamp(0.58rem,0.88vw,0.74rem); color:var(--text-secondary); margin-bottom:0.2em; }
+        .tool-item::before { content:'→ '; color:var(--accent-sky); }
+
+        /* Provider table */
+        .provider-table {
+            display: grid;
+            grid-template-columns: 3.5em 1fr auto;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            font-size: var(--small-size);
+        }
+        .pt-cell {
+            padding: clamp(0.4rem, 1vw, 0.875rem) clamp(0.6rem, 1.2vw, 1.2rem);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            background: var(--bg-card);
+        }
+        .pt-header .pt-cell {
+            background: var(--bg-muted);
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: clamp(0.55rem, 0.82vw, 0.68rem);
+        }
+        .pt-priority { font-family:var(--font-mono); font-weight:700; color:var(--accent-indigo); text-align:center; }
+        .pt-name { font-family:var(--font-display); font-weight:600; color:var(--text-primary); flex:1; font-size:clamp(0.72rem,1.1vw,0.92rem); }
+
+        /* Getting-started steps */
+        .gs-step { display:grid; grid-template-columns:auto 1fr; gap:clamp(0.75rem,1.5vw,1.4rem); align-items:start; }
+        .gs-num {
+            width: clamp(1.5rem,2.5vw,2.2rem);
+            height: clamp(1.5rem,2.5vw,2.2rem);
+            border-radius: 50%;
+            background: #eef2ff;
+            border: 1.5px solid #c7d2fe;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-size: clamp(0.62rem, 0.95vw, 0.82rem);
+            font-weight: 700;
+            color: var(--accent-indigo);
+            flex-shrink: 0;
+            margin-top: 0.12em;
+        }
+        .gs-title { font-family:var(--font-display); font-size:clamp(0.78rem,1.25vw,1.02rem); font-weight:600; color:var(--text-primary); }
+        .gs-cmd {
+            font-family: var(--font-mono);
+            font-size: clamp(0.62rem, 0.95vw, 0.8rem);
+            color: var(--accent-sky);
+            margin-top: 0.25em;
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 6px;
+            padding: 0.2em 0.7em;
+            display: inline-block;
+        }
+
+        /* Lang cards */
+        .lang-card {
+            background: var(--bg-card);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: clamp(0.55rem, 1.1vw, 1rem);
+            text-align: center;
+            box-shadow: var(--shadow-sm);
+        }
+        .lang-card.supported { border-color: #a7f3d0; background: #f0fdf4; }
+        .lang-card.dev       { border-color: #fcd34d; background: #fffbeb; }
+        .lang-name  { font-family:var(--font-mono); font-size:clamp(0.68rem,1.05vw,0.9rem); font-weight:600; color:var(--text-primary); }
+        .lang-status { font-size:clamp(0.55rem,0.8vw,0.68rem); margin-top:0.2em; color:var(--text-secondary); }
+
+        /* Schema grid */
+        .schema-label { font-family:var(--font-mono); font-size:var(--small-size); color:var(--text-muted); text-transform:uppercase; letter-spacing:0.09em; margin-bottom:0.45em; }
+
+        /* ===========================================
+           NAVIGATION UI
+           =========================================== */
+        #progress-bar {
+            position: fixed;
+            top: 0; left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-indigo), var(--accent-sky));
+            z-index: 1000;
+            transition: width 0.4s var(--ease-expo);
+        }
+
+        #nav-dots {
+            position: fixed;
+            right: clamp(0.75rem, 1.8vw, 1.4rem);
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            z-index: 1000;
+        }
+
+        .nav-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--border-strong);
+            cursor: pointer;
+            transition: all 0.3s var(--ease-expo);
+            border: none; padding: 0;
+        }
+        .nav-dot.active {
+            background: var(--accent-indigo);
+            transform: scale(1.5);
+            box-shadow: 0 0 0 2px rgba(79,70,229,0.2);
+        }
+
+        .slide-num {
+            position: fixed;
+            bottom: clamp(0.75rem,1.8vw,1.4rem);
+            right: clamp(0.75rem,1.8vw,1.4rem);
+            font-family: var(--font-mono);
+            font-size: var(--small-size);
+            color: var(--text-muted);
+            z-index: 1000;
+        }
+
+        .kbd-hint {
+            position: fixed;
+            bottom: clamp(0.75rem,1.8vw,1.4rem);
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: var(--font-mono);
+            font-size: clamp(0.58rem,0.85vw,0.72rem);
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.65em;
+            z-index: 1000;
+        }
+        .kbd {
+            padding: 1px 5px;
+            border: 1px solid var(--border-strong);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            font-size: inherit;
+            color: var(--text-secondary);
+        }
+
+        /* ===========================================
+           RESPONSIVE BREAKPOINTS
+           =========================================== */
+        @media (max-height: 700px) {
+            :root {
+                --slide-padding: clamp(1rem, 3vw, 3rem);
+                --content-gap: clamp(0.5rem, 1.5vw, 1.25rem);
+                --element-gap: clamp(0.28rem, 0.75vw, 0.65rem);
+                --title-size: clamp(1.6rem, 4.5vw, 3.5rem);
+                --h2-size: clamp(1.2rem, 2.8vw, 2.2rem);
+            }
+        }
+        @media (max-height: 600px) {
+            :root {
+                --slide-padding: clamp(0.75rem, 2.5vw, 2rem);
+                --content-gap: clamp(0.4rem, 1.2vw, 1rem);
+                --title-size: clamp(1.3rem, 4vw, 2.5rem);
+                --body-size: clamp(0.68rem, 1.15vw, 0.9rem);
+            }
+            #nav-dots, .kbd-hint { display: none; }
+        }
+        @media (max-height: 500px) {
+            :root {
+                --slide-padding: clamp(0.5rem, 2vw, 1.5rem);
+                --title-size: clamp(1.1rem, 3.5vw, 2rem);
+                --h2-size: clamp(0.9rem, 2vw, 1.5rem);
+            }
+        }
+        @media (max-width: 768px) {
+            :root { --title-size: clamp(1.5rem, 8vw, 3rem); }
+            .grid-3 { grid-template-columns: 1fr 1fr; }
+            .grid-4 { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 500px) {
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+            html { scroll-behavior: auto; }
+        }
+
+
+        /* ===========================================
+           SLIDE-SPECIFIC DECORATION
+           =========================================== */
+
+        /* Title slide geometric accent */
+        .title-geo {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 38%;
+            background: linear-gradient(160deg, #eef2ff 0%, #e0f2fe 100%);
+            clip-path: polygon(15% 0, 100% 0, 100% 100%, 0% 100%);
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .title-geo-inner {
+            position: absolute;
+            right: 5%;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: clamp(0.4rem, 1vw, 0.875rem);
+            z-index: 1;
+            max-width: min(30vw, 280px);
+        }
+
+        .mini-node {
+            background: white;
+            border: 1.5px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5em 0.9em;
+            font-family: var(--font-mono);
+            font-size: clamp(0.55rem, 0.85vw, 0.72rem);
+            color: var(--text-secondary);
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+
+        .mini-node-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* Problem cards */
+        .problem-card {
+            background: white;
+            border: 1.5px solid #fecdd3;
+            border-radius: 12px;
+            padding: clamp(0.75rem, 1.5vw, 1.5rem);
+            box-shadow: var(--shadow-sm);
+        }
+        .problem-card .icon { font-size: clamp(1rem,1.8vw,1.4rem); margin-bottom:0.4em; display:block; }
+        .problem-card .label { font-family:var(--font-display); font-size:clamp(0.82rem,1.3vw,1.05rem); font-weight:600; color:#be123c; margin-bottom:0.25em; }
+        .problem-card .desc  { font-size:clamp(0.68rem,1.05vw,0.85rem); color:var(--text-secondary); line-height:1.5; }
+
+        /* Solution flow */
+        .flow-box {
+            flex: 1; min-width: 0;
+            text-align: center;
+            padding: clamp(0.5rem, 1.1vw, 1.1rem);
+            background: white;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            box-shadow: var(--shadow-sm);
+        }
+        .flow-box .icon  { font-size: clamp(1rem,1.8vw,1.5rem); }
+        .flow-box .label { font-family:var(--font-display); font-size:clamp(0.65rem,1vw,0.88rem); font-weight:600; color:var(--text-primary); margin-top:0.3em; }
+        .flow-box.hl     { border-color: #c7d2fe; background: #eef2ff; }
+
+        .arrow { color:var(--text-muted); font-size:clamp(0.75rem,1.1vw,1rem); flex-shrink:0; }
+
+        /* Closing */
+        .stat-card {
+            background: white;
+            border: 1.5px solid var(--border);
+            border-radius: 14px;
+            padding: clamp(0.75rem, 1.8vw, 2rem);
+            text-align: center;
+            box-shadow: var(--shadow-sm);
+        }
+    </style>
+</head>
+<body>
+
+<div id="progress-bar"></div>
+<nav id="nav-dots" aria-label="幻灯片导航"></nav>
+<div class="slide-num" id="slide-counter">1 / 14</div>
+<div class="kbd-hint">
+    <span class="kbd">←</span><span class="kbd">→</span> 导航
+    <span style="opacity:0.4">|</span>
+    <span class="kbd">Space</span> 下一页
+</div>
+
+
+<!-- ===== SLIDE 1: TITLE ===== -->
+<section class="slide slide-cream" id="slide-1">
+
+    <!-- Right geometric panel -->
+    <div class="title-geo"></div>
+
+    <!-- Floating node cards on right panel -->
+    <div class="title-geo-inner reveal d5">
+        <div class="mini-node">
+            <div class="mini-node-dot" style="background:#4f46e5"></div>
+            Project → Package → File
+        </div>
+        <div class="mini-node">
+            <div class="mini-node-dot" style="background:#059669"></div>
+            Function → CALLS → Function
+        </div>
+        <div class="mini-node">
+            <div class="mini-node-dot" style="background:#0284c7"></div>
+            Class → INHERITS → Class
+        </div>
+        <div class="mini-node">
+            <div class="mini-node-dot" style="background:#d97706"></div>
+            Module → IMPORTS → Module
+        </div>
+        <div class="mini-node">
+            <div class="mini-node-dot" style="background:#e11d48"></div>
+            Interface → IMPLEMENTS
+        </div>
+    </div>
+
+    <div class="slide-content" style="max-width:58%">
+        <div class="reveal d1" style="display:flex;align-items:center;gap:0.75rem;margin-bottom:clamp(0.75rem,2vw,2rem)">
+            <div style="height:2px;width:36px;background:var(--accent-indigo);border-radius:2px"></div>
+            <span class="badge">v0.3.1</span>
+        </div>
+
+        <h1 class="title-main reveal d2">
+            Code<span class="title-accent"> Graph</span><br>Builder
+        </h1>
+
+        <p class="subtitle reveal d3" style="max-width:48ch;margin-top:clamp(0.75rem,2vw,1.75rem)">
+            将任意代码库转化为<strong style="color:var(--text-primary)">结构化知识图谱</strong>，
+            让 AI 编程助手真正理解函数关系、调用链路与模块结构
+        </p>
+
+        <div class="reveal d4" style="display:flex;flex-wrap:wrap;gap:0.6rem;margin-top:clamp(1rem,2.5vw,2.5rem)">
+            <span class="badge">🔷 知识图谱</span>
+            <span class="badge">🔍 语义搜索</span>
+            <span class="badge">🤖 MCP 协议</span>
+            <span class="badge">📖 Wiki 生成</span>
+            <span class="badge">⚡ 11 种语言</span>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 2: PROBLEM ===== -->
+<section class="slide slide-white bg-dots" id="slide-2">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 背景问题</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3" style="max-width:20ch">
+            AI 助手为什么<br>
+            <span style="color:var(--accent-rose)">读不懂</span>你的代码？
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap);max-width:52ch">
+            大型代码库中，单纯的文件读取无法还原函数调用链、类继承关系、跨模块依赖——这正是现有 AI 工具的盲区。
+        </p>
+
+        <div class="grid-2 reveal d5" style="margin-top:var(--content-gap)">
+            <div class="problem-card">
+                <span class="icon">📂</span>
+                <div class="label">上下文爆炸</div>
+                <div class="desc">直接贴代码文件，Token 超限，关键信息被截断丢失</div>
+            </div>
+            <div class="problem-card">
+                <span class="icon">🔗</span>
+                <div class="label">关系缺失</div>
+                <div class="desc">AI 看不到函数间的调用链路、类的继承层次</div>
+            </div>
+            <div class="problem-card">
+                <span class="icon">🌐</span>
+                <div class="label">跨文件盲区</div>
+                <div class="desc">跨模块调用、接口实现等关系无法被线性文本描述</div>
+            </div>
+            <div class="problem-card">
+                <span class="icon">🔄</span>
+                <div class="label">重复索引</div>
+                <div class="desc">每次对话都需要重新提供上下文，没有持久化知识库</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 3: SOLUTION ===== -->
+<section class="slide slide-cream" id="slide-3">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 解决方案</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            构建代码的<span class="title-accent"> 知识大脑</span>
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap);max-width:54ch">
+            一次构建，持久查询。静态分析 × 知识图谱 × 语义向量 × LLM
+        </p>
+
+        <div class="reveal d5" style="display:flex;align-items:center;gap:clamp(0.3rem,1vw,0.75rem);margin-top:var(--content-gap);flex-wrap:nowrap;overflow:hidden">
+            <div class="flow-box">
+                <div class="icon">📁</div>
+                <div class="label">源代码仓库</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box hl">
+                <div class="icon">🌳</div>
+                <div class="label">Tree-sitter AST</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box hl">
+                <div class="icon">🕸️</div>
+                <div class="label">知识图谱</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+                <div class="icon">📄</div>
+                <div class="label">API 文档</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box">
+                <div class="icon">🔍</div>
+                <div class="label">语义向量</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="flow-box hl">
+                <div class="icon">🤖</div>
+                <div class="label">MCP / AI 助手</div>
+            </div>
+        </div>
+
+        <div class="grid-3 reveal d6" style="margin-top:var(--content-gap)">
+            <div class="card card-indigo">
+                <div class="card-title">📊 结构化图数据库</div>
+                <div class="card-body">Kùzu 嵌入式，无需 Docker，完整 Cypher 支持，零部署成本</div>
+            </div>
+            <div class="card card-sky">
+                <div class="card-title">🧠 Qwen3 语义嵌入</div>
+                <div class="card-body">函数级向量索引，1536 维，余弦相似度检索</div>
+            </div>
+            <div class="card card-emerald">
+                <div class="card-title">⚙️ 19 个 MCP 工具</div>
+                <div class="card-body">Claude Code / Cursor 可直接调用，标准化工具集</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 4: PIPELINE ===== -->
+<section class="slide slide-white" id="slide-4">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 核心架构</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            五层顺序<span class="title-accent"> 处理管道</span>
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            基于 Tree-sitter AST，按顺序执行五个处理器，从项目结构到语义调用关系逐层构建
+        </p>
+
+        <div style="display:flex;flex-direction:column;gap:clamp(0.3rem,0.8vw,0.6rem);margin-top:var(--content-gap)" class="reveal d5">
+            <div class="pipeline-step">
+                <div class="ps-num">01</div>
+                <div>
+                    <div class="ps-name">StructureProcessor — 项目结构识别</div>
+                    <div class="ps-desc">识别 Project → Package → Folder → File 的层次结构</div>
+                </div>
+                <div class="ps-output">CONTAINS_*</div>
+            </div>
+            <div class="pipeline-step">
+                <div class="ps-num">02</div>
+                <div>
+                    <div class="ps-name">DefinitionProcessor — 定义提取</div>
+                    <div class="ps-desc">提取 Function、Class、Method、Interface、Enum，含签名、文档字符串、可见性</div>
+                </div>
+                <div class="ps-output">DEFINES</div>
+            </div>
+            <div class="pipeline-step">
+                <div class="ps-num">03</div>
+                <div>
+                    <div class="ps-name">ImportProcessor — 导入关系解析</div>
+                    <div class="ps-desc">解析 import / include / use 语句，建立模块间依赖关系图</div>
+                </div>
+                <div class="ps-output">IMPORTS</div>
+            </div>
+            <div class="pipeline-step">
+                <div class="ps-num">04</div>
+                <div>
+                    <div class="ps-name">CallProcessor — 调用点收集</div>
+                    <div class="ps-desc">识别所有函数调用位置，收集调用上下文和调用者信息</div>
+                </div>
+                <div class="ps-output">调用列表</div>
+            </div>
+            <div class="pipeline-step">
+                <div class="ps-num">05</div>
+                <div>
+                    <div class="ps-name">CallResolver — 跨文件调用解析</div>
+                    <div class="ps-desc">将调用点与定义匹配，处理跨文件、链式、方法调用</div>
+                </div>
+                <div class="ps-output">CALLS</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 5: GRAPH SCHEMA ===== -->
+<section class="slide slide-cream bg-grid" id="slide-5">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 数据模型</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            知识图谱<span class="title-accent"> Schema</span>
+        </h2>
+
+        <div class="grid-2 reveal d4" style="margin-top:var(--content-gap);gap:clamp(0.75rem,2vw,2.5rem)">
+            <div>
+                <div class="schema-label">节点类型 — 13 种</div>
+                <div class="tag-cloud">
+                    <span class="tag tag-indigo">Project</span>
+                    <span class="tag tag-indigo">Package</span>
+                    <span class="tag tag-indigo">Folder</span>
+                    <span class="tag tag-indigo">File</span>
+                    <span class="tag tag-sky">Module</span>
+                    <span class="tag tag-sky">Function</span>
+                    <span class="tag tag-sky">Method</span>
+                    <span class="tag tag-sky">Class</span>
+                    <span class="tag tag-emerald">Interface</span>
+                    <span class="tag tag-emerald">Enum</span>
+                    <span class="tag tag-emerald">Type</span>
+                    <span class="tag tag-emerald">Union</span>
+                    <span class="tag tag-amber">ModuleInterface</span>
+                </div>
+                <div class="schema-label" style="margin-top:var(--content-gap)">核心节点属性</div>
+                <div class="tag-cloud">
+                    <span class="tag tag-indigo">qualified_name</span>
+                    <span class="tag tag-sky">signature</span>
+                    <span class="tag tag-sky">docstring</span>
+                    <span class="tag tag-emerald">return_type</span>
+                    <span class="tag tag-amber">visibility</span>
+                    <span class="tag tag-amber">parameters</span>
+                    <span class="tag tag-zinc">start_line</span>
+                    <span class="tag tag-zinc">end_line</span>
+                </div>
+            </div>
+            <div>
+                <div class="schema-label">关系类型 — 13 种</div>
+                <div class="tag-cloud">
+                    <span class="tag tag-indigo">CONTAINS_PACKAGE</span>
+                    <span class="tag tag-indigo">CONTAINS_FOLDER</span>
+                    <span class="tag tag-indigo">CONTAINS_FILE</span>
+                    <span class="tag tag-sky">DEFINES</span>
+                    <span class="tag tag-sky">DEFINES_METHOD</span>
+                    <span class="tag tag-emerald">IMPORTS</span>
+                    <span class="tag tag-emerald">EXPORTS</span>
+                    <span class="tag tag-amber">INHERITS</span>
+                    <span class="tag tag-amber">IMPLEMENTS</span>
+                    <span class="tag tag-amber">OVERRIDES</span>
+                    <span class="tag tag-rose">CALLS</span>
+                    <span class="tag tag-rose">DEPENDS_ON_EXTERNAL</span>
+                    <span class="tag tag-zinc">EXPORTS_MODULE</span>
+                </div>
+                <div class="schema-label" style="margin-top:var(--content-gap)">图数据库</div>
+                <div class="card card-indigo" style="margin-top:0.4rem">
+                    <div class="card-title" style="font-size:clamp(0.75rem,1.2vw,1rem)">⚡ Kùzu 嵌入式图数据库</div>
+                    <div class="card-body">无需 Docker · 完整 ACID 事务 · Cypher 查询 · Python 原生 API</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 6: LANGUAGE SUPPORT ===== -->
+<section class="slide slide-white" id="slide-6">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 多语言支持</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            支持 <span class="title-accent">11 种</span> 编程语言
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            基于 Tree-sitter 统一解析框架，添加新语言只需定义 LanguageSpec 和查询规则
+        </p>
+
+        <div class="lang-grid reveal d5" style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(0.4rem,1vw,0.875rem);margin-top:var(--content-gap)">
+            <div class="lang-card supported"><div class="lang-name">Python</div><div class="lang-status" style="color:#059669">✓ 完全支持</div></div>
+            <div class="lang-card supported"><div class="lang-name">JavaScript</div><div class="lang-status" style="color:#059669">✓ 完全支持</div></div>
+            <div class="lang-card supported"><div class="lang-name">TypeScript</div><div class="lang-status" style="color:#059669">✓ 完全支持</div></div>
+            <div class="lang-card supported"><div class="lang-name">C++</div><div class="lang-status" style="color:#059669">✓ 完全支持</div></div>
+            <div class="lang-card supported"><div class="lang-name">Lua</div><div class="lang-status" style="color:#059669">✓ 完全支持</div></div>
+            <div class="lang-card dev"><div class="lang-name">C</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card dev"><div class="lang-name">Rust</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card dev"><div class="lang-name">Go</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card dev"><div class="lang-name">Java</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card dev"><div class="lang-name">Scala</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card dev"><div class="lang-name">C# / PHP</div><div class="lang-status" style="color:#d97706">⚡ 开发中</div></div>
+            <div class="lang-card" style="border-color:#c7d2fe;background:#eef2ff"><div class="lang-name" style="color:var(--accent-indigo)">+ 可扩展</div><div class="lang-status">定义 LanguageSpec</div></div>
+        </div>
+
+        <div class="grid-2 reveal d6" style="margin-top:var(--content-gap)">
+            <div class="card card-sky">
+                <div class="card-title" style="font-size:clamp(0.75rem,1.2vw,1rem)">C/C++ 特殊支持</div>
+                <div class="card-body">宏定义 · struct/union 成员 · 内存所有权推断 · header/impl 分离</div>
+            </div>
+            <div class="card card-emerald">
+                <div class="card-title" style="font-size:clamp(0.75rem,1.2vw,1rem)">Python 特殊支持</div>
+                <div class="card-body">装饰器识别 · 类型注解提取 · 嵌套函数 · dataclass 支持</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 7: THREE-LAYER DOCS ===== -->
+<section class="slide slide-cream" id="slide-7">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 文档架构</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            三层<span class="title-accent"> API 文档</span>体系
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            专为向量检索优化，不同粒度满足不同查询场景
+        </p>
+
+        <div style="display:flex;flex-direction:column;gap:clamp(0.4rem,1vw,0.875rem);margin-top:var(--content-gap)">
+            <div class="doc-level reveal d5">
+                <div class="doc-level-label">L1</div>
+                <div class="doc-level-info">
+                    <div class="title">索引层 — index.md</div>
+                    <div class="desc">列出所有模块和类，用于导航和概览；快速定位目标模块</div>
+                </div>
+            </div>
+            <div class="doc-level reveal d6">
+                <div class="doc-level-label">L2</div>
+                <div class="doc-level-info">
+                    <div class="title">模块层 — module_name.md</div>
+                    <div class="desc">模块描述、公开 API 列表、调用关系总览；了解模块职责和对外接口</div>
+                </div>
+            </div>
+            <div class="doc-level reveal d7" style="border-color:#c7d2fe;background:#eef2ff">
+                <div class="doc-level-label" style="color:var(--accent-indigo)">L3</div>
+                <div class="doc-level-info">
+                    <div class="title" style="color:var(--accent-indigo)">函数层 — 向量化单元 ⭐ 核心</div>
+                    <div class="desc">单函数详情：签名 · 调用树 · 调用者列表 · 参数内存方向 · 截断源码（2000字符）</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-3 reveal d7" style="margin-top:var(--content-gap)">
+            <div class="card">
+                <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">📊 调用树可视化</div>
+                <div class="card-body">每个函数附带完整调用树和被调用关系列表</div>
+            </div>
+            <div class="card">
+                <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🤖 LLM 生成描述</div>
+                <div class="card-body">无文档字符串时，自动调用 LLM 生成语义描述</div>
+            </div>
+            <div class="card">
+                <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">💾 源码内联</div>
+                <div class="card-body">截断至 2000 字符的源代码直接嵌入文档单元</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 8: RAG ===== -->
+<section class="slide slide-white bg-dots" id="slide-8">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 智能检索</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            RAG <span class="title-accent">语义搜索</span> 引擎
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            向量相似度 + 图遍历双重检索，精准定位相关代码上下文
+        </p>
+
+        <div class="grid-2 reveal d5" style="margin-top:var(--content-gap);gap:clamp(0.75rem,2vw,2.5rem)">
+            <div>
+                <div class="schema-label">检索流程</div>
+                <div style="display:flex;flex-direction:column;gap:clamp(0.28rem,0.7vw,0.55rem);margin-top:0.5em">
+                    <div class="rag-step"><div class="rag-step-icon">💬</div><div><div class="rag-step-name">用户查询</div><div class="rag-step-detail">自然语言输入</div></div></div>
+                    <div class="rag-step"><div class="rag-step-icon">🔍</div><div><div class="rag-step-name">语义向量搜索</div><div class="rag-step-detail">Qwen3 · 1536 维 · Top-K 召回</div></div></div>
+                    <div class="rag-step"><div class="rag-step-icon">🕸️</div><div><div class="rag-step-name">图遍历扩展</div><div class="rag-step-detail">调用者 · 被调用者 · 相关节点</div></div></div>
+                    <div class="rag-step"><div class="rag-step-icon">🤖</div><div><div class="rag-step-name">LLM 生成分析</div><div class="rag-step-detail">OpenAI / DeepSeek / Moonshot</div></div></div>
+                    <div class="rag-step"><div class="rag-step-icon">📄</div><div><div class="rag-step-name">Markdown 输出</div><div class="rag-step-detail">结构化分析文档</div></div></div>
+                </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:var(--element-gap)">
+                <div class="schema-label">向量化组件</div>
+                <div class="card card-indigo">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">Qwen3 Embedder</div>
+                    <div class="card-body">text-embedding-v4 · 1536 维 · DashScope API · 批量编码</div>
+                </div>
+                <div class="card card-sky">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">向量存储</div>
+                    <div class="card-body">MemoryVectorStore（默认）· QdrantVectorStore（生产）</div>
+                </div>
+                <div class="card card-emerald">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">Cypher 生成</div>
+                    <div class="card-body">自然语言 → Cypher 查询，LLM 翻译，错误自动重试</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 9: MCP TOOLS ===== -->
+<section class="slide slide-cream" id="slide-9">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— MCP 集成</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            <span class="title-accent">19 个</span> MCP 工具
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            Claude Code、Cursor 等 AI 助手可直接通过 MCP 协议调用，零摩擦集成
+        </p>
+
+        <div class="grid-2 reveal d5" style="margin-top:var(--content-gap)">
+            <div class="tool-group">
+                <div class="tool-group-title">📦 仓库管理（4 个）</div>
+                <div>
+                    <div class="tool-item">initialize_repository — 完整四步流水线</div>
+                    <div class="tool-item">get_repository_info — 图统计元数据</div>
+                    <div class="tool-item">list_repositories — 工作区仓库列表</div>
+                    <div class="tool-item">switch_repository — 切换活跃仓库</div>
+                </div>
+            </div>
+            <div class="tool-group">
+                <div class="tool-group-title">🔍 代码搜索（5 个）</div>
+                <div>
+                    <div class="tool-item">find_api ⭐ — 语义搜索 + 文档附加</div>
+                    <div class="tool-item">semantic_search — 向量相似度搜索</div>
+                    <div class="tool-item">query_code_graph — 自然语言 → Cypher</div>
+                    <div class="tool-item">get_code_snippet — 按限定名取源码</div>
+                    <div class="tool-item">locate_function — Tree-sitter 精确定位</div>
+                </div>
+            </div>
+            <div class="tool-group">
+                <div class="tool-group-title">📖 API 文档（4 个）</div>
+                <div>
+                    <div class="tool-item">list_api_docs — L1 / L2 文档索引</div>
+                    <div class="tool-item">get_api_doc — L3 函数详情（含源码）</div>
+                    <div class="tool-item">list_api_interfaces — 按模块列公开 API</div>
+                    <div class="tool-item">generate_api_docs — 重新生成文档</div>
+                </div>
+            </div>
+            <div class="tool-group">
+                <div class="tool-group-title">🗺️ Wiki 与分析（6 个）</div>
+                <div>
+                    <div class="tool-item">list_wiki_pages — Wiki 页面目录</div>
+                    <div class="tool-item">get_wiki_page — 读取 Wiki 内容</div>
+                    <div class="tool-item">generate_wiki — 重新生成 Wiki</div>
+                    <div class="tool-item">rebuild_embeddings — 重建向量索引</div>
+                    <div class="tool-item">build_graph — 重建知识图谱</div>
+                    <div class="tool-item">prepare_guidance — 设计文档分析</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 10: WORKSPACE ===== -->
+<section class="slide slide-white" id="slide-10">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 持久化存储</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            工作空间<span class="title-accent"> 文件布局</span>
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            每个仓库独立隔离存储，支持多仓库并存切换，一次构建永久可用
+        </p>
+
+        <div class="grid-2 reveal d5" style="margin-top:var(--content-gap);align-items:start;gap:clamp(0.75rem,2vw,2.5rem)">
+            <div class="workspace-tree">
+<span class="tree-dir">~/.code-graph-builder/</span>   <span class="tree-comment"># CGB_WORKSPACE</span>
+<span class="tree-comment">├── active.txt</span>               <span class="tree-comment"># 当前活跃仓库</span>
+<span class="tree-dir">└── my_project_a1b2c3d4/</span>    <span class="tree-comment"># hash(仓库路径)</span>
+    <span class="tree-comment">├── meta.json</span>             <span class="tree-comment"># 元数据</span>
+    <span class="tree-hl">├── graph.db</span>              <span class="tree-comment"># Kùzu 图数据库</span>
+    <span class="tree-hl">├── vectors.pkl</span>           <span class="tree-comment"># 向量缓存</span>
+    <span class="tree-comment">├── api_docs/</span>
+    <span class="tree-comment">│   ├── index.md</span>
+    <span class="tree-comment">│   └── module_*.md</span>
+    <span class="tree-dir">└── wiki/</span>
+        <span class="tree-comment">├── index.md</span>
+        <span class="tree-comment">└── pages/*.md</span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:var(--element-gap)">
+                <div class="card card-indigo">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🔒 仓库隔离</div>
+                    <div class="card-body">每个仓库以路径 Hash 命名，互不干扰，switch_repository 一键切换</div>
+                </div>
+                <div class="card card-sky">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">⚡ 增量更新</div>
+                    <div class="card-body">只需重新运行对应步骤（graph-build / embed-gen / wiki-gen）局部更新</div>
+                </div>
+                <div class="card card-amber">
+                    <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🌐 环境变量配置</div>
+                    <div class="card-body">CGB_WORKSPACE 自定义路径 · LLM_API_KEY · DASHSCOPE_API_KEY</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 11: PERFORMANCE ===== -->
+<section class="slide slide-cream bg-grid" id="slide-11">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 性能基准</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            性能指标
+            <span style="color:var(--text-muted);font-weight:400;font-size:0.55em">TinyCC · 1611 个函数</span>
+        </h2>
+
+        <div class="grid-3 reveal d4" style="margin-top:var(--content-gap)">
+            <div class="stat-card"><div class="stat-value">≥95%</div><div class="stat-label">调用识别率</div></div>
+            <div class="stat-card"><div class="stat-value">≥90%</div><div class="stat-label">跨文件调用准确率</div></div>
+            <div class="stat-card"><div class="stat-value">≤5%</div><div class="stat-label">最大误报率</div></div>
+        </div>
+
+        <div class="grid-2 reveal d5" style="margin-top:var(--content-gap)">
+            <div>
+                <div class="schema-label">处理耗时（1611 函数基准）</div>
+                <div style="display:flex;flex-direction:column;gap:var(--element-gap);margin-top:0.5em">
+                    <div class="pipeline-step" style="grid-template-columns:auto 1fr auto">
+                        <div class="ps-num" style="font-size:clamp(0.75rem,1.2vw,1rem)">📊</div>
+                        <div class="ps-name">图构建</div>
+                        <div class="ps-output">~ 3 分钟</div>
+                    </div>
+                    <div class="pipeline-step" style="grid-template-columns:auto 1fr auto">
+                        <div class="ps-num" style="font-size:clamp(0.75rem,1.2vw,1rem)">📄</div>
+                        <div class="ps-name">API 文档生成</div>
+                        <div class="ps-output">~ 3 分钟</div>
+                    </div>
+                    <div class="pipeline-step" style="grid-template-columns:auto 1fr auto">
+                        <div class="ps-num" style="font-size:clamp(0.75rem,1.2vw,1rem)">🔍</div>
+                        <div class="ps-name">向量化（API 调用）</div>
+                        <div class="ps-output">~ 27 分钟</div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="schema-label">系统要求</div>
+                <div style="display:flex;flex-direction:column;gap:var(--element-gap);margin-top:0.5em">
+                    <div class="card card-emerald">
+                        <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">⚡ 解析速度</div>
+                        <div class="card-body">目标 ≥ 1000 func/s · 最低 ≥ 500 func/s</div>
+                    </div>
+                    <div class="card card-sky">
+                        <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">💾 内存占用</div>
+                        <div class="card-body">目标 ≤ 2GB · 最大 ≤ 4GB</div>
+                    </div>
+                    <div class="card card-amber">
+                        <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🗄️ DB 写入</div>
+                        <div class="card-body">目标 ≥ 500 nodes/s · 最低 ≥ 200 nodes/s</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 12: LLM PROVIDERS ===== -->
+<section class="slide slide-white" id="slide-12">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— LLM 集成</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            灵活的<span class="title-accent"> LLM 提供商</span>支持
+        </h2>
+        <p class="subtitle reveal d4" style="margin-top:var(--element-gap)">
+            自动按优先级检测环境变量，支持任意 OpenAI 兼容 API
+        </p>
+
+        <!-- Priority rows -->
+        <div style="display:flex;flex-direction:column;gap:clamp(0.3rem,0.75vw,0.6rem);margin-top:var(--content-gap)" class="reveal d5">
+            <!-- header -->
+            <div style="display:grid;grid-template-columns:3.5em 1fr auto;gap:clamp(0.5rem,1.2vw,1.2rem);padding:0 clamp(0.75rem,1.5vw,1.4rem)">
+                <div class="schema-label" style="text-align:center;margin:0">优先级</div>
+                <div class="schema-label" style="margin:0">配置方式</div>
+                <div class="schema-label" style="margin:0">适用</div>
+            </div>
+            <!-- row 1 -->
+            <div style="display:grid;grid-template-columns:3.5em 1fr auto;gap:clamp(0.5rem,1.2vw,1.2rem);align-items:center;background:white;border:1.5px solid var(--border);border-radius:10px;padding:clamp(0.45rem,1vw,0.875rem) clamp(0.75rem,1.5vw,1.4rem);box-shadow:var(--shadow-sm)">
+                <div style="font-family:var(--font-mono);font-weight:700;color:var(--accent-indigo);text-align:center;font-size:clamp(0.75rem,1.2vw,1rem)">#1</div>
+                <div style="font-family:var(--font-mono);font-size:var(--code-size);color:var(--text-secondary)">LLM_API_KEY &nbsp;/&nbsp; LLM_BASE_URL &nbsp;/&nbsp; LLM_MODEL</div>
+                <span class="tag tag-indigo">通用，最高优先</span>
+            </div>
+            <!-- row 2 -->
+            <div style="display:grid;grid-template-columns:3.5em 1fr auto;gap:clamp(0.5rem,1.2vw,1.2rem);align-items:center;background:white;border:1.5px solid var(--border);border-radius:10px;padding:clamp(0.45rem,1vw,0.875rem) clamp(0.75rem,1.5vw,1.4rem);box-shadow:var(--shadow-sm)">
+                <div style="font-family:var(--font-mono);font-weight:700;color:var(--accent-sky);text-align:center;font-size:clamp(0.75rem,1.2vw,1rem)">#2</div>
+                <div style="font-family:var(--font-mono);font-size:var(--code-size);color:var(--text-secondary)">OPENAI_API_KEY &nbsp;/&nbsp; OPENAI_BASE_URL &nbsp;/&nbsp; OPENAI_MODEL</div>
+                <span class="tag tag-sky">OpenAI 兼容</span>
+            </div>
+            <!-- row 3 -->
+            <div style="display:grid;grid-template-columns:3.5em 1fr auto;gap:clamp(0.5rem,1.2vw,1.2rem);align-items:center;background:white;border:1.5px solid var(--border);border-radius:10px;padding:clamp(0.45rem,1vw,0.875rem) clamp(0.75rem,1.5vw,1.4rem);box-shadow:var(--shadow-sm)">
+                <div style="font-family:var(--font-mono);font-weight:700;color:var(--accent-amber);text-align:center;font-size:clamp(0.75rem,1.2vw,1rem)">#3</div>
+                <div style="font-family:var(--font-mono);font-size:var(--code-size);color:var(--text-secondary)">MOONSHOT_API_KEY &nbsp;/&nbsp; MOONSHOT_MODEL</div>
+                <span class="tag tag-amber">Moonshot / Kimi</span>
+            </div>
+        </div>
+
+        <div class="grid-2 reveal d6" style="margin-top:var(--content-gap)">
+            <div class="card card-indigo">
+                <div class="schema-label" style="margin-bottom:0.5em">已验证 LLM</div>
+                <div class="tag-cloud">
+                    <span class="tag tag-indigo">OpenAI GPT-4o</span>
+                    <span class="tag tag-sky">DeepSeek Chat</span>
+                    <span class="tag tag-amber">Moonshot Kimi-k2.5</span>
+                    <span class="tag tag-zinc">任意 OAI 兼容</span>
+                </div>
+            </div>
+            <div class="card card-emerald">
+                <div class="schema-label" style="margin-bottom:0.5em">嵌入提供商</div>
+                <div class="tag-cloud">
+                    <span class="tag tag-emerald">Qwen3 (DashScope)</span>
+                    <span class="tag tag-emerald">text-embedding-v4</span>
+                    <span class="tag tag-zinc">DASHSCOPE_API_KEY</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card card-sky reveal d7" style="margin-top:var(--content-gap)">
+            <div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🛠️ 最新改进 — 安装向导支持多 Provider 选择</div>
+            <div class="card-body"><code>/cgb-start</code> 向导现已支持交互式选择 LLM 和嵌入提供商，无需手动配置环境变量</div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 13: GETTING STARTED ===== -->
+<section class="slide slide-cream" id="slide-13">
+    <div class="slide-content">
+        <div class="section-tag reveal d1">— 快速上手</div>
+        <div class="divider reveal d2"></div>
+        <h2 class="slide-heading reveal d3">
+            四步<span class="title-accent"> 快速开始</span>
+        </h2>
+
+        <div style="display:flex;flex-direction:column;gap:clamp(0.4rem,1vw,0.875rem);margin-top:var(--content-gap)" class="reveal d4">
+            <div class="gs-step">
+                <div class="gs-num">1</div>
+                <div><div class="gs-title">安装 Code Graph Builder</div><div class="gs-cmd">pip install "code-graph-builder[treesitter-full,semantic,rag]"</div></div>
+            </div>
+            <div class="gs-step">
+                <div class="gs-num">2</div>
+                <div><div class="gs-title">配置 MCP 服务器（Claude Code / Cursor）</div><div class="gs-cmd">cgb-mcp  # 启动 MCP 服务器</div></div>
+            </div>
+            <div class="gs-step">
+                <div class="gs-num">3</div>
+                <div><div class="gs-title">运行交互式设置向导</div><div class="gs-cmd">/cgb-start  # 在 Claude Code 中运行</div></div>
+            </div>
+            <div class="gs-step">
+                <div class="gs-num">4</div>
+                <div><div class="gs-title">初始化代码仓库（完整四步流水线）</div><div class="gs-cmd">/repo-init /path/to/your/project</div></div>
+            </div>
+        </div>
+
+        <div class="grid-3 reveal d5" style="margin-top:var(--content-gap)">
+            <div class="card"><div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">🔍 代码搜索</div><div class="card-body"><code>/code-search "函数功能描述"</code></div></div>
+            <div class="card"><div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">📋 查找 API</div><div class="card-body"><code>/api-find "接口名称"</code></div></div>
+            <div class="card"><div class="card-title" style="font-size:clamp(0.72rem,1.1vw,0.95rem)">📚 读取 Wiki</div><div class="card-body"><code>/wiki-read 页面名称</code></div></div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ===== SLIDE 14: CLOSING ===== -->
+<section class="slide slide-white bg-dots" id="slide-14">
+    <!-- Large decorative circle -->
+    <div style="position:absolute;right:-8%;top:50%;transform:translateY(-50%);width:min(55vh,500px);height:min(55vh,500px);border-radius:50%;background:linear-gradient(135deg,#eef2ff,#e0f2fe);pointer-events:none;z-index:0"></div>
+
+    <div class="slide-content" style="align-items:center;text-align:center">
+        <div class="section-tag reveal d1" style="justify-content:center">Code Graph Builder · v0.3.1</div>
+        <div class="divider reveal d2" style="margin:var(--element-gap) auto"></div>
+
+        <h2 class="title-main reveal d3" style="font-size:clamp(1.8rem,5vw,4.5rem);max-width:14ch;margin:0 auto">
+            让 AI 真正<span class="title-accent"><br>读懂</span>你的代码
+        </h2>
+
+        <p class="subtitle reveal d4" style="max-width:44ch;margin:var(--content-gap) auto 0">
+            静态分析 × 知识图谱 × 语义向量 × LLM<br>
+            构建永久可查询的代码知识库
+        </p>
+
+        <div style="display:flex;flex-wrap:wrap;gap:clamp(0.5rem,1.5vw,1.5rem);justify-content:center;margin-top:var(--content-gap)" class="reveal d5">
+            <div class="stat-card" style="padding:clamp(0.75rem,1.8vw,1.75rem) clamp(1rem,2.5vw,2.5rem)">
+                <div class="stat-value" style="font-size:clamp(1.5rem,3.5vw,3rem)">11</div>
+                <div class="stat-label">支持语言</div>
+            </div>
+            <div class="stat-card" style="padding:clamp(0.75rem,1.8vw,1.75rem) clamp(1rem,2.5vw,2.5rem)">
+                <div class="stat-value" style="font-size:clamp(1.5rem,3.5vw,3rem)">19</div>
+                <div class="stat-label">MCP 工具</div>
+            </div>
+            <div class="stat-card" style="padding:clamp(0.75rem,1.8vw,1.75rem) clamp(1rem,2.5vw,2.5rem)">
+                <div class="stat-value" style="font-size:clamp(1.5rem,3.5vw,3rem)">3L</div>
+                <div class="stat-label">文档架构</div>
+            </div>
+            <div class="stat-card" style="padding:clamp(0.75rem,1.8vw,1.75rem) clamp(1rem,2.5vw,2.5rem)">
+                <div class="stat-value" style="font-size:clamp(1.5rem,3.5vw,3rem)">≥95%</div>
+                <div class="stat-label">调用识别率</div>
+            </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:0.75rem;justify-content:center;margin-top:var(--content-gap)" class="reveal d6">
+            <span style="display:inline-flex;align-items:center;gap:0.5em;padding:0.6em 1.2em;background:#eef2ff;border:1.5px solid #c7d2fe;border-radius:8px;font-family:var(--font-mono);font-size:var(--small-size);color:var(--accent-indigo);font-weight:500">
+                📦 pip install code-graph-builder
+            </span>
+            <span style="display:inline-flex;align-items:center;gap:0.5em;padding:0.6em 1.2em;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;font-family:var(--font-mono);font-size:var(--small-size);color:var(--accent-sky);font-weight:500">
+                🚀 /cgb-start
+            </span>
+        </div>
+    </div>
+</section>
+
+
+<script>
+    class Presentation {
+        constructor() {
+            this.slides = Array.from(document.querySelectorAll('.slide'));
+            this.total = this.slides.length;
+            this.current = 0;
+            this.progressBar = document.getElementById('progress-bar');
+            this.navDotsEl = document.getElementById('nav-dots');
+            this.counterEl = document.getElementById('slide-counter');
+            this.init();
+        }
+
+        init() {
+            this.createNavDots();
+            this.setupIntersectionObserver();
+            this.setupKeyboard();
+            this.setupWheel();
+            this.setupTouch();
+            this.updateUI(0);
+        }
+
+        createNavDots() {
+            this.slides.forEach((_, i) => {
+                const dot = document.createElement('button');
+                dot.className = 'nav-dot';
+                dot.setAttribute('aria-label', `跳转到第 ${i + 1} 页`);
+                dot.addEventListener('click', () => this.goTo(i));
+                this.navDotsEl.appendChild(dot);
+            });
+        }
+
+        setupIntersectionObserver() {
+            const observer = new IntersectionObserver(
+                entries => entries.forEach(entry => {
+                    if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+                        const idx = this.slides.indexOf(entry.target);
+                        this.current = idx;
+                        this.updateUI(idx);
+                        entry.target.classList.add('visible');
+                    }
+                }),
+                { threshold: 0.5 }
+            );
+            this.slides.forEach(s => observer.observe(s));
+        }
+
+        setupKeyboard() {
+            document.addEventListener('keydown', e => {
+                if (['ArrowRight','ArrowDown',' '].includes(e.key)) { e.preventDefault(); this.next(); }
+                else if (['ArrowLeft','ArrowUp'].includes(e.key)) { e.preventDefault(); this.prev(); }
+                else if (e.key === 'Home') this.goTo(0);
+                else if (e.key === 'End') this.goTo(this.total - 1);
+            });
+        }
+
+        setupWheel() {
+            let last = 0;
+            document.addEventListener('wheel', e => {
+                const now = Date.now();
+                if (now - last < 650) return;
+                last = now;
+                if (e.deltaY > 30) this.next();
+                else if (e.deltaY < -30) this.prev();
+            }, { passive: true });
+        }
+
+        setupTouch() {
+            let sy = 0, sx = 0;
+            document.addEventListener('touchstart', e => { sy = e.touches[0].clientY; sx = e.touches[0].clientX; }, { passive: true });
+            document.addEventListener('touchend', e => {
+                const dy = sy - e.changedTouches[0].clientY;
+                const dx = sx - e.changedTouches[0].clientX;
+                if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 50) {
+                    dy > 0 ? this.next() : this.prev();
+                }
+            }, { passive: true });
+        }
+
+        goTo(idx) {
+            if (idx < 0 || idx >= this.total) return;
+            this.slides[idx].scrollIntoView({ behavior: 'smooth' });
+        }
+
+        next() { this.goTo(this.current + 1); }
+        prev() { this.goTo(this.current - 1); }
+
+        updateUI(idx) {
+            const pct = this.total > 1 ? (idx / (this.total - 1)) * 100 : 100;
+            this.progressBar.style.width = pct + '%';
+            this.navDotsEl.querySelectorAll('.nav-dot').forEach((d, i) => d.classList.toggle('active', i === idx));
+            this.counterEl.textContent = `${idx + 1} / ${this.total}`;
+            document.title = `Code Graph Builder — ${idx + 1}/${this.total}`;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        new Presentation();
+        document.querySelector('.slide')?.classList.add('visible');
+    });
+</script>
+</body>
+</html>
