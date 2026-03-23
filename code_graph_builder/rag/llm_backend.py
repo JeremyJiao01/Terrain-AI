@@ -15,10 +15,14 @@ variables in ``settings.json`` → ``mcpServers`` → ``env``.
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+
+# Suppress SSL verification warnings when verify=False is used (e.g. LiteLLM proxy)
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 # Provider detection order: each tuple is (key_env, base_url_env, model_env, default_base_url, default_model)
 _PROVIDER_ENVS: list[tuple[str, str, str, str, str]] = [
@@ -69,15 +73,15 @@ class LLMBackend:
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """Send a chat completion request and return the assistant's response text."""
         try:
-            import httpx
+            import requests
         except ImportError:
             raise ImportError(
-                "httpx is required for LLM backend. "
-                "Install it with: pip install httpx"
+                "requests is required for LLM backend. "
+                "Install it with: pip install requests"
             )
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authentication": self.api_key,
             "Content-Type": "application/json",
         }
         payload: dict[str, Any] = {
@@ -85,13 +89,16 @@ class LLMBackend:
             "messages": messages,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "top_p": kwargs.get("top_p", 0.9),
+            "stream": False,
         }
 
-        resp = httpx.post(
+        resp = requests.post(
             f"{self.base_url}/chat/completions",
             json=payload,
             headers=headers,
             timeout=60.0,
+            verify=False,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -111,15 +118,15 @@ class LLMBackend:
         empty, behaves like :meth:`chat` but returns a structured message.
         """
         try:
-            import httpx
+            import requests
         except ImportError:
             raise ImportError(
-                "httpx is required for LLM backend. "
-                "Install it with: pip install httpx"
+                "requests is required for LLM backend. "
+                "Install it with: pip install requests"
             )
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authentication": self.api_key,
             "Content-Type": "application/json",
         }
         payload: dict[str, Any] = {
@@ -127,16 +134,19 @@ class LLMBackend:
             "messages": messages,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "top_p": kwargs.get("top_p", 0.9),
+            "stream": False,
         }
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = kwargs.get("tool_choice", "auto")
 
-        resp = httpx.post(
+        resp = requests.post(
             f"{self.base_url}/chat/completions",
             json=payload,
             headers=headers,
             timeout=kwargs.get("timeout", 120.0),
+            verify=False,
         )
         resp.raise_for_status()
         data = resp.json()
