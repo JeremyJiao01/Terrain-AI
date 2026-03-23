@@ -14,11 +14,15 @@ Example:
 from __future__ import annotations
 
 import os
+import warnings
 from abc import ABC, abstractmethod
 from typing import Any
 
 import requests
 from loguru import logger
+
+# Suppress SSL verification warnings when verify=False is used (e.g. third-party proxy)
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 
 class BaseEmbedder(ABC):
@@ -137,20 +141,15 @@ class Qwen3Embedder(BaseEmbedder):
         Returns:
             API response JSON
         """
-        url = f"{self.base_url}/services/embeddings/text-embedding/text-embedding"
+        url = f"{self.base_url}/embeddings"
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "input": {
-                "texts": texts,
-            },
-            "parameters": {
-                "text_type": text_type,
-            },
+            "input": texts,
         }
 
         if dimensions is not None:
-            payload["parameters"]["dimensions"] = dimensions
+            payload["dimensions"] = dimensions
 
         for attempt in range(self.max_retries):
             try:
@@ -159,6 +158,7 @@ class Qwen3Embedder(BaseEmbedder):
                     headers=self._get_headers(),
                     json=payload,
                     timeout=60,
+                    verify=False,
                 )
 
                 if response.status_code == 200:
@@ -202,7 +202,9 @@ class Qwen3Embedder(BaseEmbedder):
         raise RuntimeError("All retries failed")
 
     def _extract_embeddings(self, response: dict[str, Any]) -> list[list[float]]:
-        """Extract embeddings from API response.
+        """Extract embeddings from API response (OpenAI-compatible format).
+
+        Expects ``{"data": [{"embedding": [...], "index": 0}, ...]}``
 
         Args:
             response: API response JSON
@@ -210,11 +212,11 @@ class Qwen3Embedder(BaseEmbedder):
         Returns:
             List of embedding vectors
         """
-        if "output" not in response or "embeddings" not in response["output"]:
-            raise RuntimeError(f"Unexpected API response format: {response.keys()}")
+        if "data" not in response:
+            raise RuntimeError(f"Unexpected API response format: {list(response.keys())}")
 
-        embeddings = response["output"]["embeddings"]
-        return [item["embedding"] for item in embeddings]
+        sorted_items = sorted(response["data"], key=lambda x: x["index"])
+        return [item["embedding"] for item in sorted_items]
 
     def embed_code(
         self,
