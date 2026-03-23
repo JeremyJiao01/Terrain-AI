@@ -122,8 +122,9 @@ async function runSetup() {
   log("    2) OpenAI             https://platform.openai.com");
   log("    3) DeepSeek           https://platform.deepseek.com");
   log("    4) OpenRouter         https://openrouter.ai");
-  log("    5) Custom (any OpenAI-compatible endpoint)");
-  log("    6) Skip (configure later)");
+  log("    5) LiteLLM Proxy      (OpenAI-compatible gateway)");
+  log("    6) Custom (any OpenAI-compatible endpoint)");
+  log("    7) Skip (configure later)");
   log("");
 
   const providers = {
@@ -131,19 +132,20 @@ async function runSetup() {
     "2": { name: "OpenAI",      url: "https://api.openai.com/v1",    model: "gpt-4o" },
     "3": { name: "DeepSeek",    url: "https://api.deepseek.com/v1",  model: "deepseek-chat" },
     "4": { name: "OpenRouter",  url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4" },
+    "5": { name: "LiteLLM",     url: "http://localhost:4000/v1",     model: "gpt-4o" },
   };
 
   if (existing.LLM_API_KEY) {
     log(`  Current: ${mask(existing.LLM_API_KEY)} → ${existing.LLM_BASE_URL || "?"}`);
   }
 
-  const choice = (await ask("  Choose provider [1-6]: ")).trim() || "6";
+  const choice = (await ask("  Choose provider [1-7]: ")).trim() || "7";
 
   let llmKey = existing.LLM_API_KEY || "";
   let llmBaseUrl = existing.LLM_BASE_URL || "";
   let llmModel = existing.LLM_MODEL || "";
 
-  if (choice !== "6") {
+  if (choice !== "7") {
     const provider = providers[choice];
 
     if (provider) {
@@ -151,7 +153,7 @@ async function runSetup() {
       llmBaseUrl = provider.url;
       llmModel = provider.model;
     } else {
-      // Choice "5" or invalid → custom
+      // Choice "6" or invalid → custom
       log("\n  → Custom provider");
       llmBaseUrl = (await ask("  API Base URL: ")).trim() || llmBaseUrl;
       llmModel = (await ask("  Model name: ")).trim() || llmModel || "gpt-4o";
