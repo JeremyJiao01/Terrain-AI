@@ -4,8 +4,9 @@ Provides a unified interface to call any OpenAI-compatible chat-completion API.
 The provider is auto-detected from environment variables in this priority:
 
     1. ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``   (generic, highest)
-    2. ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``OPENAI_MODEL``
-    3. ``MOONSHOT_API_KEY`` / ``MOONSHOT_MODEL``              (legacy default)
+    2. ``LITELLM_API_KEY`` / ``LITELLM_BASE_URL`` / ``LITELLM_MODEL`` (LiteLLM proxy)
+    3. ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``OPENAI_MODEL``
+    4. ``MOONSHOT_API_KEY`` / ``MOONSHOT_MODEL``              (legacy default)
 
 When installed as an MCP server in Claude Code, configure the environment
 variables in ``settings.json`` → ``mcpServers`` → ``env``.
@@ -23,6 +24,8 @@ from loguru import logger
 _PROVIDER_ENVS: list[tuple[str, str, str, str, str]] = [
     # Generic — user explicitly chose an LLM
     ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "https://api.openai.com/v1", "gpt-4o"),
+    # LiteLLM proxy — OpenAI-compatible gateway for 100+ LLM providers
+    ("LITELLM_API_KEY", "LITELLM_BASE_URL", "LITELLM_MODEL", "http://localhost:4000/v1", "gpt-4o"),
     # OpenAI / compatible (DeepSeek, Together, etc.)
     ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "https://api.openai.com/v1", "gpt-4o"),
     # Moonshot / Kimi (legacy default)
@@ -166,8 +169,9 @@ def create_llm_backend(**kwargs: Any) -> LLMBackend:
 
     Detection priority (first match wins):
         1. ``LLM_API_KEY``      — generic override
-        2. ``OPENAI_API_KEY``   — OpenAI or any compatible endpoint
-        3. ``MOONSHOT_API_KEY`` — Moonshot / Kimi (legacy)
+        2. ``LITELLM_API_KEY``  — LiteLLM proxy
+        3. ``OPENAI_API_KEY``   — OpenAI or any compatible endpoint
+        4. ``MOONSHOT_API_KEY`` — Moonshot / Kimi (legacy)
 
     Any of these can be overridden by passing explicit keyword arguments
     (``api_key``, ``base_url``, ``model``).
@@ -203,7 +207,7 @@ def create_llm_backend(**kwargs: Any) -> LLMBackend:
     else:
         logger.warning(
             "No LLM API key found in environment. "
-            "Set one of: LLM_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY. "
+            "Set one of: LLM_API_KEY, LITELLM_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY. "
             "Tools that require LLM (query_code_graph, wiki generation) will be unavailable."
         )
 
