@@ -7,7 +7,7 @@
     "code-graph-builder": "./npm-package/bin/cli.mjs"
   },
   "scripts": {
-    "postinstall": "pip install -e \".[treesitter-full,semantic,rag]\"",
+    "postinstall": "pip install -e \".[treesitter-full,semantic,rag]\" && node ./npm-package/bin/cli.mjs",
     "server": "node ./npm-package/bin/cli.mjs --server",
     "setup": "node ./npm-package/bin/cli.mjs --setup"
   },
