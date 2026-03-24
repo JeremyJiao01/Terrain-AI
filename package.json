@@ -1,0 +1,21 @@
+{
+  "name": "code-graph-builder-dev",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Local development wrapper for code-graph-builder",
+  "bin": {
+    "code-graph-builder": "./npm-package/bin/cli.mjs"
+  },
+  "scripts": {
+    "postinstall": "pip install -e \".[treesitter-full,semantic,rag]\"",
+    "server": "node ./npm-package/bin/cli.mjs --server",
+    "setup": "node ./npm-package/bin/cli.mjs --setup"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeremyJiao01/CodeGraphWiki"
+  }
+}

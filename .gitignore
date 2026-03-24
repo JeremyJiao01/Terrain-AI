@@ -32,6 +32,7 @@ ENV/
 !*example*.json
 !mcp.json
 !npm-package/package.json
+!/package.json
 
 # IDE
 .idea/
