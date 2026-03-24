@@ -1,8 +1,16 @@
-"""Kùzu embedded graph database service - No Docker required."""
+"""Kùzu embedded graph database service - No Docker required.
+
+Includes automatic retry with exponential backoff for database lock errors.
+KùzuDB uses file-level locking — when another process holds the database open,
+operations will fail with an IO/lock error.  The retry mechanism handles this
+transparently by waiting and retrying up to a configurable number of times.
+"""
 
 from __future__ import annotations
 
 import json
+import os
+import time
 import types
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
@@ -20,6 +28,49 @@ from ..types import (
 
 if TYPE_CHECKING:
     import kuzu
+
+# ---------------------------------------------------------------------------
+# Lock / retry configuration
+# ---------------------------------------------------------------------------
+
+#: Maximum number of retry attempts when the database is locked.
+DB_LOCK_MAX_RETRIES: int = int(os.environ.get("CGB_DB_LOCK_MAX_RETRIES", "5"))
+
+#: Initial wait time in seconds before the first retry (doubles each attempt).
+DB_LOCK_INITIAL_WAIT: float = float(os.environ.get("CGB_DB_LOCK_INITIAL_WAIT", "1.0"))
+
+#: Maximum wait time in seconds between retries.
+DB_LOCK_MAX_WAIT: float = float(os.environ.get("CGB_DB_LOCK_MAX_WAIT", "30.0"))
+
+# Keywords that indicate a lock-related error in Kuzu exception messages.
+_LOCK_ERROR_KEYWORDS = ("lock", "locked", "busy", "io error", "access", "locking")
+
+
+def _is_lock_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a database lock / busy error."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in _LOCK_ERROR_KEYWORDS)
+
+
+def _remove_stale_lock(db_path: Path) -> bool:
+    """Try to remove a stale .lock file inside a Kuzu database directory.
+
+    Kuzu stores its lock as ``<db_path>/.lock`` or ``<db_path>/lock``.
+    If the lock file exists but no process appears to hold it, it is removed.
+
+    Returns True if a stale lock was cleaned up.
+    """
+    lock_candidates = [db_path / ".lock", db_path / "lock"]
+    cleaned = False
+    for lock_file in lock_candidates:
+        if lock_file.exists():
+            try:
+                lock_file.unlink()
+                logger.warning(f"Removed stale lock file: {lock_file}")
+                cleaned = True
+            except OSError as e:
+                logger.debug(f"Could not remove lock file {lock_file}: {e}")
+    return cleaned
 
 
 class KuzuIngestor:
@@ -60,15 +111,57 @@ class KuzuIngestor:
         self._initialized = False
 
     def __enter__(self) -> KuzuIngestor:
-        """Enter context manager and initialize database."""
+        """Enter context manager and initialize database.
+
+        If the database is locked by another process, retries with exponential
+        backoff up to ``DB_LOCK_MAX_RETRIES`` times.  On the first lock error
+        the method also attempts to clean up stale lock files.
+        """
         import kuzu
 
         logger.info(f"Opening Kùzu database at {self.db_path}")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = kuzu.Database(str(self.db_path))
-        self._conn = kuzu.Connection(self._db)
-        logger.info("Kùzu database opened successfully")
-        return self
+
+        last_exc: Exception | None = None
+        for attempt in range(DB_LOCK_MAX_RETRIES + 1):
+            try:
+                self._db = kuzu.Database(str(self.db_path))
+                self._conn = kuzu.Connection(self._db)
+                if attempt > 0:
+                    logger.info(
+                        f"Kùzu database opened successfully after {attempt} retries"
+                    )
+                else:
+                    logger.info("Kùzu database opened successfully")
+                return self
+            except Exception as exc:
+                last_exc = exc
+                if not _is_lock_error(exc):
+                    raise  # Non-lock error — fail immediately
+
+                # On first lock failure, try removing stale lock files
+                if attempt == 0 and self.db_path.is_dir():
+                    _remove_stale_lock(self.db_path)
+
+                if attempt < DB_LOCK_MAX_RETRIES:
+                    wait = min(
+                        DB_LOCK_INITIAL_WAIT * (2 ** attempt),
+                        DB_LOCK_MAX_WAIT,
+                    )
+                    logger.warning(
+                        f"Database locked (attempt {attempt + 1}/{DB_LOCK_MAX_RETRIES + 1}), "
+                        f"retrying in {wait:.1f}s... ({exc})"
+                    )
+                    time.sleep(wait)
+                    # Reset state for next attempt
+                    self._db = None
+                    self._conn = None
+
+        raise ConnectionError(
+            f"Failed to open Kùzu database after {DB_LOCK_MAX_RETRIES + 1} attempts. "
+            f"The database at {self.db_path} may be locked by another process. "
+            f"Last error: {last_exc}"
+        )
 
     def __exit__(
         self,
@@ -274,7 +367,7 @@ class KuzuIngestor:
                             kind: {self._value_to_cypher(kind)}
                         }})
                     """
-                    self._conn.execute(cypher)
+                    self._execute_with_retry(cypher)
                 except Exception as e:
                     logger.debug(f"Error creating node: {e}")
 
@@ -311,7 +404,7 @@ class KuzuIngestor:
                           (b:{to_label} {{{to_key}: {self._value_to_cypher(to_val)}}})
                     CREATE (a)-[:{actual_rel}]->(b)
                 """
-                self._conn.execute(cypher)
+                self._execute_with_retry(cypher)
             except Exception as e:
                 logger.debug(f"Error creating relationship: {e}")
 
@@ -323,8 +416,55 @@ class KuzuIngestor:
         self.flush_nodes()
         self.flush_relationships()
 
+    def _execute_with_retry(self, cypher_query: str, params: PropertyDict | None = None) -> Any:
+        """Execute a Cypher query with automatic retry on lock errors.
+
+        Returns the raw Kuzu QueryResult on success.
+        Raises the original exception after exhausting retries.
+        """
+        if not self._conn:
+            raise ConnectionError("Not connected to database")
+
+        last_exc: Exception | None = None
+        for attempt in range(DB_LOCK_MAX_RETRIES + 1):
+            try:
+                return self._conn.execute(cypher_query, parameters=params or {})
+            except Exception as exc:
+                last_exc = exc
+                if not _is_lock_error(exc):
+                    raise  # Non-lock error — fail immediately
+
+                if attempt < DB_LOCK_MAX_RETRIES:
+                    wait = min(
+                        DB_LOCK_INITIAL_WAIT * (2 ** attempt),
+                        DB_LOCK_MAX_WAIT,
+                    )
+                    logger.warning(
+                        f"Query blocked by lock (attempt {attempt + 1}/{DB_LOCK_MAX_RETRIES + 1}), "
+                        f"retrying in {wait:.1f}s..."
+                    )
+                    time.sleep(wait)
+
+                    # Try to reconnect if connection went stale
+                    self._try_reconnect()
+
+        raise last_exc  # type: ignore[misc]
+
+    def _try_reconnect(self) -> None:
+        """Attempt to re-establish the database connection."""
+        if self._db is None:
+            return
+        try:
+            import kuzu
+            self._conn = kuzu.Connection(self._db)
+            logger.info("Reconnected to Kùzu database")
+        except Exception as e:
+            logger.debug(f"Reconnect attempt failed: {e}")
+
     def query(self, cypher_query: str, params: PropertyDict | None = None) -> list[ResultRow]:
         """Execute a Cypher query.
+
+        Automatically retries with exponential backoff if the database is locked.
 
         Args:
             cypher_query: Cypher query string
@@ -333,11 +473,8 @@ class KuzuIngestor:
         Returns:
             List of result rows as dictionaries
         """
-        if not self._conn:
-            raise ConnectionError("Not connected to database")
-
         try:
-            result = self._conn.execute(cypher_query, parameters=params or {})
+            result = self._execute_with_retry(cypher_query, params)
             col_names = result.get_column_names()
             rows = []
             while result.has_next():
@@ -567,7 +704,7 @@ class KuzuIngestor:
 
         try:
             # Drop all tables
-            result = self._conn.execute("CALL show_tables() RETURN *")
+            result = self._execute_with_retry("CALL show_tables() RETURN *")
             tables = []
             while result.has_next():
                 row = result.get_next()
@@ -577,7 +714,7 @@ class KuzuIngestor:
                 if table:
                     try:
                         # Quote table name to handle special cases (e.g., numeric names)
-                        self._conn.execute(f'DROP TABLE "{table}"')
+                        self._execute_with_retry(f'DROP TABLE "{table}"')
                     except Exception as e:
                         logger.debug(f"Error dropping table {table}: {e}")
 
@@ -595,7 +732,7 @@ class KuzuIngestor:
 
         try:
             # Get all nodes
-            result = self._conn.execute("MATCH (n) RETURN n")
+            result = self._execute_with_retry("MATCH (n) RETURN n")
             while result.has_next():
                 row = result.get_next()
                 if row and len(row) > 0:
@@ -606,7 +743,7 @@ class KuzuIngestor:
                     })
 
             # Get all relationships
-            result = self._conn.execute("MATCH (a)-[r]->(b) RETURN a, r, b")
+            result = self._execute_with_retry("MATCH (a)-[r]->(b) RETURN a, r, b")
             while result.has_next():
                 row = result.get_next()
                 if row and len(row) >= 3:
@@ -635,24 +772,26 @@ class KuzuIngestor:
 
         try:
             # Count nodes
-            result = self._conn.execute("MATCH (n) RETURN count(n) as count")
+            result = self._execute_with_retry("MATCH (n) RETURN count(n) as count")
             if result.has_next():
                 stats["node_count"] = result.get_next()[0]
 
             # Count relationships
-            result = self._conn.execute("MATCH ()-[r]->() RETURN count(r) as count")
+            result = self._execute_with_retry("MATCH ()-[r]->() RETURN count(r) as count")
             if result.has_next():
                 stats["relationship_count"] = result.get_next()[0]
 
             # Get labels with counts
-            result = self._conn.execute("CALL show_tables() RETURN *")
+            result = self._execute_with_retry("CALL show_tables() RETURN *")
             while result.has_next():
                 row = result.get_next()
                 if row:
                     label = row[0]
                     # Count nodes for this label
                     try:
-                        count_result = self._conn.execute(f"MATCH (n:{label}) RETURN count(n) as count")
+                        count_result = self._execute_with_retry(
+                            f"MATCH (n:{label}) RETURN count(n) as count"
+                        )
                         if count_result.has_next():
                             count = count_result.get_next()[0]
                             stats["node_labels"][label] = count
