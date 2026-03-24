@@ -675,6 +675,15 @@ class MCPToolsRegistry:
                     "required": ["design_doc"],
                 },
             ),
+            ToolDefinition(
+                name="get_config",
+                description=(
+                    "Show current MCP server configuration: LLM provider, model, "
+                    "embedding provider, workspace path, and service availability. "
+                    "Useful for debugging connection issues or verifying setup."
+                ),
+                input_schema={"type": "object", "properties": {}, "required": []},
+            ),
         ]
 
         return defs
@@ -700,6 +709,7 @@ class MCPToolsRegistry:
             "build_graph": self._handle_build_graph,
             "generate_api_docs": self._handle_generate_api_docs,
             "prepare_guidance": self._handle_prepare_guidance,
+            "get_config": self._handle_get_config,
         }
         return handlers.get(name)
 
@@ -1798,3 +1808,112 @@ class MCPToolsRegistry:
             raise ToolError({"error": str(exc), "status": "error"}) from exc
 
         return {"guidance": guidance}
+
+    # -------------------------------------------------------------------------
+    # get_config — show current server configuration
+    # -------------------------------------------------------------------------
+
+    async def _handle_get_config(self) -> dict[str, Any]:
+        """Return current MCP server configuration for debugging and verification."""
+        import os as _os
+
+        def _mask(val: str | None) -> str:
+            """Mask API key for security: show first 4 and last 4 chars."""
+            if not val:
+                return "(not set)"
+            if len(val) < 10:
+                return "****"
+            return val[:4] + "****" + val[-4:]
+
+        # --- LLM configuration ---
+        llm = create_llm_backend()
+        llm_config: dict[str, Any] = {
+            "available": llm.available,
+            "model": llm.model,
+            "base_url": llm.base_url,
+            "api_key": _mask(llm.api_key),
+        }
+
+        # Detect which provider env var was used
+        from ..rag.llm_backend import _PROVIDER_ENVS
+        detected_provider = None
+        for key_env, *_ in _PROVIDER_ENVS:
+            if _os.environ.get(key_env):
+                detected_provider = key_env
+                break
+        llm_config["detected_via"] = detected_provider or "(none)"
+
+        # --- Embedding configuration ---
+        embedding_config: dict[str, Any] = {}
+        try:
+            from ..embeddings.qwen3_embedder import create_embedder
+            embedder = create_embedder()
+            embedder_type = type(embedder).__name__
+
+            embedding_config["provider"] = embedder_type
+            if hasattr(embedder, "model"):
+                embedding_config["model"] = embedder.model
+            if hasattr(embedder, "base_url"):
+                embedding_config["base_url"] = embedder.base_url
+            if hasattr(embedder, "api_key"):
+                embedding_config["api_key"] = _mask(embedder.api_key)
+            embedding_config["dimension"] = embedder.get_embedding_dimension()
+            embedding_config["available"] = True
+        except Exception as exc:
+            embedding_config["available"] = False
+            embedding_config["error"] = str(exc)
+
+        # Detect embedding provider source
+        embed_provider = _os.environ.get("EMBEDDING_PROVIDER", "")
+        if not embed_provider:
+            if _os.environ.get("DASHSCOPE_API_KEY"):
+                embed_provider = "qwen3 (auto-detected via DASHSCOPE_API_KEY)"
+            elif _os.environ.get("EMBEDDING_API_KEY") or _os.environ.get("OPENAI_API_KEY"):
+                embed_provider = "openai (auto-detected)"
+            else:
+                embed_provider = "(none)"
+        embedding_config["detected_via"] = embed_provider
+
+        # --- Workspace ---
+        workspace_config: dict[str, Any] = {
+            "path": str(self._workspace),
+            "active_repo": str(self._active_repo_path) if self._active_repo_path else None,
+            "active_artifact_dir": str(self._active_artifact_dir) if self._active_artifact_dir else None,
+        }
+
+        # --- Service status ---
+        services: dict[str, bool] = {
+            "graph_database": self._ingestor is not None,
+            "cypher_query": self._cypher_gen is not None,
+            "semantic_search": self._semantic_service is not None,
+            "file_editor": self._file_editor is not None,
+        }
+
+        # --- Environment variable overview ---
+        env_keys = [
+            "CGB_WORKSPACE",
+            "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
+            "LITELLM_API_KEY", "LITELLM_BASE_URL", "LITELLM_MODEL",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+            "MOONSHOT_API_KEY", "MOONSHOT_MODEL",
+            "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL",
+            "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL", "EMBEDDING_MODEL",
+            "EMBEDDING_PROVIDER",
+        ]
+        env_status: dict[str, str] = {}
+        for key in env_keys:
+            val = _os.environ.get(key)
+            if val is None:
+                env_status[key] = "(not set)"
+            elif "KEY" in key:
+                env_status[key] = _mask(val)
+            else:
+                env_status[key] = val
+
+        return {
+            "llm": llm_config,
+            "embedding": embedding_config,
+            "workspace": workspace_config,
+            "services": services,
+            "environment_variables": env_status,
+        }
