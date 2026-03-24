@@ -347,8 +347,8 @@ def generate_descriptions_step(
             response = client.chat(
                 query=prompt,
                 system_prompt=_DESC_SYSTEM_PROMPT,
-                max_tokens=1024,
-                temperature=0.3,
+                max_tokens=4096,
+                temperature=1.0,
             )
 
             descriptions = _parse_desc_response(response.content, len(batch))
