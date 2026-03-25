@@ -102,7 +102,8 @@ _TYPE_DOC_QUERY_TYPE = """
 _CALLS_QUERY = """
     MATCH (caller:Function)-[:CALLS]->(callee:Function)
     RETURN DISTINCT caller.qualified_name, callee.qualified_name,
-           callee.path, callee.start_line
+           callee.path, callee.start_line,
+           caller.path, caller.start_line, caller.end_line
 """
 
 
@@ -204,32 +205,49 @@ def generate_api_docs_step(
 # ---------------------------------------------------------------------------
 
 _DESC_SYSTEM_PROMPT = """\
-You are a code documentation assistant. Given a C/C++ function's signature, \
-source code, and module context, generate a single concise sentence (in the \
-same language as any existing comments in the code, defaulting to English) \
-describing what the function does. Focus on the function's PURPOSE, not its \
-implementation details. Do NOT include the function name in the description. \
+You are a code documentation assistant. Given a function's signature, \
+source code, module context, call relationships, and usage examples, \
+generate a single concise sentence (in the same language as any existing \
+comments in the code, defaulting to English) describing what the function \
+does and how it is typically used. Focus on the function's PURPOSE and its \
+role in the codebase, not low-level implementation details. Do NOT include \
+the function name in the description. \
 Reply with ONLY the description sentence, nothing else."""
 
 _DESC_BATCH_SIZE = 10
 
 
 def _build_desc_prompt(funcs: list[dict]) -> str:
-    """Build a batched prompt for multiple functions."""
+    """Build a batched prompt for multiple functions.
+
+    Includes caller information and usage examples extracted from the
+    L3 Markdown if available, giving the LLM richer context about how
+    each function is actually used in the codebase.
+    """
     parts: list[str] = []
     for i, f in enumerate(funcs):
         sig = f.get("signature") or f.get("name", "unknown")
         source = f.get("source", "")
         module = f.get("module_qn", "")
-        parts.append(
+        callers = f.get("callers", "")
+        usage = f.get("usage_example", "")
+
+        entry = (
             f"[{i+1}] Module: {module}\n"
             f"    Signature: {sig}\n"
-            f"    Source:\n{source}\n"
         )
+        if callers:
+            entry += f"    Called by: {callers}\n"
+        if usage:
+            entry += f"    Usage example:\n{usage}\n"
+        entry += f"    Source:\n{source}\n"
+        parts.append(entry)
+
     parts.append(
         f"\nGenerate exactly {len(funcs)} descriptions, one per line, "
         f"numbered [1] to [{len(funcs)}]. Each description should be a "
-        f"single concise sentence."
+        f"single concise sentence that reflects the function's purpose "
+        f"and how it is used by its callers."
     )
     return "\n".join(parts)
 
@@ -319,6 +337,40 @@ def generate_descriptions_step(
                 # Skip the ```c or ```cpp line
                 first_newline = content.index("\n", code_start)
                 func_info["source"] = content[first_newline + 1 : code_end].strip()
+
+        # Extract "called by" list from the "被调用" section
+        if "## 被调用" in content:
+            called_by_start = content.index("## 被调用")
+            # Collect caller names from the bullet list
+            caller_names: list[str] = []
+            for cline in content[called_by_start:].splitlines()[2:]:
+                cline = cline.strip()
+                if not cline or cline.startswith("#"):
+                    break
+                if cline.startswith("- "):
+                    # "- tinycc.tccgen.type_decl (tinycc.tccgen) → ..."
+                    cname = cline[2:].split("(")[0].split("→")[0].strip()
+                    if "." in cname:
+                        cname = cname.rsplit(".", 1)[-1]
+                    if cname and cname != "*(无调用者)*":
+                        caller_names.append(cname)
+            if caller_names:
+                func_info["callers"] = ", ".join(caller_names[:5])
+
+        # Extract first usage example snippet
+        if "## 使用示例" in content:
+            usage_start = content.index("## 使用示例")
+            usage_code_start = content.find("```", usage_start)
+            usage_code_end = (
+                content.find("```", usage_code_start + 3) if usage_code_start != -1 else -1
+            )
+            if usage_code_start != -1 and usage_code_end != -1:
+                first_nl = content.index("\n", usage_code_start)
+                usage_snippet = content[first_nl + 1 : usage_code_end].strip()
+                # Limit size for prompt
+                if len(usage_snippet) > 500:
+                    usage_snippet = usage_snippet[:500] + "\n    /* ... */"
+                func_info["usage_example"] = usage_snippet
 
         if "name" in func_info:
             todo_funcs.append(func_info)

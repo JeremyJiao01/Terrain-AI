@@ -61,17 +61,21 @@ def _build_call_graph(
         callee_path = r[2] if len(r) > 2 else None
         callee_start = r[3] if len(r) > 3 else None
 
+        # Caller location (returned by extended _CALLS_QUERY)
+        caller_path = r[4] if len(r) > 4 else None
+        caller_start = r[5] if len(r) > 5 else None
+        caller_end = r[6] if len(r) > 6 else None
+
         callees_of[caller_qn].append({
             "qn": callee_qn,
             "path": callee_path,
             "start_line": callee_start,
         })
-        # Bug fix: callers_of stores *caller* info, not callee's location.
-        # Upstream query may not carry caller path yet, so use None defensively.
         callers_of[callee_qn].append({
             "qn": caller_qn,
-            "path": None,
-            "start_line": None,
+            "path": caller_path,
+            "start_line": caller_start,
+            "end_line": caller_end,
         })
 
     return callers_of, callees_of
@@ -156,6 +160,69 @@ def _build_call_tree(
                 lines.append(f"{child_prefix}{sub_line}")
 
     return lines
+
+
+def _extract_usage_snippet(
+    func_name: str,
+    caller: dict[str, Any],
+    repo_path: Path | None = None,
+    context_lines: int = 3,
+    max_snippet_chars: int = 600,
+) -> str | None:
+    """Extract a code snippet from a caller function showing how it calls *func_name*.
+
+    Reads the caller's source file, finds lines containing a call to *func_name*,
+    and returns surrounding context lines.  Returns None if the call cannot be found.
+
+    Args:
+        func_name: Simple name of the called function (e.g., "parse_btype").
+        caller: Caller dict with "path", "start_line", "end_line".
+        repo_path: Repository root for resolving relative paths.
+        context_lines: Number of lines before/after the call to include.
+        max_snippet_chars: Maximum characters for the snippet.
+    """
+    caller_path = caller.get("path")
+    caller_start = caller.get("start_line")
+    caller_end = caller.get("end_line")
+    if not caller_path or not caller_start or not caller_end:
+        return None
+
+    file_path = Path(caller_path)
+    if not file_path.is_absolute() and repo_path:
+        file_path = repo_path / caller_path
+
+    if not file_path.exists():
+        return None
+
+    try:
+        all_lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    # Restrict search to the caller function's body
+    body_start = max(0, caller_start - 1)
+    body_end = min(len(all_lines), caller_end)
+
+    # Find lines containing a call to func_name within the caller body
+    call_indices: list[int] = []
+    for idx in range(body_start, body_end):
+        if func_name in all_lines[idx]:
+            call_indices.append(idx)
+
+    if not call_indices:
+        return None
+
+    # Use the first call site and extract surrounding context
+    call_idx = call_indices[0]
+    snippet_start = max(body_start, call_idx - context_lines)
+    snippet_end = min(body_end, call_idx + context_lines + 1)
+    snippet_lines = all_lines[snippet_start:snippet_end]
+
+    snippet = "\n".join(snippet_lines)
+    if len(snippet) > max_snippet_chars:
+        snippet = snippet[:max_snippet_chars] + "\n    /* ... truncated ... */"
+
+    return snippet
 
 
 def _infer_ownership(func: dict[str, Any]) -> list[str]:
@@ -300,6 +367,36 @@ def _render_func_detail(
     else:
         lines.append("*(无调用者)*")
     lines.append("")
+
+    # Usage examples — extract real call-site snippets from callers
+    if callers and repo_path:
+        usage_snippets: list[tuple[str, str, str]] = []  # (caller_name, location, snippet)
+        max_examples = 3
+        for c in callers:
+            if len(usage_snippets) >= max_examples:
+                break
+            caller_name = c["qn"].rsplit(".", 1)[-1] if "." in c["qn"] else c["qn"]
+            snippet = _extract_usage_snippet(name, c, repo_path)
+            if snippet:
+                caller_loc = ""
+                if c.get("path"):
+                    fname = Path(c["path"]).name
+                    caller_loc = f"{fname}:{c.get('start_line', '?')}"
+                usage_snippets.append((caller_name, caller_loc, snippet))
+
+        if usage_snippets:
+            lines.append(f"## 使用示例 ({len(usage_snippets)})")
+            lines.append("")
+            ext = Path(loc_path).suffix if loc_path else ""
+            snippet_lang = "cpp" if ext in (".cpp", ".cc", ".cxx", ".hpp") else "c"
+            for caller_name, caller_loc, snippet in usage_snippets:
+                loc_tag = f" ({caller_loc})" if caller_loc else ""
+                lines.append(f"### 在 {caller_name} 中的调用{loc_tag}")
+                lines.append("")
+                lines.append(f"```{snippet_lang}")
+                lines.append(snippet)
+                lines.append("```")
+                lines.append("")
 
     # Parameters & memory ownership (C/C++ specific)
     params = func.get("parameters")
