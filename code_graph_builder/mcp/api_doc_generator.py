@@ -768,6 +768,22 @@ def generate_api_docs(
             if func["qn"]:
                 func_lookup[func["qn"]] = func
 
+    # ---- Enrich call graph with path info from func_lookup ----
+    # CALLS query may return empty path for stub nodes; fill from DEFINES data
+    for _qn, caller_list in callers_of.items():
+        for c in caller_list:
+            if not c.get("path") and c["qn"] in func_lookup:
+                f = func_lookup[c["qn"]]
+                c["path"] = f.get("path") or ""
+                c["start_line"] = c.get("start_line") or f.get("start_line")
+                c["end_line"] = c.get("end_line") or f.get("end_line")
+    for _qn, callee_list in callees_of.items():
+        for c in callee_list:
+            if not c.get("path") and c["qn"] in func_lookup:
+                f = func_lookup[c["qn"]]
+                c["path"] = f.get("path") or ""
+                c["start_line"] = c.get("start_line") or f.get("start_line")
+
     # ---- Build import graph ----
     import_graph: dict[str, list[str]] = defaultdict(list)
     if import_rows:
