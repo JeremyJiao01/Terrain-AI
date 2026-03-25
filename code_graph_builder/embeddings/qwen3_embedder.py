@@ -83,12 +83,12 @@ class Qwen3Embedder(BaseEmbedder):
         max_retries: Maximum number of retries for failed requests
     """
 
-    DEFAULT_MODEL = "text-embedding-v4"
-    DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+    DEFAULT_MODEL = "Qwen3-Embedding-4B"
+    DEFAULT_BASE_URL = "http://dingpan.digitalpower.huawei.com/MaasPlatform/v1"
     DEFAULT_BATCH_SIZE = 25  # API limit
     MAX_BATCH_SIZE = 25
     CODE_RETRIEVAL_TASK = "Given a code query, retrieve relevant code snippets"
-    EMBEDDING_DIMENSION = 1536  # text-embedding-v4 output dimension
+    EMBEDDING_DIMENSION = 2560  # text-embedding-v4 output dimension
 
     def __init__(
         self,
@@ -121,7 +121,7 @@ class Qwen3Embedder(BaseEmbedder):
     def _get_headers(self) -> dict[str, str]:
         """Get API request headers."""
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": self.api_key,
             "Content-Type": "application/json",
         }
 
