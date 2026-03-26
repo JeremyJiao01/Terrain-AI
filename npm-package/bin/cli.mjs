@@ -293,7 +293,7 @@ async function runSetup() {
   log('    "mcpServers": {');
   log('      "code-graph-builder": {');
   log('        "command": "npx",');
-  log('        "args": ["-y", "code-graph-builder", "--server"]');
+  log('        "args": ["-y", "code-graph-builder@latest", "--server"]');
   log("      }");
   log("    }");
   log("  }");
@@ -332,6 +332,70 @@ function runServer(cmd, args) {
   });
 }
 
+/**
+ * Find a working pip command.  Returns [cmd, ...prefixArgs] or null.
+ * Tries: pip3, pip, python3 -m pip, python -m pip
+ */
+function findPip() {
+  // Standalone pip
+  for (const cmd of IS_WIN ? ["pip", "pip3"] : ["pip3", "pip"]) {
+    if (commandExists(cmd)) return [cmd];
+  }
+  // python -m pip fallback
+  if (PYTHON_CMD) {
+    try {
+      execFileSync(PYTHON_CMD, ["-m", "pip", "--version"], { stdio: "pipe" });
+      return [PYTHON_CMD, "-m", "pip"];
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+/**
+ * Auto-install the Python package via pip, then start the server.
+ */
+function autoInstallAndStart(extraArgs) {
+  const pip = findPip();
+  if (!pip) {
+    process.stderr.write(
+      `code-graph-builder requires Python 3.10+ with pip.\n\n` +
+        (PYTHON_CMD
+          ? `Python found (${PYTHON_CMD}) but pip is not available.\n\n`
+          : `Python 3 not found on PATH.\n\n`) +
+        `Please install Python 3.10+ first, then run:\n` +
+        `  npx code-graph-builder --server\n`
+    );
+    process.exit(1);
+  }
+
+  process.stderr.write(`Installing ${PYTHON_PACKAGE}...\n`);
+
+  try {
+    execSync(
+      [...pip, "install", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+      { stdio: "inherit", shell: true }
+    );
+  } catch (err) {
+    process.stderr.write(
+      `\nFailed to install ${PYTHON_PACKAGE}.\n` +
+        `Try manually: ${pip.join(" ")} install ${PYTHON_PACKAGE}\n`
+    );
+    process.exit(1);
+  }
+
+  // Verify installation succeeded
+  if (!pythonPackageInstalled()) {
+    process.stderr.write(
+      `\nInstallation completed but package not importable.\n` +
+        `Try manually: ${pip.join(" ")} install ${PYTHON_PACKAGE}\n`
+    );
+    process.exit(1);
+  }
+
+  process.stderr.write(`${PYTHON_PACKAGE} installed successfully.\n`);
+  runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
+}
+
 function startServer(extraArgs = []) {
   if (commandExists("uvx")) {
     runServer("uvx", [PYTHON_PACKAGE, ...extraArgs]);
@@ -342,22 +406,8 @@ function startServer(extraArgs = []) {
   } else if (pythonPackageInstalled()) {
     runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
   } else {
-    const pipCmd = IS_WIN ? "pip" : "pip install";
-    const uvInstall = IS_WIN
-      ? "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\""
-      : "curl -LsSf https://astral.sh/uv/install.sh | sh";
-    process.stderr.write(
-      `code-graph-builder requires Python 3.10+.\n\n` +
-        (PYTHON_CMD
-          ? `Python found (${PYTHON_CMD}) but package not installed.\n\n`
-          : `Python 3 not found on PATH.\n\n`) +
-        `Install options:\n` +
-        `  1. ${pipCmd} install ${PYTHON_PACKAGE}\n` +
-        `  2. ${uvInstall}  (installs uv)\n` +
-        `  3. pip install pipx\n\n` +
-        `Then run: npx code-graph-builder --server\n`
-    );
-    process.exit(1);
+    // Auto-install via pip
+    autoInstallAndStart(extraArgs);
   }
 }
 

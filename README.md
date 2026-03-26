@@ -56,7 +56,7 @@ Add to your MCP client config (Claude Code, OpenCode, Cursor, etc.):
   "mcpServers": {
     "code-graph-builder": {
       "command": "npx",
-      "args": ["-y", "code-graph-builder", "--server"]
+      "args": ["-y", "code-graph-builder@latest", "--server"]
     }
   }
 }
