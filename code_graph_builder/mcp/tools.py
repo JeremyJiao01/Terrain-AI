@@ -168,7 +168,7 @@ class MCPToolsRegistry:
         except Exception as exc:
             logger.warning(f"File editor unavailable: {exc}")
 
-        ingestor = KuzuIngestor(db_path)
+        ingestor = KuzuIngestor(db_path, read_only=True)
         ingestor.__enter__()
         self._ingestor = ingestor
 
@@ -791,19 +791,23 @@ class MCPToolsRegistry:
             # open the database without lock contention.
             self.close()
 
-            # Step 1: build graph — returns a CodeGraphBuilder
+            # Step 1: build graph (read-write) — returns a CodeGraphBuilder
             builder = build_graph(
                 repo_path, db_path, rebuild, progress_cb=lambda msg, pct: _step_progress(1, total_steps, msg, pct),
                 backend=backend,
             )
+            # build_graph's internal `with ingestor:` has already closed
+            # the read-write connection.  All subsequent steps only need
+            # to read the graph, so we open a read-only ingestor.  This
+            # avoids holding a write lock during the (potentially long)
+            # API-doc / embedding / wiki generation and allows other
+            # processes to read the same database concurrently.
 
-            # Hold a single DB session for all remaining steps so we
-            # never repeatedly open/close the database (which causes
-            # lock contention and wastes time).
-            with builder:
-                # Step 2: generate API docs
+            ro_ingestor = KuzuIngestor(db_path, read_only=True)
+            with ro_ingestor:
+                # Step 2: generate API docs (read-only)
                 generate_api_docs_step(
-                    builder, artifact_dir, rebuild,
+                    ro_ingestor, artifact_dir, rebuild,
                     progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
                     repo_path=repo_path,
                 )
@@ -820,16 +824,16 @@ class MCPToolsRegistry:
                 skipped = []
 
                 if not skip_embed:
-                    # Step 3: build embeddings
+                    # Step 3: build embeddings (read-only queries)
                     vector_store, embedder, func_map = build_vector_index(
-                        builder, repo_path, vectors_path, rebuild,
+                        ro_ingestor, repo_path, vectors_path, rebuild,
                         progress_cb=lambda msg, pct: _step_progress(3, total_steps, msg, pct),
                     )
 
                     if not skip_wiki:
-                        # Step 4: generate wiki
+                        # Step 4: generate wiki (read-only queries)
                         index_path, page_count = run_wiki_generation(
-                            builder=builder,
+                            builder=ro_ingestor,
                             repo_path=repo_path,
                             output_dir=wiki_dir,
                             max_pages=max_pages,
@@ -848,7 +852,7 @@ class MCPToolsRegistry:
                     _step_progress(3, total_steps, "Embedding skipped.", 40.0)
                     _step_progress(4, total_steps, "Wiki skipped (requires embeddings).", 100.0)
 
-            # Session closed — safe to load services (which opens a new connection)
+            # Read-only session closed — _load_services opens its own read-only connection
             save_meta(artifact_dir, repo_path, page_count)
             self._set_active(artifact_dir)
             self._load_services(artifact_dir)
@@ -1706,10 +1710,11 @@ class MCPToolsRegistry:
                 repo_path, db_path, rebuild, progress_cb, backend=backend,
             )
 
-            # Hold a session for get_statistics, then release before
-            # _load_services opens its own long-lived connection.
-            with builder:
-                stats = builder.get_statistics()
+            # Build is done (write connection closed). Open read-only
+            # to get statistics, then release for _load_services.
+            ro_ingestor = KuzuIngestor(db_path, read_only=True)
+            with ro_ingestor:
+                stats = ro_ingestor.get_statistics()
 
             save_meta(artifact_dir, repo_path, 0)
             self._set_active(artifact_dir)

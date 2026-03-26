@@ -88,15 +88,19 @@ class KuzuIngestor:
         >>> results = ingestor.query("MATCH (f:Function) RETURN f.name")
     """
 
-    def __init__(self, db_path: str | Path, batch_size: int = 1000):
+    def __init__(self, db_path: str | Path, batch_size: int = 1000, read_only: bool = False):
         """Initialize Kùzu ingestor.
 
         Args:
             db_path: Path to store the database files
             batch_size: Batch size for writes
+            read_only: If True, open the database in read-only mode.
+                       Multiple processes can open the same DB concurrently
+                       when all use read_only=True.
         """
         self.db_path = Path(db_path)
         self.batch_size = batch_size
+        self.read_only = read_only
         self._db: kuzu.Database | None = None
         self._conn: kuzu.Connection | None = None
         self._ref_count: int = 0  # Reentrant context manager reference count
@@ -130,13 +134,14 @@ class KuzuIngestor:
 
         import kuzu
 
-        logger.info(f"Opening Kùzu database at {self.db_path}")
+        mode_label = "read-only" if self.read_only else "read-write"
+        logger.info(f"Opening Kùzu database at {self.db_path} ({mode_label})")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         last_exc: Exception | None = None
         for attempt in range(DB_LOCK_MAX_RETRIES + 1):
             try:
-                self._db = kuzu.Database(str(self.db_path))
+                self._db = kuzu.Database(str(self.db_path), read_only=self.read_only)
                 self._conn = kuzu.Connection(self._db)
                 self._ref_count = 1
                 if attempt > 0:
