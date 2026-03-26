@@ -1,0 +1,2559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeGraphWiki 深度解析 — 把代码变成知识图谱</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DESIGN SYSTEM
+   ============================================================ */
+:root {
+  --color-bg:             #FAF7F2;
+  --color-bg-warm:        #F5F0E8;
+  --color-bg-code:        #1E1E2E;
+  --color-text:           #2C2A28;
+  --color-text-secondary: #6B6560;
+  --color-text-muted:     #9E9790;
+  --color-border:         #E5DFD6;
+  --color-border-light:   #EEEBE5;
+  --color-surface:        #FFFFFF;
+  --color-surface-warm:   #FDF9F3;
+
+  --color-accent:         #2A7B9B;
+  --color-accent-hover:   #1F6A87;
+  --color-accent-light:   #E4F2F7;
+  --color-accent-muted:   #5A9DB5;
+
+  --color-success:        #2D8B55;
+  --color-success-light:  #E8F5EE;
+  --color-error:          #C93B3B;
+  --color-error-light:    #FDE8E8;
+  --color-info:           #2A7B9B;
+  --color-info-light:     #E4F2F7;
+
+  --color-actor-1:        #D94F30;
+  --color-actor-2:        #2A7B9B;
+  --color-actor-3:        #7B6DAA;
+  --color-actor-4:        #D4A843;
+  --color-actor-5:        #2D8B55;
+
+  --font-display:  'Bricolage Grotesque', Georgia, serif;
+  --font-body:     'DM Sans', -apple-system, sans-serif;
+  --font-mono:     'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  1.875rem;
+  --text-4xl:  2.25rem;
+  --text-5xl:  3rem;
+  --text-6xl:  3.75rem;
+
+  --leading-tight:  1.15;
+  --leading-snug:   1.3;
+  --leading-normal: 1.6;
+  --leading-loose:  1.8;
+
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+
+  --content-width:      800px;
+  --content-width-wide: 1000px;
+  --nav-height:         50px;
+  --radius-sm:  8px;
+  --radius-md:  12px;
+  --radius-lg:  16px;
+  --radius-full: 9999px;
+
+  --shadow-sm:  0 1px 2px rgba(44,42,40,0.05);
+  --shadow-md:  0 4px 12px rgba(44,42,40,0.08);
+  --shadow-lg:  0 8px 24px rgba(44,42,40,0.1);
+  --shadow-xl:  0 16px 48px rgba(44,42,40,0.12);
+
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast:   150ms;
+  --duration-normal: 300ms;
+  --duration-slow:   500ms;
+  --stagger-delay:   120ms;
+}
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html {
+  scroll-snap-type: y proximity;
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-text);
+  background: var(--color-bg);
+  background-image: radial-gradient(ellipse at 20% 50%, rgba(42,123,155,0.03) 0%, transparent 50%);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--color-accent); text-decoration: none; }
+a:hover { color: var(--color-accent-hover); }
+img { max-width: 100%; display: block; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+pre, code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: hidden;
+}
+.translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: var(--nav-height);
+  background: rgba(250,247,242,0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 1000;
+  border-bottom: 1px solid var(--color-border-light);
+}
+.progress-bar {
+  position: absolute; top: 0; left: 0; height: 3px;
+  background: var(--color-accent);
+  width: 0%;
+  transition: width 100ms linear;
+}
+.nav-inner {
+  max-width: var(--content-width-wide);
+  margin: 0 auto;
+  height: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--space-6);
+}
+.nav-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+.nav-dots { display: flex; gap: var(--space-3); }
+.nav-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--color-text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  padding: 0;
+}
+.nav-dot:hover { border-color: var(--color-accent-muted); }
+.nav-dot.current {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  box-shadow: 0 0 8px rgba(42,123,155,0.3);
+}
+.nav-dot.visited {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+/* ============================================================
+   MODULES & SCREENS
+   ============================================================ */
+.module {
+  min-height: 100dvh;
+  min-height: 100vh;
+  scroll-snap-align: start;
+  padding: var(--space-16) var(--space-6);
+  padding-top: calc(var(--nav-height) + var(--space-12));
+}
+.module-content {
+  max-width: var(--content-width);
+  margin: 0 auto;
+}
+.module-header { margin-bottom: var(--space-12); }
+.module-number {
+  font-family: var(--font-display);
+  font-size: var(--text-6xl);
+  font-weight: 800;
+  color: var(--color-accent);
+  opacity: 0.15;
+  line-height: var(--leading-tight);
+}
+.module-title {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  line-height: var(--leading-tight);
+  margin-top: var(--space-2);
+}
+.module-subtitle {
+  font-size: var(--text-lg);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-3);
+  line-height: var(--leading-snug);
+}
+.module-body { display: flex; flex-direction: column; gap: var(--space-16); }
+.screen { display: flex; flex-direction: column; gap: var(--space-6); }
+.screen-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+}
+.screen p {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  max-width: 65ch;
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+.animate-in {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity var(--duration-slow) var(--ease-out),
+              transform var(--duration-slow) var(--ease-out);
+}
+.animate-in.visible { opacity: 1; transform: translateY(0); }
+.stagger-children > .animate-in {
+  transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay));
+}
+
+/* ============================================================
+   TRANSLATION BLOCKS
+   ============================================================ */
+.translation-block {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  margin: var(--space-4) 0;
+}
+.translation-code {
+  background: var(--color-bg-code);
+  color: #CDD6F4;
+  padding: var(--space-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  position: relative;
+  overflow-x: hidden;
+}
+.translation-code pre, .translation-code code {
+  white-space: pre-wrap; word-break: break-word; overflow-x: hidden;
+}
+.translation-english {
+  background: var(--color-surface-warm);
+  padding: var(--space-6);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  border-left: 3px solid var(--color-accent);
+}
+.translation-label {
+  position: absolute;
+  top: var(--space-2); right: var(--space-3);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  opacity: 0.5;
+  font-family: var(--font-mono);
+}
+.translation-english .translation-label {
+  color: var(--color-text-muted);
+  position: relative; top: auto; right: auto;
+  display: block; margin-bottom: var(--space-3);
+}
+.translation-lines { display: flex; flex-direction: column; gap: var(--space-3); }
+.tl { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+
+/* ============================================================
+   SYNTAX HIGHLIGHTING
+   ============================================================ */
+.code-keyword  { color: #CBA6F7; }
+.code-string   { color: #A6E3A1; }
+.code-function { color: #89B4FA; }
+.code-comment  { color: #6C7086; }
+.code-number   { color: #FAB387; }
+.code-property { color: #F9E2AF; }
+.code-operator { color: #94E2D5; }
+.code-tag      { color: #F38BA8; }
+.code-attr     { color: #F9E2AF; }
+.code-value    { color: #A6E3A1; }
+.code-type     { color: #89DCEB; }
+.code-decorator{ color: #FAB387; }
+
+/* ============================================================
+   CALLOUT BOXES
+   ============================================================ */
+.callout {
+  display: flex; gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-md);
+  margin: var(--space-4) 0;
+}
+.callout-accent {
+  background: var(--color-accent-light);
+  border-left: 4px solid var(--color-accent);
+}
+.callout-info {
+  background: var(--color-info-light);
+  border-left: 4px solid var(--color-info);
+}
+.callout-warning {
+  background: var(--color-error-light);
+  border-left: 4px solid var(--color-error);
+}
+.callout-icon { font-size: 1.5rem; flex-shrink: 0; }
+.callout-content { flex: 1; }
+.callout-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  display: block;
+  margin-bottom: var(--space-2);
+}
+.callout-content p { font-size: var(--text-sm); margin: 0; }
+
+/* ============================================================
+   PATTERN / FEATURE CARDS
+   ============================================================ */
+.pattern-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+.pattern-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal);
+}
+.pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+.pattern-icon {
+  width: 44px; height: 44px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.25rem; margin-bottom: var(--space-3); color: #fff;
+}
+.pattern-title {
+  font-family: var(--font-display);
+  font-weight: 600; font-size: var(--text-base);
+  margin-bottom: var(--space-2);
+}
+.pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); margin: 0; }
+
+/* ============================================================
+   FLOW STEPS
+   ============================================================ */
+.flow-steps {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap; justify-content: center;
+}
+.flow-step {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+  min-width: 120px;
+  flex: 1;
+}
+.flow-step-num {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--color-accent);
+  color: white; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display);
+  margin: 0 auto var(--space-2);
+  font-size: var(--text-sm);
+}
+.flow-step p { font-size: var(--text-sm); margin: 0; }
+.flow-arrow {
+  font-size: var(--text-2xl);
+  color: var(--color-accent);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   ICON ROWS
+   ============================================================ */
+.icon-rows { display: flex; flex-direction: column; gap: var(--space-4); }
+.icon-row {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+.icon-row p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+.icon-circle {
+  width: 48px; height: 48px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.25rem; flex-shrink: 0; color: #fff;
+}
+
+/* ============================================================
+   STEP CARDS
+   ============================================================ */
+.step-cards { display: flex; flex-direction: column; gap: var(--space-3); }
+.step-card {
+  display: flex; align-items: flex-start; gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-accent);
+  box-shadow: var(--shadow-sm);
+}
+.step-num {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--color-accent);
+  color: white; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display);
+  flex-shrink: 0;
+}
+.step-body p { margin: var(--space-1) 0 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+.step-body strong { font-size: var(--text-base); }
+
+/* ============================================================
+   FILE TREE
+   ============================================================ */
+.file-tree {
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  background: var(--color-surface);
+  padding: var(--space-6);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+.ft-folder, .ft-file {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--color-border-light);
+  margin-left: var(--space-4);
+}
+.ft-folder.root { margin-left: 0; border-left: none; }
+.ft-folder > .ft-name { color: var(--color-accent); font-weight: 600; }
+.ft-desc {
+  color: var(--color-text-secondary);
+  font-family: var(--font-body);
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+}
+.ft-children { margin-left: var(--space-4); }
+
+/* ============================================================
+   GLOSSARY TOOLTIPS
+   ============================================================ */
+.term {
+  border-bottom: 1.5px dashed var(--color-accent-muted);
+  cursor: pointer;
+  position: relative;
+}
+.term:hover, .term.active {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.term-tooltip {
+  position: fixed;
+  background: var(--color-bg-code);
+  color: #CDD6F4;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  line-height: var(--leading-normal);
+  width: max(200px, min(320px, 80vw));
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  z-index: 10000;
+}
+.term-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--color-bg-code);
+}
+.term-tooltip.visible { opacity: 1; }
+.term-tooltip.flip::after {
+  top: auto; bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: var(--color-bg-code);
+}
+
+/* ============================================================
+   QUIZ
+   ============================================================ */
+.quiz-container { margin: var(--space-6) 0; }
+.quiz-question-block { margin-bottom: var(--space-6); }
+.quiz-question {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-4);
+}
+.quiz-options { display: flex; flex-direction: column; gap: var(--space-3); }
+.quiz-option {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  cursor: pointer; width: 100%;
+  transition: border-color var(--duration-fast), background var(--duration-fast);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.quiz-option:hover { border-color: var(--color-accent-muted); }
+.quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+.quiz-option.correct { border-color: var(--color-success); background: var(--color-success-light); }
+.quiz-option.incorrect { border-color: var(--color-error); background: var(--color-error-light); }
+.quiz-option-radio {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--color-border);
+  transition: all var(--duration-fast);
+  flex-shrink: 0;
+}
+.quiz-option.selected .quiz-option-radio {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  box-shadow: inset 0 0 0 3px white;
+}
+.quiz-feedback {
+  max-height: 0; overflow: hidden; opacity: 0;
+  transition: max-height var(--duration-normal), opacity var(--duration-normal);
+  font-size: var(--text-sm);
+}
+.quiz-feedback.show {
+  max-height: 200px; opacity: 1;
+  padding: var(--space-3); margin-top: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.quiz-feedback.success { background: var(--color-success-light); color: #1a6b3a; }
+.quiz-feedback.error { background: var(--color-error-light); color: #a82d2d; }
+.quiz-feedback.warning { background: var(--color-accent-light); color: var(--color-accent); }
+.quiz-check-btn, .quiz-reset-btn {
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  border: none;
+  margin-right: var(--space-3);
+  margin-top: var(--space-4);
+}
+.quiz-check-btn {
+  background: var(--color-accent); color: white;
+}
+.quiz-check-btn:hover { background: var(--color-accent-hover); }
+.quiz-reset-btn {
+  background: var(--color-surface); color: var(--color-text);
+  border: 2px solid var(--color-border);
+}
+.quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+/* ============================================================
+   GROUP CHAT
+   ============================================================ */
+.chat-window {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  margin: var(--space-4) 0;
+}
+.chat-messages {
+  padding: var(--space-6);
+  min-height: 200px;
+  max-height: 450px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--space-4);
+}
+.chat-message {
+  display: flex; gap: var(--space-3);
+  animation: fadeSlideUp 0.3s var(--ease-out);
+}
+.chat-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-weight: 700; font-size: var(--text-xs);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+.chat-bubble {
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  max-width: 80%;
+}
+.chat-sender {
+  font-weight: 600; font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: block; margin-bottom: var(--space-1);
+}
+.chat-bubble p { font-size: var(--text-sm); margin: 0; }
+.chat-typing {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 0 var(--space-6) var(--space-4);
+}
+.chat-typing-dots {
+  display: flex; gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+}
+.typing-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--color-text-muted);
+  animation: typingBounce 1.4s infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-6px); }
+}
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-controls {
+  padding: var(--space-3) var(--space-6);
+  background: var(--color-bg);
+  display: flex; align-items: center; gap: var(--space-3);
+  border-top: 1px solid var(--color-border-light);
+}
+.chat-controls button {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.chat-controls button:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.chat-progress {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+/* ============================================================
+   DATA FLOW ANIMATION
+   ============================================================ */
+.flow-animation {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-8);
+  margin: var(--space-4) 0;
+}
+.flow-actors {
+  display: flex; justify-content: space-around; align-items: flex-start;
+  margin-bottom: var(--space-8);
+  flex-wrap: wrap; gap: var(--space-4);
+}
+.flow-actor {
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 2px solid var(--color-border-light);
+  transition: all var(--duration-normal) var(--ease-out);
+  min-width: 100px;
+  text-align: center;
+}
+.flow-actor.active {
+  box-shadow: 0 0 0 3px var(--color-accent), 0 0 20px rgba(42,123,155,0.2);
+  transform: scale(1.05);
+}
+.flow-actor-icon {
+  width: 48px; height: 48px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; color: white;
+}
+.flow-actor span {
+  font-size: var(--text-xs); font-weight: 600;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.flow-step-label {
+  text-align: center;
+  padding: var(--space-4);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  min-height: 60px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: var(--space-4);
+}
+.flow-controls {
+  display: flex; align-items: center; gap: var(--space-3);
+  justify-content: center;
+}
+.flow-controls button {
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--color-accent);
+  background: var(--color-accent);
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.flow-controls button:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.flow-controls button:last-of-type {
+  background: transparent;
+  color: var(--color-accent);
+}
+.flow-controls button:last-of-type:hover {
+  background: var(--color-accent-light);
+}
+.flow-progress {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ============================================================
+   BADGE LIST
+   ============================================================ */
+.badge-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.badge-item {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--duration-fast);
+}
+.badge-item:hover { border-color: var(--color-accent-muted); }
+.badge-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--color-bg-code);
+  color: #CBA6F7;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.badge-desc { font-size: var(--text-sm); color: var(--color-text-secondary); }
+
+/* ============================================================
+   SCENARIO BLOCK
+   ============================================================ */
+.scenario-block { margin: var(--space-4) 0; }
+.scenario-context {
+  background: var(--color-surface-warm);
+  border-left: 3px solid var(--color-actor-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin-bottom: var(--space-4);
+}
+.scenario-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-actor-4);
+  font-weight: 600;
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+/* ============================================================
+   ARCHITECTURE DIAGRAM
+   ============================================================ */
+.arch-diagram {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-md);
+  margin: var(--space-4) 0;
+}
+.arch-zones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+.arch-zone {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+}
+.arch-zone-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-4);
+}
+.arch-component {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.arch-component:hover {
+  background: var(--color-accent-light);
+  box-shadow: var(--shadow-sm);
+}
+.arch-component .arch-icon { font-size: 1.25rem; }
+.arch-description {
+  margin-top: var(--space-6);
+  padding: var(--space-4);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  text-align: center;
+  min-height: 60px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 768px) {
+  :root {
+    --text-4xl: 1.875rem;
+    --text-5xl: 2.25rem;
+    --text-6xl: 3rem;
+  }
+  .translation-block { grid-template-columns: 1fr; }
+  .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+  .pattern-cards { grid-template-columns: 1fr 1fr; }
+  .arch-zones { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  :root {
+    --text-4xl: 1.5rem;
+    --text-5xl: 1.875rem;
+    --text-6xl: 2.25rem;
+  }
+  .module { padding: var(--space-8) var(--space-4); }
+  .pattern-cards { grid-template-columns: 1fr; }
+  .flow-steps { flex-direction: column; }
+  .flow-arrow { transform: rotate(90deg); }
+  .flow-actors { flex-direction: column; align-items: center; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     NAVIGATION
+     ============================================================ -->
+<nav class="nav">
+  <div class="progress-bar" id="progress-bar"></div>
+  <div class="nav-inner">
+    <span class="nav-title">CodeGraphWiki 深度解析</span>
+    <div class="nav-dots">
+      <button class="nav-dot" data-target="module-0" title="Welcome"></button>
+      <button class="nav-dot" data-target="module-1" title="What It Does"></button>
+      <button class="nav-dot" data-target="module-2" title="Meet the Actors"></button>
+      <button class="nav-dot" data-target="module-3" title="Pipeline"></button>
+      <button class="nav-dot" data-target="module-4" title="Tree-sitter"></button>
+      <button class="nav-dot" data-target="module-5" title="Memory Palace"></button>
+      <button class="nav-dot" data-target="module-6" title="AI Bridge"></button>
+      <button class="nav-dot" data-target="module-7" title="Big Picture"></button>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================
+     MODULE 0: WELCOME / HERO
+     ============================================================ -->
+<section class="module" id="module-0" style="background: var(--color-bg); display:flex; align-items:center;">
+  <div class="module-content" style="text-align:center;">
+    <div class="animate-in" style="margin-bottom: var(--space-8);">
+      <div style="font-size: 4rem; margin-bottom: var(--space-6);">🔬</div>
+      <h1 style="font-family: var(--font-display); font-size: var(--text-5xl); font-weight: 800; line-height: var(--leading-tight); max-width: 700px; margin: 0 auto;">
+        把代码变成<span style="color: var(--color-accent);">知识图谱</span>
+      </h1>
+      <p style="font-size: var(--text-lg); color: var(--color-text-secondary); max-width: 500px; margin: var(--space-6) auto 0; line-height: var(--leading-normal);">
+        深入了解 CodeGraphWiki 如何将一堆源代码文件，变成 AI 助手能理解和搜索的结构化知识。
+      </p>
+    </div>
+
+    <div class="animate-in" style="margin-top: var(--space-10);">
+      <div class="flow-steps" style="max-width: 700px; margin: 0 auto;">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <p>源代码</p>
+        </div>
+        <div class="flow-arrow">&rarr;</div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <p>语法树解析</p>
+        </div>
+        <div class="flow-arrow">&rarr;</div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <p>知识图谱</p>
+        </div>
+        <div class="flow-arrow">&rarr;</div>
+        <div class="flow-step">
+          <div class="flow-step-num">4</div>
+          <p>AI 可搜索</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="animate-in" style="margin-top: var(--space-12);">
+      <p style="font-size: var(--text-sm); color: var(--color-text-muted);">向下滚动开始学习 &darr;</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 1: WHAT IS CODEGRAPHWIKI
+     ============================================================ -->
+<section class="module" id="module-1" style="background: var(--color-bg-warm);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">这东西到底干嘛的？</h1>
+      <p class="module-subtitle">想象你有一个巨大的代码仓库，里面有成千上万个函数——CodeGraphWiki 能让 AI 真正"读懂"它们</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: The Problem -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">问题：AI 看代码就像大海捞针</h2>
+        <p>你让 AI 助手帮你改一个 bug，但它不知道你的项目里有哪些<span class="term" data-definition="函数是一段有名字的代码块，负责完成一个特定的任务。就像一个做蛋糕的食谱——给它原料（参数），它给你结果（返回值）。">函数</span>、它们之间怎么调用、谁依赖谁。它只能一个文件一个文件地"扫"，效率很低，还经常遗漏关键信息。</p>
+        <p>CodeGraphWiki 解决的就是这个问题：<strong>它给代码仓库做一次彻底的"体检"，把所有函数、类、调用关系整理成一张关系网络</strong>——然后 AI 助手就能在这张网上精准搜索。</p>
+      </section>
+
+      <!-- Screen 2: What It Does - Step Cards -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">它做了什么：从源码到智能搜索的四步</h2>
+        <div class="step-cards">
+          <div class="step-card">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <strong>解剖代码结构</strong>
+              <p>用 <span class="term" data-definition="Tree-sitter 是一个代码解析工具，能把源代码变成一棵'语法树'——就像把一篇文章拆解成句子、单词、标点符号。它支持几乎所有主流编程语言。">Tree-sitter</span> 把每个文件的函数、类、调用关系提取出来，存入<span class="term" data-definition="图数据库是一种专门存储'谁和谁有关系'的数据库。想象一个社交网络图，每个人是一个节点，朋友关系是连线。图数据库就是专门做这件事的。">图数据库</span></p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <strong>生成 API 文档</strong>
+              <p>查询图数据库，为每个函数自动生成文档——包含签名、调用关系树、参数说明</p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <strong>创建语义搜索索引</strong>
+              <p>把函数文档转化为<span class="term" data-definition="向量嵌入（Vector Embedding）是把文字变成一串数字的技术。意思相近的文字会变成相似的数字。这样计算机就能通过'比较数字'来理解'意思相近'。">向量嵌入</span>，让你用自然语言搜索代码——比如问"怎么解析类型"就能找到 parse_btype 函数</p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">4</div>
+            <div class="step-body">
+              <strong>生成 Wiki 百科</strong>
+              <p>用 <span class="term" data-definition="LLM（Large Language Model，大语言模型）就是像 ChatGPT、Claude 这样的 AI 模型。它通过学习海量文本，能理解和生成人类语言。">LLM</span> 自动写一套多页技术文档，解释整个项目的架构和设计思路</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: The Aha Moment -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">打个比方</h2>
+        <p>想象一个巨大的图书馆，几十万本书（代码文件）杂乱无章地堆在地上。</p>
+
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">核心洞察</strong>
+            <p>CodeGraphWiki 就像一个图书管理员：它先给每本书编号（解析），然后制作一套卡片目录记录"哪本书引用了哪本书"（知识图谱），再写一本使用指南（Wiki），最后装上一个智能搜索终端，让你用普通话就能找到想要的书（语义搜索）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: A Concrete Example -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">真实场景：你在 Claude Code 里问了一个问题</h2>
+        <p>假设你在用 <span class="term" data-definition="Claude Code 是 Anthropic 公司出品的 AI 编程助手 CLI 工具。它能帮你写代码、改 bug、理解项目。CodeGraphWiki 就是给它'装上眼睛'的工具。">Claude Code</span>，对一个已经被 CodeGraphWiki 索引过的项目说：</p>
+        <p style="font-style: italic; color: var(--color-accent); font-weight: 600;">"这个项目里怎么处理函数调用关系的？"</p>
+
+        <div class="step-cards" style="margin-top: var(--space-4);">
+          <div class="step-card" style="border-left-color: var(--color-actor-1);">
+            <div class="step-num" style="background: var(--color-actor-1);">1</div>
+            <div class="step-body">
+              <strong>Claude Code 调用 find_api 工具</strong>
+              <p>把你的问题发给 CodeGraphWiki 的 <span class="term" data-definition="MCP（Model Context Protocol，模型上下文协议）是一个标准协议，让 AI 助手能调用外部工具。就像 USB 接口——不管什么设备，只要用同一个接口就能连上。">MCP</span> 服务器</p>
+            </div>
+          </div>
+          <div class="step-card" style="border-left-color: var(--color-actor-2);">
+            <div class="step-num" style="background: var(--color-actor-2);">2</div>
+            <div class="step-body">
+              <strong>语义搜索启动</strong>
+              <p>把问题转化为向量，在索引里找到最相关的函数——比如 CallProcessor、call_resolver</p>
+            </div>
+          </div>
+          <div class="step-card" style="border-left-color: var(--color-actor-3);">
+            <div class="step-num" style="background: var(--color-actor-3);">3</div>
+            <div class="step-body">
+              <strong>返回完整上下文</strong>
+              <p>不仅返回函数名，还附带完整的 API 文档、调用关系树、源代码位置</p>
+            </div>
+          </div>
+          <div class="step-card" style="border-left-color: var(--color-actor-5);">
+            <div class="step-num" style="background: var(--color-actor-5);">4</div>
+            <div class="step-body">
+              <strong>Claude 给出精准回答</strong>
+              <p>有了这些上下文，Claude 能告诉你具体哪个文件、哪一行在处理调用关系</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Quiz -->
+      <section class="screen animate-in" id="quiz-m1">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m1q1" data-correct="m1q1-b">
+            <h3 class="quiz-question">你的 AI 助手在大项目里总是找不到关键函数。根据刚才学到的，CodeGraphWiki 主要通过什么方式解决这个问题？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m1q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>给每个文件加上更多注释，让 AI 更容易读</span>
+              </button>
+              <button class="quiz-option" data-value="m1q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把代码关系整理成图谱 + 向量索引，让 AI 能按"意思"搜索</span>
+              </button>
+              <button class="quiz-option" data-value="m1q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把整个代码库复制到 AI 的上下文窗口里</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m1q1-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block" data-question="m1q2" data-correct="m1q2-c">
+            <h3 class="quiz-question">如果你想让 AI 更好地理解一个新项目，你应该先做什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m1q2-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>手动写一份项目文档给 AI 读</span>
+              </button>
+              <button class="quiz-option" data-value="m1q2-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>让 AI 一个文件一个文件地扫描</span>
+              </button>
+              <button class="quiz-option" data-value="m1q2-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>用 CodeGraphWiki 索引项目，构建知识图谱和搜索索引</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m1q2-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m1')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m1')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 2: MEET THE ACTORS
+     ============================================================ -->
+<section class="module" id="module-2" style="background: var(--color-bg);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">02</span>
+      <h1 class="module-title">认识主角们</h1>
+      <p class="module-subtitle">五个核心组件，各司其职，像一条精密的流水线</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: The Cast -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">五大角色一览</h2>
+        <p>这个项目的所有功能，归根结底由五个"角色"完成。想象一个快递分拣中心：每个角色负责流水线上的一个环节。</p>
+
+        <div class="icon-rows stagger-children">
+          <div class="icon-row animate-in">
+            <div class="icon-circle" style="background: var(--color-actor-1);">🔍</div>
+            <div>
+              <strong>Tree-sitter 解析器</strong>
+              <p>"验货员"——把源代码文件拆解成结构化的语法树，提取出函数、类、调用关系</p>
+            </div>
+          </div>
+          <div class="icon-row animate-in">
+            <div class="icon-circle" style="background: var(--color-actor-2);">🗄️</div>
+            <div>
+              <strong>Kuzu 图数据库</strong>
+              <p>"档案馆"——把所有代码实体和它们的关系存成一张巨大的网络图</p>
+            </div>
+          </div>
+          <div class="icon-row animate-in">
+            <div class="icon-circle" style="background: var(--color-actor-3);">📝</div>
+            <div>
+              <strong>API 文档生成器</strong>
+              <p>"文书"——查询图数据库，为每个函数写出详细的技术文档</p>
+            </div>
+          </div>
+          <div class="icon-row animate-in">
+            <div class="icon-circle" style="background: var(--color-actor-4);">🧠</div>
+            <div>
+              <strong>向量嵌入引擎</strong>
+              <p>"翻译官"——把文档变成数字向量，让计算机能通过"比较数字"来理解"意思相近"</p>
+            </div>
+          </div>
+          <div class="icon-row animate-in">
+            <div class="icon-circle" style="background: var(--color-actor-5);">🔌</div>
+            <div>
+              <strong>MCP 服务器</strong>
+              <p>"前台接待"——对外暴露 19 个工具，让 Claude Code 等 AI 助手随时查询</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 2: File Tree -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">它们住在哪里</h2>
+        <p>每个角色对应项目中特定的文件和文件夹：</p>
+
+        <div class="file-tree">
+          <div class="ft-folder root">
+            <span class="ft-name">code_graph_builder/</span>
+            <span class="ft-desc">Python 主包——所有核心逻辑都在这里</span>
+            <div class="ft-children">
+              <div class="ft-file">
+                <span class="ft-name">📄 builder.py</span>
+                <span class="ft-desc">核心入口——CodeGraphBuilder 类，启动整个图构建流程</span>
+              </div>
+              <div class="ft-folder">
+                <span class="ft-name">📁 parsers/</span>
+                <span class="ft-desc">Tree-sitter 解析器——拆解代码的"验货员"</span>
+                <div class="ft-children">
+                  <div class="ft-file"><span class="ft-name">📄 definition_processor.py</span> <span class="ft-desc">提取函数、类的定义</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 call_processor.py</span> <span class="ft-desc">提取函数调用关系</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 call_resolver.py</span> <span class="ft-desc">解析函数名到完整限定名</span></div>
+                </div>
+              </div>
+              <div class="ft-folder">
+                <span class="ft-name">📁 services/</span>
+                <span class="ft-desc">数据库服务——"档案馆"的管理层</span>
+                <div class="ft-children">
+                  <div class="ft-file"><span class="ft-name">📄 kuzu_service.py</span> <span class="ft-desc">Kuzu 图数据库的读写操作</span></div>
+                </div>
+              </div>
+              <div class="ft-folder">
+                <span class="ft-name">📁 embeddings/</span>
+                <span class="ft-desc">向量嵌入——"翻译官"的工作间</span>
+                <div class="ft-children">
+                  <div class="ft-file"><span class="ft-name">📄 qwen3_embedder.py</span> <span class="ft-desc">调用 Qwen3 API 生成嵌入向量</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 vector_store.py</span> <span class="ft-desc">存储和搜索向量</span></div>
+                </div>
+              </div>
+              <div class="ft-folder">
+                <span class="ft-name">📁 mcp/</span>
+                <span class="ft-desc">MCP 服务器——"前台接待"所在地</span>
+                <div class="ft-children">
+                  <div class="ft-file"><span class="ft-name">📄 server.py</span> <span class="ft-desc">服务器启动入口</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 tools.py</span> <span class="ft-desc">19 个 MCP 工具的定义</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 pipeline.py</span> <span class="ft-desc">四步流水线的编排</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Callout -->
+      <section class="screen animate-in">
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">关键洞察：分而治之</strong>
+            <p>注意每个文件夹只负责一件事。这种"把大问题拆成小问题"的策略，工程师叫它<span class="term" data-definition="关注点分离（Separation of Concerns）是软件设计的核心原则之一：每个模块只负责一件事。就像医院分科——心内科只管心脏，骨科只管骨头。这样每个部分更容易维护和替换。">关注点分离</span>。下次你让 AI 搭建新项目时，可以明确要求："把解析逻辑、数据库操作、对外接口分开放在不同的文件夹里。"</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: Code Translation -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">看看核心入口长什么样</h2>
+        <p>builder.py 里的 CodeGraphBuilder 类是整个项目的起点：</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-keyword">class</span> <span class="code-function">CodeGraphBuilder</span>:
+    <span class="code-keyword">def</span> <span class="code-function">__init__</span>(<span class="code-property">self</span>,
+        <span class="code-property">repo_path</span>: <span class="code-type">str</span> | <span class="code-type">Path</span>,
+        <span class="code-property">backend</span>: <span class="code-type">str</span> = <span class="code-string">"kuzu"</span>,
+        <span class="code-property">backend_config</span>: <span class="code-type">dict</span> | <span class="code-type">None</span> = <span class="code-keyword">None</span>,
+        <span class="code-property">scan_config</span>: <span class="code-type">dict</span> | <span class="code-type">None</span> = <span class="code-keyword">None</span>,
+    ) -> <span class="code-keyword">None</span>:</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">定义一个叫 CodeGraphBuilder 的"蓝图"（类）</p>
+              <p class="tl">它的初始化需要以下材料：</p>
+              <p class="tl"><strong>repo_path</strong>——你想分析的代码仓库在哪个文件夹</p>
+              <p class="tl"><strong>backend</strong>——用什么数据库存储，默认是 "kuzu"（一个不需要安装服务器的轻量数据库）</p>
+              <p class="tl"><strong>backend_config</strong>——数据库的配置细节（可选）</p>
+              <p class="tl"><strong>scan_config</strong>——扫描时要排除哪些文件夹（可选）</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Quiz -->
+      <section class="screen animate-in" id="quiz-m2">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m2q1" data-correct="m2q1-b">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">场景</span>
+                <p>你想给 CodeGraphWiki 换一个不同的向量搜索引擎（比如从内存搜索换成 Qdrant 云服务），你应该主要修改哪个目录？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m2q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>parsers/ ——因为搜索需要先解析代码</span>
+              </button>
+              <button class="quiz-option" data-value="m2q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>embeddings/ ——因为向量存储和搜索逻辑在这里</span>
+              </button>
+              <button class="quiz-option" data-value="m2q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>mcp/ ——因为搜索结果要通过 MCP 返回</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m2q1-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m2')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m2')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 3: HOW THE PIECES TALK (PIPELINE)
+     ============================================================ -->
+<section class="module" id="module-3" style="background: var(--color-bg-warm);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">数据如何流动</h1>
+      <p class="module-subtitle">跟踪一次完整的代码索引过程——从"一堆文件"到"AI 能搜索的知识"</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: Group Chat Animation -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">组件之间的"群聊"</h2>
+        <p>当你执行 <code style="background: var(--color-bg-code); color: #CDD6F4; padding: 2px 8px; border-radius: 4px; font-size: var(--text-sm);">initialize_repository</code> 时，幕后发生的事就像这段对话：</p>
+
+        <div class="chat-window" id="chat-pipeline">
+          <div class="chat-messages" id="chat-pipeline-messages">
+            <div class="chat-message" data-msg="0" data-sender="mcp" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-5);">MCP</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-5);">MCP 服务器</span>
+                <p>收到用户请求——要索引 /path/to/repo。Pipeline，你来编排整个流程吧！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="1" data-sender="pipeline" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4);">PL</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4);">Pipeline 编排器</span>
+                <p>收到！先让 Tree-sitter 上场。嘿 Parser，先把这个仓库的代码全部拆解一遍！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="2" data-sender="treesitter" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-1);">TS</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-1);">Tree-sitter</span>
+                <p>正在解析... 发现 42 个 Python 文件，提取了 156 个函数、23 个类、89 条调用关系。全部写入 Kuzu 了！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="3" data-sender="kuzu" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-2);">KZ</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-2);">Kuzu 数据库</span>
+                <p>数据全部入库。现在有 156 个 Function 节点、23 个 Class 节点、89 条 CALLS 边。图谱构建完成！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="4" data-sender="pipeline" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4);">PL</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4);">Pipeline 编排器</span>
+                <p>好的，Step 1 完成 (15%)。现在开始生成 API 文档... Doc Generator，轮到你了！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="5" data-sender="docgen" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-3);">DOC</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-3);">API 文档生成器</span>
+                <p>查询图数据库中... 为每个函数生成了三级文档：索引页 → 模块详情 → 函数详情。写入 api_docs/ 目录了。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="6" data-sender="pipeline" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4);">PL</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4);">Pipeline 编排器</span>
+                <p>文档 OK。现在 Embedder，把这些文档全部向量化！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="7" data-sender="embedder" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4);">EM</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4);">向量嵌入引擎</span>
+                <p>正在调用 Qwen3 API... 每批 10 个函数... 156 个函数全部转成 1536 维向量了。保存到 vectors.pkl。</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="8" data-sender="pipeline" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4);">PL</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-4);">Pipeline 编排器</span>
+                <p>进度 40%。最后一步——Wiki 生成器，请用 LLM 写一套项目百科！</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="9" data-sender="wiki" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-5);">WK</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: var(--color-actor-5);">Wiki 生成器</span>
+                <p>规划了 8 个页面... 正在逐页生成... 完成！所有 Wiki 页面已写入 wiki/ 目录。整个流水线 100% 完成！🎉</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-typing" id="chat-pipeline-typing" style="display:none">
+            <div class="chat-avatar" id="chat-pipeline-typing-avatar">?</div>
+            <div class="chat-typing-dots">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+
+          <div class="chat-controls">
+            <button onclick="playChatNext('pipeline')">下一条</button>
+            <button onclick="playChatAll('pipeline')">自动播放</button>
+            <button onclick="resetChat('pipeline')">重播</button>
+            <span class="chat-progress" id="chat-pipeline-progress">0 / 10 条消息</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 2: Data Flow Animation -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">数据流动路径</h2>
+
+        <div class="flow-animation" id="flow-pipeline">
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-pipeline-source">
+              <div class="flow-actor-icon" style="background: var(--color-text-muted);">📂</div>
+              <span>源代码</span>
+            </div>
+            <div class="flow-actor" id="flow-pipeline-parser">
+              <div class="flow-actor-icon" style="background: var(--color-actor-1);">🔍</div>
+              <span>Tree-sitter</span>
+            </div>
+            <div class="flow-actor" id="flow-pipeline-kuzu">
+              <div class="flow-actor-icon" style="background: var(--color-actor-2);">🗄️</div>
+              <span>Kuzu DB</span>
+            </div>
+            <div class="flow-actor" id="flow-pipeline-embed">
+              <div class="flow-actor-icon" style="background: var(--color-actor-4);">🧠</div>
+              <span>Embedder</span>
+            </div>
+            <div class="flow-actor" id="flow-pipeline-mcp">
+              <div class="flow-actor-icon" style="background: var(--color-actor-5);">🔌</div>
+              <span>MCP Server</span>
+            </div>
+          </div>
+
+          <div class="flow-step-label" id="flow-pipeline-label">点击"下一步"开始</div>
+
+          <div class="flow-controls">
+            <button onclick="flowNext('pipeline')">下一步</button>
+            <button onclick="flowReset('pipeline')">重置</button>
+            <span class="flow-progress" id="flow-pipeline-progress">步骤 0 / 6</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Progress Weight Code Translation -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">进度条背后的秘密</h2>
+        <p>当 AI 助手显示"索引中... 35%"时，这个数字是怎么算出来的？看看 pipeline.py 里的权重分配：</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-type">ProgressCb</span> = <span class="code-type">Callable</span>[[<span class="code-type">str</span>, <span class="code-type">float</span>], <span class="code-keyword">None</span>] | <span class="code-keyword">None</span>
+<span class="code-comment">"""Progress callback: (message, percentage_0_to_100)</span>
+<span class="code-comment"></span>
+<span class="code-comment">Pipeline weight allocation:</span>
+<span class="code-comment">    Step 1 (graph + API docs):  0 – 15 %</span>
+<span class="code-comment">    Step 2 (embeddings):       15 – 40 %</span>
+<span class="code-comment">    Step 3 (wiki generation):  40 – 100 %</span>
+<span class="code-comment">"""</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">定义一个"进度回调"——用来向外界报告"做到哪了"</p>
+              <p class="tl">它接收两个参数：一条消息描述和一个 0-100 的百分比</p>
+              <p class="tl">权重怎么分：</p>
+              <p class="tl">图谱构建 + 文档生成 = 0% 到 15%（最快的步骤）</p>
+              <p class="tl">向量嵌入 = 15% 到 40%（需要调 API，比较慢）</p>
+              <p class="tl">Wiki 生成 = 40% 到 100%（需要 LLM 逐页生成，最耗时）</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout callout-info">
+          <div class="callout-icon">📌</div>
+          <div class="callout-content">
+            <strong class="callout-title">为什么这样分配？</strong>
+            <p>图谱构建是纯本地计算（快），向量嵌入要调外部 API（中等），Wiki 生成要让 LLM 逐页思考并写长文（慢）。所以 Wiki 占了 60% 的进度权重。下次你看到进度条前 40% 跑得飞快、后面慢下来，就知道原因了！</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: Quiz -->
+      <section class="screen animate-in" id="quiz-m3">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m3q1" data-correct="m3q1-c">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">场景</span>
+                <p>索引一个大项目时，进度条卡在 42% 很长时间不动。根据你了解的进度权重分配，最可能是哪个步骤正在运行？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m3q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Step 1 图谱构建——在解析大量文件</span>
+              </button>
+              <button class="quiz-option" data-value="m3q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Step 2 向量嵌入——在调用嵌入 API</span>
+              </button>
+              <button class="quiz-option" data-value="m3q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Step 3 Wiki 生成——LLM 正在逐页写文档</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m3q1-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m3')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m3')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 4: TREE-SITTER - READING CODE LIKE AN X-RAY
+     ============================================================ -->
+<section class="module" id="module-4" style="background: var(--color-bg);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">04</span>
+      <h1 class="module-title">给代码做 X 光</h1>
+      <p class="module-subtitle">Tree-sitter 是怎么把一段看似普通的代码文本，变成结构化数据的</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: What is AST -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">代码的"骨骼扫描"</h2>
+        <p>人类读代码时，自然而然能看出"这是一个函数"、"这里调用了另一个函数"。但对计算机来说，代码只是一长串字符。</p>
+        <p><span class="term" data-definition="抽象语法树（Abstract Syntax Tree, AST）是代码的结构化表示。它把代码按语法规则拆解成一棵树——每个节点代表一个语法元素（函数、变量、表达式等）。就像把一个句子拆成'主语-谓语-宾语'的树形图。">AST</span>（抽象语法树）就是让计算机"读懂"代码结构的方式——把平面文本变成一棵有层次的树。</p>
+
+        <div class="pattern-cards">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-1);">
+            <div class="pattern-icon" style="background: var(--color-actor-1);">📄</div>
+            <h4 class="pattern-title">源代码文本</h4>
+            <p class="pattern-desc">def add(a, b): return a + b</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-2);">
+            <div class="pattern-icon" style="background: var(--color-actor-2);">🌳</div>
+            <h4 class="pattern-title">语法树</h4>
+            <p class="pattern-desc">function_definition → name: "add" → params: ["a", "b"] → body: binary_op(a + b)</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-3);">
+            <div class="pattern-icon" style="background: var(--color-actor-3);">📊</div>
+            <h4 class="pattern-title">结构化数据</h4>
+            <p class="pattern-desc">{name: "add", params: 2, return_type: "inferred", line: 1}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 2: How Tree-sitter Queries Work -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Tree-sitter 的"搜索模式"</h2>
+        <p>Tree-sitter 不只是生成语法树——它还支持<span class="term" data-definition="查询模式（Query Pattern）是一种声明式的匹配规则。你告诉 Tree-sitter '我要找所有函数定义'，它就在语法树中帮你找出来。类似数据库里的 SQL 查询，只不过查询的对象是代码的语法树。">查询模式</span>，让你可以精确地说"我要找所有函数定义"。</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-comment"># Python 函数查询模式</span>
+(<span class="code-function">function_definition</span>
+  <span class="code-property">name</span>: (<span class="code-type">identifier</span>) <span class="code-decorator">@func_name</span>
+  <span class="code-property">parameters</span>: (<span class="code-type">parameters</span>) <span class="code-decorator">@params</span>
+  <span class="code-property">body</span>: (<span class="code-type">block</span>) <span class="code-decorator">@body</span>
+)</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">在语法树里寻找所有"函数定义"节点</p>
+              <p class="tl">把函数名捕获到变量 @func_name 里</p>
+              <p class="tl">把参数列表捕获到变量 @params 里</p>
+              <p class="tl">把函数体捕获到变量 @body 里</p>
+              <p class="tl">就像一个模板——"找到所有长这个样子的东西"</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Multi-language support -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一个工具，十种语言</h2>
+        <p>CodeGraphWiki 支持从 Python 到 Rust 的 10+ 种编程语言。每种语言有自己的查询模式，因为语法不同：</p>
+
+        <div class="badge-list">
+          <div class="badge-item">
+            <code class="badge-code">Python</code>
+            <span class="badge-desc">function_definition → 直接匹配 def 关键字</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">C/C++</code>
+            <span class="badge-desc">function_definition → 还要检查 storage_class_specifier (static 等)</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">JavaScript</code>
+            <span class="badge-desc">function_declaration + arrow_function → 两种函数写法都要匹配</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">Rust</code>
+            <span class="badge-desc">function_item → 还要提取 trait、impl 块</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">Go</code>
+            <span class="badge-desc">function_declaration + method_declaration → 区分普通函数和方法</span>
+          </div>
+        </div>
+
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">为什么不用正则表达式？</strong>
+            <p>你可能想："直接用<span class="term" data-definition="正则表达式（Regular Expression, Regex）是一种文本匹配模式。比如 'def \\w+' 可以匹配所有 Python 函数定义的第一行。但它只是字符串匹配，不理解代码的层级结构。">正则表达式</span>匹配 'def' 不就行了？"问题是正则不理解嵌套——它分不清一个 def 是顶层函数还是嵌套在 if 块里的。Tree-sitter 理解整个语法结构，所以永远不会搞混。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: DefinitionProcessor Code -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">DefinitionProcessor：提取定义的工人</h2>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-keyword">class</span> <span class="code-function">DefinitionProcessor</span>:
+    <span class="code-keyword">def</span> <span class="code-function">__init__</span>(<span class="code-property">self</span>,
+        <span class="code-property">ingestor</span>: <span class="code-type">IngestorProtocol</span>,
+        <span class="code-property">repo_path</span>: <span class="code-type">Path</span>,
+        <span class="code-property">project_name</span>: <span class="code-type">str</span>,
+        <span class="code-property">function_registry</span>: <span class="code-type">FunctionRegistryTrieProtocol</span>,
+        <span class="code-property">simple_name_lookup</span>: <span class="code-type">SimpleNameLookup</span>,
+        <span class="code-property">import_processor</span>: <span class="code-type">ImportProcessor</span>,
+    ):</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">定义"定义处理器"——它的工作是从语法树中提取函数和类</p>
+              <p class="tl">它需要这些"工具"才能工作：</p>
+              <p class="tl"><strong>ingestor</strong>——用来把结果写入数据库的接口</p>
+              <p class="tl"><strong>repo_path</strong>——代码仓库的路径</p>
+              <p class="tl"><strong>function_registry</strong>——一个"电话簿"，记录所有已知函数的完整名称</p>
+              <p class="tl"><strong>simple_name_lookup</strong>——一个快速查找表，函数简称→完整名</p>
+              <p class="tl"><strong>import_processor</strong>——处理 import 语句的伙伴，帮助解析跨模块调用</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Quiz -->
+      <section class="screen animate-in" id="quiz-m4">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m4q1" data-correct="m4q1-b">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">场景</span>
+                <p>你想让 CodeGraphWiki 支持一门新的编程语言（比如 Kotlin）。你需要添加什么？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m4q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>给 Kuzu 数据库添加新的表结构</span>
+              </button>
+              <button class="quiz-option" data-value="m4q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>在 language_spec.py 中添加 Kotlin 的语法查询模式和文件扩展名</span>
+              </button>
+              <button class="quiz-option" data-value="m4q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>重写 MCP 服务器让它支持 Kotlin 的 API</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m4q1-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m4')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m4')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 5: THE MEMORY PALACE
+     ============================================================ -->
+<section class="module" id="module-5" style="background: var(--color-bg-warm);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">05</span>
+      <h1 class="module-title">记忆宫殿</h1>
+      <p class="module-subtitle">图数据库和向量搜索——两种截然不同但互补的记忆方式</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: Two Memory Systems -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">两套记忆系统</h2>
+        <p>CodeGraphWiki 用两种完全不同的方式存储知识，就像人脑的两种记忆方式：</p>
+
+        <div class="pattern-cards" style="grid-template-columns: 1fr 1fr;">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-2);">
+            <div class="pattern-icon" style="background: var(--color-actor-2);">🗺️</div>
+            <h4 class="pattern-title">Kuzu 图数据库</h4>
+            <p class="pattern-desc">像一张城市地图——记录"A 调用 B"、"C 继承 D"这样的精确关系。适合回答"谁调用了这个函数？"</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-4);">
+            <div class="pattern-icon" style="background: var(--color-actor-4);">🧭</div>
+            <h4 class="pattern-title">向量存储</h4>
+            <p class="pattern-desc">像一个"意思相似度"引擎——你说"处理类型"，它就能找到"parse_btype"。适合回答"哪个函数做了类似的事？"</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 2: Graph Schema -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">图谱里有什么</h2>
+        <p>图数据库用<span class="term" data-definition="Cypher 是一种图数据库查询语言，就像 SQL 是关系型数据库的查询语言。它用箭头表示关系，比如 (a)-[:CALLS]->(b) 意思是 'a 调用 b'。">Cypher</span> 语言查询。节点是代码实体，边是它们之间的关系：</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6);">
+          <div>
+            <h3 style="font-family: var(--font-display); font-size: var(--text-lg); margin-bottom: var(--space-4);">节点类型</h3>
+            <div class="badge-list">
+              <div class="badge-item"><code class="badge-code">Function</code> <span class="badge-desc">函数</span></div>
+              <div class="badge-item"><code class="badge-code">Class</code> <span class="badge-desc">类</span></div>
+              <div class="badge-item"><code class="badge-code">Module</code> <span class="badge-desc">模块/文件</span></div>
+              <div class="badge-item"><code class="badge-code">Type</code> <span class="badge-desc">类型定义</span></div>
+            </div>
+          </div>
+          <div>
+            <h3 style="font-family: var(--font-display); font-size: var(--text-lg); margin-bottom: var(--space-4);">关系类型</h3>
+            <div class="badge-list">
+              <div class="badge-item"><code class="badge-code">CALLS</code> <span class="badge-desc">函数 A 调用了函数 B</span></div>
+              <div class="badge-item"><code class="badge-code">DEFINES</code> <span class="badge-desc">模块定义了某个函数</span></div>
+              <div class="badge-item"><code class="badge-code">INHERITS</code> <span class="badge-desc">类继承自另一个类</span></div>
+              <div class="badge-item"><code class="badge-code">IMPORTS</code> <span class="badge-desc">模块导入了另一个模块</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Cosine Similarity Code -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">向量搜索的核心魔法</h2>
+        <p>向量搜索的关键是<span class="term" data-definition="余弦相似度（Cosine Similarity）用来衡量两个向量'方向有多接近'。值从 -1（完全相反）到 1（完全一致）。如果两段文字描述的是类似的事情，它们的向量方向会接近，余弦相似度就高。">余弦相似度</span>——比较两个向量的"方向"是否接近：</p>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-keyword">def</span> <span class="code-function">cosine_similarity</span>(<span class="code-property">a</span>: <span class="code-type">list</span>[<span class="code-type">float</span>], <span class="code-property">b</span>: <span class="code-type">list</span>[<span class="code-type">float</span>]) -> <span class="code-type">float</span>:
+    <span class="code-property">dot_product</span> = <span class="code-function">sum</span>(<span class="code-property">x</span> * <span class="code-property">y</span> <span class="code-keyword">for</span> <span class="code-property">x</span>, <span class="code-property">y</span> <span class="code-keyword">in</span> <span class="code-function">zip</span>(<span class="code-property">a</span>, <span class="code-property">b</span>))
+    <span class="code-property">norm_a</span> = <span class="code-property">math</span>.<span class="code-function">sqrt</span>(<span class="code-function">sum</span>(<span class="code-property">x</span> * <span class="code-property">x</span> <span class="code-keyword">for</span> <span class="code-property">x</span> <span class="code-keyword">in</span> <span class="code-property">a</span>))
+    <span class="code-property">norm_b</span> = <span class="code-property">math</span>.<span class="code-function">sqrt</span>(<span class="code-function">sum</span>(<span class="code-property">x</span> * <span class="code-property">x</span> <span class="code-keyword">for</span> <span class="code-property">x</span> <span class="code-keyword">in</span> <span class="code-property">b</span>))
+    <span class="code-keyword">return</span> <span class="code-property">dot_product</span> / (<span class="code-property">norm_a</span> * <span class="code-property">norm_b</span>)</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">比较两个向量（两列数字）有多"相似"</p>
+              <p class="tl">第一步：把两列数字对应相乘再加起来（点积——衡量方向一致性）</p>
+              <p class="tl">第二步：计算每个向量的"长度"（就像测量箭头有多长）</p>
+              <p class="tl">第三步：用同样的方法算另一个向量的长度</p>
+              <p class="tl">最后：点积除以两个长度的乘积——结果越接近 1，两段文字的"意思"越接近</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: How Embedding Context Is Built -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">每个函数的"简历"</h2>
+        <p>向量嵌入并不只看函数名——它为每个函数构建一份丰富的上下文"简历"：</p>
+
+        <div class="step-cards">
+          <div class="step-card">
+            <div class="step-num" style="background: var(--color-actor-1);">1</div>
+            <div class="step-body">
+              <strong>函数名 + 文件位置</strong>
+              <p>比如：parse_btype，位于 tccgen.c</p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num" style="background: var(--color-actor-2);">2</div>
+            <div class="step-body">
+              <strong>文档字符串</strong>
+              <p>"Parse base type declaration including struct/union/enum specifiers"</p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num" style="background: var(--color-actor-3);">3</div>
+            <div class="step-body">
+              <strong>调用者和被调用者</strong>
+              <p>谁在调用我？我又调用了谁？最多各 10 个名字</p>
+            </div>
+          </div>
+          <div class="step-card">
+            <div class="step-num" style="background: var(--color-actor-4);">4</div>
+            <div class="step-body">
+              <strong>前 2000 字符源代码</strong>
+              <p>函数的实际代码——让嵌入能理解"这个函数具体在做什么"</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout callout-accent">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">上下文决定精度</strong>
+            <p>如果只用函数名去生成向量，"parse_btype" 和 "parse_string" 看起来很像（都有 parse）。但加上调用关系和源代码后，嵌入能区分一个是处理类型，一个是处理字符串。信息越丰富，搜索越精准。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Quiz -->
+      <section class="screen animate-in" id="quiz-m5">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m5q1" data-correct="m5q1-a">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">场景</span>
+                <p>用户在 AI 助手里问"找出所有调用了 database_connect 的函数"。这个查询更适合用哪种方式处理？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m5q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>图数据库 Cypher 查询——因为问的是精确的调用关系</span>
+              </button>
+              <button class="quiz-option" data-value="m5q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>向量搜索——因为要搜索"意思相近"的函数</span>
+              </button>
+              <button class="quiz-option" data-value="m5q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>两者都不适合——应该直接全文搜索代码文件</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m5q1-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m5')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m5')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 6: THE AI BRIDGE (MCP SERVER)
+     ============================================================ -->
+<section class="module" id="module-6" style="background: var(--color-bg);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">AI 的接口</h1>
+      <p class="module-subtitle">MCP 服务器如何把所有能力包装成 AI 助手能调用的"工具"</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: What is MCP -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">什么是 MCP？</h2>
+        <p>你有没有用过万能充电器？不管是 iPhone 还是安卓，插上同一个<span class="term" data-definition="USB-C 是一种通用接口标准——不管什么品牌的设备，只要用同一个接口就能充电和传数据。MCP 对 AI 工具的作用就像 USB-C 对硬件设备一样。">USB-C</span> 就能充电。</p>
+        <p><span class="term" data-definition="MCP（Model Context Protocol）是 Anthropic 推出的开放标准，让 AI 模型能调用外部工具。任何符合 MCP 协议的工具，都可以被任何支持 MCP 的 AI 助手（如 Claude Code、Cursor）调用。就是 AI 工具的'USB-C 接口'。">MCP</span> 对 AI 工具的作用是一样的：它是一个标准协议，让任何 AI 助手（Claude Code、Cursor、OpenCode）都能调用 CodeGraphWiki 的能力，不需要各写一套<span class="term" data-definition="适配器（Adapter）是一种把不兼容的接口变成兼容的中间件。就像旅行时用的电源转换插头——让中国的插头能插进美国的插座。">适配器</span>。</p>
+      </section>
+
+      <!-- Screen 2: The 19 Tools -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">19 个"超能力"</h2>
+        <p>MCP 服务器对外暴露了 19 个工具，分为四大类：</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1);">
+            <div class="pattern-icon" style="background: var(--color-actor-1);">🏗️</div>
+            <h4 class="pattern-title">仓库管理 (4个)</h4>
+            <p class="pattern-desc">initialize_repository、get_repository_info、list_repositories、switch_repository</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2);">
+            <div class="pattern-icon" style="background: var(--color-actor-2);">🔍</div>
+            <h4 class="pattern-title">代码搜索 (5个)</h4>
+            <p class="pattern-desc">find_api、semantic_search、query_code_graph、get_code_snippet、locate_function</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3);">
+            <div class="pattern-icon" style="background: var(--color-actor-3);">📖</div>
+            <h4 class="pattern-title">API 文档 (4个)</h4>
+            <p class="pattern-desc">list_api_docs、get_api_doc、list_api_interfaces、generate_api_docs</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4);">
+            <div class="pattern-icon" style="background: var(--color-actor-4);">📚</div>
+            <h4 class="pattern-title">Wiki 与构建 (6个)</h4>
+            <p class="pattern-desc">list_wiki_pages、get_wiki_page、generate_wiki、rebuild_embeddings、build_graph、prepare_guidance</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Server Startup Code -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">服务器是怎么启动的</h2>
+
+        <div class="translation-block">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-keyword">async def</span> <span class="code-function">main</span>() -> <span class="code-keyword">None</span>:
+    <span class="code-property">workspace</span> = <span class="code-type">Path</span>(
+        <span class="code-property">os</span>.<span class="code-property">environ</span>.<span class="code-function">get</span>(<span class="code-string">"CGB_WORKSPACE"</span>,
+            <span class="code-type">Path</span>.<span class="code-function">home</span>() / <span class="code-string">".code-graph-builder"</span>)
+    ).<span class="code-function">expanduser</span>().<span class="code-function">resolve</span>()
+
+    <span class="code-property">registry</span> = <span class="code-function">MCPToolsRegistry</span>(<span class="code-property">workspace</span>=<span class="code-property">workspace</span>)
+    <span class="code-property">server</span> = <span class="code-function">Server</span>(<span class="code-string">"code-graph-builder"</span>)</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">定义一个异步的启动函数（异步 = 能同时处理多件事）</p>
+              <p class="tl">先确定工作空间在哪——默认是你电脑的 ~/.code-graph-builder/ 文件夹</p>
+              <p class="tl">也可以通过环境变量 CGB_WORKSPACE 自定义位置</p>
+              <p class="tl">创建工具注册表——它管理所有 19 个工具和已索引的仓库</p>
+              <p class="tl">创建 MCP 服务器实例，给它起名 "code-graph-builder"</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: Communication Pattern -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">通信方式：标准输入/输出</h2>
+        <p>MCP 服务器使用 <span class="term" data-definition="stdio（Standard Input/Output）是程序的标准输入和输出通道。就像对讲机——一个人说话（stdout），另一个人听（stdin）。AI 助手通过这两个通道和 MCP 服务器交换 JSON 消息。">stdio</span> 通信——不需要网络端口，直接通过标准输入/输出交换 <span class="term" data-definition="JSON（JavaScript Object Notation）是一种数据格式，用来在不同程序之间传递结构化信息。它看起来像这样：{'name': 'Alice', 'age': 30}。几乎所有编程语言都支持读写 JSON。">JSON</span> 消息。</p>
+
+        <div class="callout callout-info">
+          <div class="callout-icon">📌</div>
+          <div class="callout-content">
+            <strong class="callout-title">为什么用 stdio 不用 HTTP？</strong>
+            <p>HTTP 需要开端口、处理网络安全。stdio 更简单——AI 助手直接启动服务器进程，通过管道通信。没有端口冲突，没有防火墙问题，也不需要用户做任何网络配置。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Quiz -->
+      <section class="screen animate-in" id="quiz-m6">
+        <h2 class="screen-heading">检验一下</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m6q1" data-correct="m6q1-a">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">场景</span>
+                <p>你想让一个不支持 MCP 的 AI 助手（比如一个自定义的 AI 工具）也能使用 CodeGraphWiki 的能力。你需要做什么？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m6q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>在那个 AI 工具里实现 MCP 客户端协议，让它能和 MCP 服务器通信</span>
+              </button>
+              <button class="quiz-option" data-value="m6q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>把 CodeGraphWiki 的代码全部复制到那个 AI 工具里</span>
+              </button>
+              <button class="quiz-option" data-value="m6q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>不可能——只有 Claude Code 能用 CodeGraphWiki</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m6q1-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m6')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m6')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     MODULE 7: THE BIG PICTURE
+     ============================================================ -->
+<section class="module" id="module-7" style="background: var(--color-bg-warm);">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">07</span>
+      <h1 class="module-title">全局视角</h1>
+      <p class="module-subtitle">把所有线索串起来——完整的架构和调试直觉</p>
+    </header>
+
+    <div class="module-body">
+      <!-- Screen 1: Architecture Diagram -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">完整架构一览</h2>
+
+        <div class="arch-diagram">
+          <div class="arch-zones">
+            <div class="arch-zone" style="border-color: var(--color-actor-5);">
+              <h4 class="arch-zone-label" style="color: var(--color-actor-5);">对外接口层</h4>
+              <div class="arch-component" data-desc="MCP 服务器通过 stdio 协议对外暴露 19 个工具。AI 助手（Claude Code、Cursor 等）直接调用这些工具来查询代码知识。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🔌</span>
+                <span>MCP Server (server.py)</span>
+              </div>
+              <div class="arch-component" data-desc="CLI 命令行入口，提供 scan、query、export、stats 命令。主要用于开发调试和直接操作。" onclick="showArchDesc(this)">
+                <span class="arch-icon">⌨️</span>
+                <span>CLI (cli.py)</span>
+              </div>
+            </div>
+            <div class="arch-zone" style="border-color: var(--color-actor-4);">
+              <h4 class="arch-zone-label" style="color: var(--color-actor-4);">编排层</h4>
+              <div class="arch-component" data-desc="Pipeline 编排器控制四步流水线的执行顺序和进度报告。它决定了先构建图谱、再生成文档、然后向量化、最后写 Wiki。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🎯</span>
+                <span>Pipeline (pipeline.py)</span>
+              </div>
+              <div class="arch-component" data-desc="工具注册表管理 19 个 MCP 工具的定义、参数校验和执行路由。它还负责管理工作空间和已索引仓库的元数据。" onclick="showArchDesc(this)">
+                <span class="arch-icon">📋</span>
+                <span>Tools Registry (tools.py)</span>
+              </div>
+            </div>
+            <div class="arch-zone" style="border-color: var(--color-actor-1);">
+              <h4 class="arch-zone-label" style="color: var(--color-actor-1);">处理层</h4>
+              <div class="arch-component" data-desc="Tree-sitter 解析器把源代码变成语法树，然后 DefinitionProcessor 提取函数/类定义，CallProcessor 提取调用关系。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🔍</span>
+                <span>Parsers (parsers/)</span>
+              </div>
+              <div class="arch-component" data-desc="API 文档生成器查询图数据库，为每个函数生成三级 Markdown 文档（索引→模块→函数详情），包含调用树和参数说明。" onclick="showArchDesc(this)">
+                <span class="arch-icon">📝</span>
+                <span>Doc Generator</span>
+              </div>
+              <div class="arch-component" data-desc="RAG 引擎结合语义搜索和图查询的结果，为 AI 助手提供完整的上下文——既有精确的调用关系，也有语义相关的函数。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🧩</span>
+                <span>RAG Engine (rag/)</span>
+              </div>
+            </div>
+            <div class="arch-zone" style="border-color: var(--color-actor-2);">
+              <h4 class="arch-zone-label" style="color: var(--color-actor-2);">存储层</h4>
+              <div class="arch-component" data-desc="Kuzu 是嵌入式图数据库——不需要 Docker 或服务器进程，直接以文件形式存储在磁盘上。它用 Cypher 语言查询，支持 ACID 事务。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🗄️</span>
+                <span>Kuzu DB (services/)</span>
+              </div>
+              <div class="arch-component" data-desc="向量存储把函数嵌入向量保存在内存中（序列化为 pickle 文件）。搜索时用余弦相似度找到最相关的函数。" onclick="showArchDesc(this)">
+                <span class="arch-icon">🧠</span>
+                <span>Vector Store (embeddings/)</span>
+              </div>
+            </div>
+          </div>
+          <div class="arch-description" id="arch-desc">点击任意组件查看详细说明</div>
+        </div>
+      </section>
+
+      <!-- Screen 2: When Things Break -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">当事情出错时</h2>
+        <p>有了对架构的理解，你可以用"排除法"快速定位问题。以下是最常见的故障场景：</p>
+
+        <div class="step-cards">
+          <div class="step-card" style="border-left-color: var(--color-error);">
+            <div class="step-num" style="background: var(--color-error);">!</div>
+            <div class="step-body">
+              <strong>索引卡在某个百分比不动</strong>
+              <p>如果 0-15%：图谱构建问题，检查文件权限和 Tree-sitter 语言支持。如果 15-40%：嵌入 API 问题，检查 DASHSCOPE_API_KEY。如果 40-100%：LLM 问题，检查 LLM_API_KEY。</p>
+            </div>
+          </div>
+          <div class="step-card" style="border-left-color: var(--color-error);">
+            <div class="step-num" style="background: var(--color-error);">!</div>
+            <div class="step-body">
+              <strong>搜索结果不相关</strong>
+              <p>向量嵌入可能过期了——代码改了但没重新索引。运行 rebuild_embeddings 重新生成向量。</p>
+            </div>
+          </div>
+          <div class="step-card" style="border-left-color: var(--color-error);">
+            <div class="step-num" style="background: var(--color-error);">!</div>
+            <div class="step-body">
+              <strong>数据库锁定错误</strong>
+              <p>Kuzu 是文件级锁——如果另一个进程在用数据库，会报锁定错误。系统会自动重试最多 5 次，指数退避（1秒、2秒、4秒...）。如果仍然失败，手动关闭其他使用数据库的进程。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: Workspace Layout -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">数据存在哪里</h2>
+        <p>所有索引结果都保存在<span class="term" data-definition="工作空间（Workspace）是 CodeGraphWiki 的数据目录，默认在 ~/.code-graph-builder/。每个被索引的仓库在这里有自己的子目录，存放图数据库、向量文件、文档和 Wiki。">工作空间</span>目录下：</p>
+
+        <div class="file-tree">
+          <div class="ft-folder root">
+            <span class="ft-name">~/.code-graph-builder/</span>
+            <span class="ft-desc">工作空间根目录</span>
+            <div class="ft-children">
+              <div class="ft-file"><span class="ft-name">📄 active.txt</span> <span class="ft-desc">记录当前活跃仓库的名字</span></div>
+              <div class="ft-file"><span class="ft-name">📄 .env</span> <span class="ft-desc">API 密钥配置</span></div>
+              <div class="ft-folder">
+                <span class="ft-name">📁 myproject_a1b2c3d4/</span>
+                <span class="ft-desc">某个仓库的索引数据（名字+哈希防冲突）</span>
+                <div class="ft-children">
+                  <div class="ft-file"><span class="ft-name">📄 meta.json</span> <span class="ft-desc">仓库路径、索引时间、完成状态</span></div>
+                  <div class="ft-folder"><span class="ft-name">📁 graph.db/</span> <span class="ft-desc">Kuzu 图数据库文件</span></div>
+                  <div class="ft-file"><span class="ft-name">📄 vectors.pkl</span> <span class="ft-desc">向量存储的序列化文件</span></div>
+                  <div class="ft-folder"><span class="ft-name">📁 api_docs/</span> <span class="ft-desc">三级 API 文档</span></div>
+                  <div class="ft-folder"><span class="ft-name">📁 wiki/</span> <span class="ft-desc">生成的 Wiki 页面</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 4: Key Takeaways -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">你现在能做什么</h2>
+        <p>学完这七个模块，你现在有了一些新"超能力"：</p>
+
+        <div class="pattern-cards" style="grid-template-columns: 1fr 1fr;">
+          <div class="pattern-card" style="border-top: 3px solid var(--color-success);">
+            <div class="pattern-icon" style="background: var(--color-success);">🎯</div>
+            <h4 class="pattern-title">更精准地指导 AI</h4>
+            <p class="pattern-desc">"先用 find_api 搜索相关函数，再用 query_code_graph 看调用关系"——你能给出具体的工具调用建议</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-2);">
+            <div class="pattern-icon" style="background: var(--color-actor-2);">🔧</div>
+            <h4 class="pattern-title">自主排查问题</h4>
+            <p class="pattern-desc">索引失败？你知道先看哪个步骤、检查哪个 API 密钥、是不是数据库锁冲突</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-3);">
+            <div class="pattern-icon" style="background: var(--color-actor-3);">🏛️</div>
+            <h4 class="pattern-title">理解架构决策</h4>
+            <p class="pattern-desc">"为什么用嵌入式数据库不用 PostgreSQL？"——因为不需要用户装 Docker，降低使用门槛</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid var(--color-actor-4);">
+            <div class="pattern-icon" style="background: var(--color-actor-4);">🗣️</div>
+            <h4 class="pattern-title">掌握技术词汇</h4>
+            <p class="pattern-desc">AST、知识图谱、余弦相似度、MCP 协议、向量嵌入——这些概念你都能用来和工程师沟通了</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: Final Quiz -->
+      <section class="screen animate-in" id="quiz-m7">
+        <h2 class="screen-heading">最终挑战</h2>
+        <div class="quiz-container">
+          <div class="quiz-question-block" data-question="m7q1" data-correct="m7q1-b">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">综合场景</span>
+                <p>你刚用 CodeGraphWiki 索引了一个 TypeScript 项目，但 AI 搜索"用户认证"相关的代码时，结果完全不相关。你会怎么排查？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m7q1-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>重新运行 build_graph——图谱可能构建不完整</span>
+              </button>
+              <button class="quiz-option" data-value="m7q1-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>运行 rebuild_embeddings——向量嵌入可能缺失或过期，导致语义搜索失效</span>
+              </button>
+              <button class="quiz-option" data-value="m7q1-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>检查 MCP 服务器日志——可能 AI 助手发送了错误的请求</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m7q1-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block" data-question="m7q2" data-correct="m7q2-c">
+            <div class="scenario-block">
+              <div class="scenario-context">
+                <span class="scenario-label">综合场景</span>
+                <p>你想给 CodeGraphWiki 添加一个新功能："显示某个函数被修改的 Git 历史"。根据项目的架构，你应该怎么向 AI 助手描述这个需求？</p>
+              </div>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="m7q2-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>"在 builder.py 里加一个 Git 日志功能"</span>
+              </button>
+              <button class="quiz-option" data-value="m7q2-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>"重写 MCP 服务器来支持 Git"</span>
+              </button>
+              <button class="quiz-option" data-value="m7q2-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>"在 mcp/tools.py 里添加一个新的 MCP 工具 get_git_history，它接收 qualified_name 参数，用图数据库查到文件路径和行号，然后调用 git log 获取历史"</span>
+              </button>
+            </div>
+            <div class="quiz-feedback" id="m7q2-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-m7')">检查答案</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m7')">重新作答</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     JAVASCRIPT
+     ============================================================ -->
+<script>
+(function() {
+  'use strict';
+
+  // ============================================================
+  // SCROLL-TRIGGERED ANIMATIONS
+  // ============================================================
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { rootMargin: '0px 0px -10% 0px', threshold: 0.1 });
+
+  document.querySelectorAll('.animate-in').forEach(el => observer.observe(el));
+
+  // Stagger children
+  document.querySelectorAll('.stagger-children').forEach(parent => {
+    Array.from(parent.children).forEach((child, i) => {
+      child.style.setProperty('--stagger-index', i);
+    });
+  });
+
+  // ============================================================
+  // PROGRESS BAR
+  // ============================================================
+  const progressBar = document.getElementById('progress-bar');
+  function updateProgressBar() {
+    const scrollTop = window.scrollY;
+    const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+    const progress = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+    progressBar.style.width = progress + '%';
+  }
+  window.addEventListener('scroll', () => requestAnimationFrame(updateProgressBar), { passive: true });
+
+  // ============================================================
+  // NAV DOTS
+  // ============================================================
+  const navDots = document.querySelectorAll('.nav-dot');
+  const modules = document.querySelectorAll('.module');
+  const visited = new Set();
+
+  navDots.forEach(dot => {
+    dot.addEventListener('click', () => {
+      const target = document.getElementById(dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+
+  const moduleObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const idx = Array.from(modules).indexOf(entry.target);
+        visited.add(idx);
+        navDots.forEach((dot, i) => {
+          dot.classList.remove('current');
+          if (visited.has(i) && i !== idx) dot.classList.add('visited');
+        });
+        if (navDots[idx]) navDots[idx].classList.add('current');
+      }
+    });
+  }, { threshold: 0.3 });
+
+  modules.forEach(m => moduleObserver.observe(m));
+
+  // ============================================================
+  // KEYBOARD NAVIGATION
+  // ============================================================
+  let currentModule = 0;
+  document.addEventListener('keydown', (e) => {
+    if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      currentModule = Math.min(currentModule + 1, modules.length - 1);
+      modules[currentModule].scrollIntoView({ behavior: 'smooth' });
+      e.preventDefault();
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      currentModule = Math.max(currentModule - 1, 0);
+      modules[currentModule].scrollIntoView({ behavior: 'smooth' });
+      e.preventDefault();
+    }
+  });
+
+  // ============================================================
+  // QUIZ SYSTEM
+  // ============================================================
+  const quizExplanations = {
+    'm1q1-a': '注释确实有帮助，但 AI 助手的核心问题是缺少结构化的关系数据，光有注释还是大海捞针。',
+    'm1q1-b': '没错！图谱提供精确的调用关系，向量索引提供语义搜索——两者配合让 AI 能"按意思"找代码。',
+    'm1q1-c': '大型项目的代码量远超任何 AI 的上下文窗口。需要的是精准索引，不是全量加载。',
+    'm1q2-a': '手动写文档费时费力且容易过时。自动化索引更高效。',
+    'm1q2-b': '逐文件扫描没有全局视角，看不到跨文件的调用关系。',
+    'm1q2-c': '正确！一次索引就能建立完整的代码知识体系，之后 AI 的每次查询都能精准定位。',
+    'm2q1-a': '解析器负责读取代码，不管理向量搜索。关注点分离——每个目录只管自己的事。',
+    'm2q1-b': '完全正确！向量存储和搜索逻辑都在 embeddings/ 目录，你只需要替换 vector_store.py 里的实现。',
+    'm2q1-c': 'MCP 是对外接口层，它调用 embeddings 层的服务，不直接做搜索。',
+    'm3q1-a': '图谱构建只占 0-15%，42% 已经过了这个阶段。',
+    'm3q1-b': '嵌入阶段占 15-40%，42% 已经刚过了这个范围。',
+    'm3q1-c': '对！Wiki 生成占 40-100%，42% 正好在这个区间的起始位置，LLM 可能正在规划 Wiki 结构。',
+    'm4q1-a': '数据库表结构不需要改变——所有语言的函数、类、调用关系用的是同一套 schema。',
+    'm4q1-b': '没错！语言规格文件定义了每种语言的查询模式。新语言只需要新的 Tree-sitter 查询和文件扩展名。',
+    'm4q1-c': 'MCP 服务器是通用的，它不关心底层解析的是什么语言。',
+    'm5q1-a': '完全正确！"找所有调用了 X 的函数"是典型的图查询——MATCH (f)-[:CALLS]->(g) WHERE g.name = "database_connect"。',
+    'm5q1-b': '向量搜索适合模糊的语义查询，不适合精确的关系查询。',
+    'm5q1-c': '全文搜索只能找到文本匹配，不能理解调用关系（函数 A 的代码里可能没有出现 "database_connect" 字样，但通过链式调用间接依赖它）。',
+    'm6q1-a': '正确！MCP 是开放协议，任何工具只要实现 MCP 客户端就能与服务器通信。这就是标准协议的威力。',
+    'm6q1-b': '不需要复制代码——MCP 的意义就在于通过标准协议共享能力。',
+    'm6q1-c': 'MCP 是开放标准，不是 Claude 独占的。Cursor、OpenCode 等都支持 MCP。',
+    'm7q1-a': '图谱构建只影响关系数据，语义搜索依赖的是向量嵌入。',
+    'm7q1-b': '搜索不相关最常见的原因是嵌入缺失或过期。rebuild_embeddings 会重新生成所有函数的向量。',
+    'm7q1-c': '如果 MCP 服务器本身有问题，搜索会报错而不是返回不相关结果。',
+    'm7q2-a': 'builder.py 是图谱构建的入口，不负责对外提供查询工具。',
+    'm7q2-b': '"重写"太笼统了，不需要重写整个服务器。',
+    'm7q2-c': '这才是精准的需求描述！你指定了修改哪个文件、工具名、参数、实现思路——AI 助手能直接执行。这就是理解架构后的"超能力"。',
+  };
+
+  window.selectOption = function(btn) {
+    const block = btn.closest('.quiz-question-block');
+    block.querySelectorAll('.quiz-option').forEach(o => o.classList.remove('selected'));
+    btn.classList.add('selected');
+  };
+
+  window.checkQuiz = function(sectionId) {
+    const container = document.querySelector('#' + sectionId + ' .quiz-container');
+    const questions = container.querySelectorAll('.quiz-question-block');
+    questions.forEach(q => {
+      const selected = q.querySelector('.quiz-option.selected');
+      const feedback = q.querySelector('.quiz-feedback');
+      const correctValue = q.dataset.correct;
+      if (!selected) {
+        feedback.textContent = '先选一个答案吧！';
+        feedback.className = 'quiz-feedback show warning';
+        return;
+      }
+      const selectedValue = selected.dataset.value;
+      if (selectedValue === correctValue) {
+        selected.classList.add('correct');
+        feedback.innerHTML = '<strong>完全正确！</strong> ' + (quizExplanations[selectedValue] || '');
+        feedback.className = 'quiz-feedback show success';
+      } else {
+        selected.classList.add('incorrect');
+        q.querySelector('[data-value="' + correctValue + '"]').classList.add('correct');
+        feedback.innerHTML = '<strong>不太对。</strong> ' + (quizExplanations[selectedValue] || '');
+        feedback.className = 'quiz-feedback show error';
+      }
+      q.querySelectorAll('.quiz-option').forEach(o => o.disabled = true);
+    });
+  };
+
+  window.resetQuiz = function(sectionId) {
+    const container = document.querySelector('#' + sectionId + ' .quiz-container');
+    container.querySelectorAll('.quiz-option').forEach(o => {
+      o.classList.remove('selected', 'correct', 'incorrect');
+      o.disabled = false;
+    });
+    container.querySelectorAll('.quiz-feedback').forEach(f => {
+      f.className = 'quiz-feedback';
+      f.innerHTML = '';
+    });
+  };
+
+  // ============================================================
+  // GROUP CHAT SYSTEM
+  // ============================================================
+  const chatStates = {};
+
+  const chatActors = {
+    'mcp': { initials: 'MCP', color: 'var(--color-actor-5)' },
+    'pipeline': { initials: 'PL', color: 'var(--color-actor-4)' },
+    'treesitter': { initials: 'TS', color: 'var(--color-actor-1)' },
+    'kuzu': { initials: 'KZ', color: 'var(--color-actor-2)' },
+    'docgen': { initials: 'DOC', color: 'var(--color-actor-3)' },
+    'embedder': { initials: 'EM', color: 'var(--color-actor-4)' },
+    'wiki': { initials: 'WK', color: 'var(--color-actor-5)' },
+  };
+
+  function getChatState(chatId) {
+    if (!chatStates[chatId]) {
+      chatStates[chatId] = { index: 0, playing: false };
+    }
+    return chatStates[chatId];
+  }
+
+  window.playChatNext = function(chatId) {
+    const state = getChatState(chatId);
+    const messages = document.querySelectorAll('#chat-' + chatId + '-messages .chat-message');
+    if (state.index >= messages.length) return;
+
+    const msg = messages[state.index];
+    const sender = msg.dataset.sender;
+    const actor = chatActors[sender] || { initials: '?', color: 'var(--color-text-muted)' };
+
+    const typing = document.getElementById('chat-' + chatId + '-typing');
+    const avatar = document.getElementById('chat-' + chatId + '-typing-avatar');
+    avatar.textContent = actor.initials;
+    avatar.style.background = actor.color;
+    typing.style.display = 'flex';
+
+    setTimeout(() => {
+      typing.style.display = 'none';
+      msg.style.display = 'flex';
+      state.index++;
+      const progress = document.getElementById('chat-' + chatId + '-progress');
+      if (progress) progress.textContent = state.index + ' / ' + messages.length + ' 条消息';
+      // Auto scroll
+      const container = document.getElementById('chat-' + chatId + '-messages');
+      container.scrollTop = container.scrollHeight;
+    }, 800);
+  };
+
+  window.playChatAll = function(chatId) {
+    const state = getChatState(chatId);
+    if (state.playing) return;
+    state.playing = true;
+    const messages = document.querySelectorAll('#chat-' + chatId + '-messages .chat-message');
+    const interval = setInterval(() => {
+      if (state.index >= messages.length) {
+        clearInterval(interval);
+        state.playing = false;
+        return;
+      }
+      playChatNext(chatId);
+    }, 1500);
+  };
+
+  window.resetChat = function(chatId) {
+    const state = getChatState(chatId);
+    state.index = 0;
+    state.playing = false;
+    document.querySelectorAll('#chat-' + chatId + '-messages .chat-message').forEach(m => m.style.display = 'none');
+    const progress = document.getElementById('chat-' + chatId + '-progress');
+    const messages = document.querySelectorAll('#chat-' + chatId + '-messages .chat-message');
+    if (progress) progress.textContent = '0 / ' + messages.length + ' 条消息';
+  };
+
+  // ============================================================
+  // DATA FLOW ANIMATION
+  // ============================================================
+  const flowConfigs = {
+    'pipeline': {
+      steps: [
+        { highlight: 'source', label: '用户指定一个代码仓库路径，Pipeline 接收到 initialize_repository 请求' },
+        { highlight: 'parser', label: 'Tree-sitter 逐文件解析，提取函数定义、类定义、调用关系——变成结构化的节点和边' },
+        { highlight: 'kuzu', label: '所有节点和边批量写入 Kuzu 图数据库。同时生成三级 API 文档到 api_docs/ 目录' },
+        { highlight: 'embed', label: '读取每个函数的文档 + 源代码 + 调用关系，调用 Qwen3 API 生成 1536 维向量' },
+        { highlight: 'embed', label: '向量存储在内存中（MemoryVectorStore），序列化到 vectors.pkl 文件——下次启动直接加载' },
+        { highlight: 'mcp', label: '全部完成！MCP 服务器现在可以响应 find_api、semantic_search 等查询工具的调用' },
+      ],
+      index: 0
+    }
+  };
+
+  window.flowNext = function(flowId) {
+    const config = flowConfigs[flowId];
+    if (!config || config.index >= config.steps.length) return;
+    const step = config.steps[config.index];
+
+    // Remove previous highlights
+    document.querySelectorAll('#flow-' + flowId + ' .flow-actor').forEach(a => a.classList.remove('active'));
+    // Highlight current
+    const actor = document.getElementById('flow-' + flowId + '-' + step.highlight);
+    if (actor) actor.classList.add('active');
+    // Update label
+    document.getElementById('flow-' + flowId + '-label').textContent = step.label;
+    config.index++;
+    document.getElementById('flow-' + flowId + '-progress').textContent = '步骤 ' + config.index + ' / ' + config.steps.length;
+  };
+
+  window.flowReset = function(flowId) {
+    const config = flowConfigs[flowId];
+    if (!config) return;
+    config.index = 0;
+    document.querySelectorAll('#flow-' + flowId + ' .flow-actor').forEach(a => a.classList.remove('active'));
+    document.getElementById('flow-' + flowId + '-label').textContent = '点击"下一步"开始';
+    document.getElementById('flow-' + flowId + '-progress').textContent = '步骤 0 / ' + config.steps.length;
+  };
+
+  // ============================================================
+  // ARCHITECTURE DIAGRAM
+  // ============================================================
+  window.showArchDesc = function(el) {
+    const desc = el.dataset.desc;
+    const descBox = document.getElementById('arch-desc');
+    descBox.textContent = desc;
+    // Highlight clicked
+    document.querySelectorAll('.arch-component').forEach(c => c.style.background = '');
+    el.style.background = 'var(--color-accent-light)';
+  };
+
+  // ============================================================
+  // GLOSSARY TOOLTIPS
+  // ============================================================
+  let activeTooltip = null;
+
+  function positionTooltip(term, tip) {
+    const rect = term.getBoundingClientRect();
+    const tipWidth = 300;
+    let left = rect.left + rect.width / 2 - tipWidth / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+    tip.style.left = left + 'px';
+    tip.style.width = tipWidth + 'px';
+
+    document.body.appendChild(tip);
+    const tipHeight = tip.offsetHeight;
+    if (rect.top - tipHeight - 8 < 0) {
+      tip.style.top = (rect.bottom + 8) + 'px';
+      tip.classList.add('flip');
+    } else {
+      tip.style.top = (rect.top - tipHeight - 8) + 'px';
+      tip.classList.remove('flip');
+    }
+  }
+
+  document.querySelectorAll('.term').forEach(term => {
+    const tip = document.createElement('span');
+    tip.className = 'term-tooltip';
+    tip.textContent = term.dataset.definition;
+
+    term.addEventListener('mouseenter', () => {
+      if (activeTooltip && activeTooltip !== tip) {
+        activeTooltip.classList.remove('visible');
+        activeTooltip.remove();
+      }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    });
+
+    term.addEventListener('mouseleave', () => {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      activeTooltip = null;
+    });
+
+    term.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (activeTooltip && activeTooltip !== tip) {
+        activeTooltip.classList.remove('visible');
+        activeTooltip.remove();
+      }
+      if (tip.classList.contains('visible')) {
+        tip.classList.remove('visible');
+        tip.remove();
+        activeTooltip = null;
+      } else {
+        positionTooltip(term, tip);
+        requestAnimationFrame(() => tip.classList.add('visible'));
+        activeTooltip = tip;
+      }
+    });
+  });
+
+  document.addEventListener('click', () => {
+    if (activeTooltip) {
+      activeTooltip.classList.remove('visible');
+      activeTooltip.remove();
+      activeTooltip = null;
+    }
+  });
+
+})();
+</script>
+</body>
+</html>

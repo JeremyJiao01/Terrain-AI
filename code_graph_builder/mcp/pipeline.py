@@ -271,6 +271,77 @@ def _parse_desc_response(response: str, count: int) -> list[str]:
     return descriptions
 
 
+_DESC_MAX_CONSECUTIVE_FAILURES = 3  # Circuit breaker: stop after N consecutive batch failures
+
+
+def _collect_todo_funcs(funcs_dir: Path) -> list[dict]:
+    """Scan L3 doc files and collect those with TODO placeholders."""
+    todo_funcs: list[dict] = []
+
+    for md_file in sorted(funcs_dir.glob("*.md")):
+        content = md_file.read_text(encoding="utf-8")
+        if "<!-- TODO:" not in content:
+            continue
+
+        func_info: dict = {"path": md_file, "content": content}
+        for line in content.splitlines():
+            if line.startswith("# "):
+                func_info["name"] = line[2:].strip()
+            elif line.startswith("- 签名:") or line.startswith("- 定义:"):
+                start = line.find("`")
+                end = line.rfind("`")
+                if start != -1 and end > start:
+                    func_info["signature"] = line[start + 1 : end]
+            elif line.startswith("- 模块:"):
+                func_info["module_qn"] = (
+                    line[len("- 模块:") :].strip().split(" —")[0].strip()
+                )
+
+        if "## 实现" in content:
+            source_start = content.index("## 实现")
+            code_start = content.find("```", source_start)
+            code_end = (
+                content.find("```", code_start + 3) if code_start != -1 else -1
+            )
+            if code_start != -1 and code_end != -1:
+                first_newline = content.index("\n", code_start)
+                func_info["source"] = content[first_newline + 1 : code_end].strip()
+
+        if "## 被调用" in content:
+            called_by_start = content.index("## 被调用")
+            caller_names: list[str] = []
+            for cline in content[called_by_start:].splitlines()[2:]:
+                cline = cline.strip()
+                if not cline or cline.startswith("#"):
+                    break
+                if cline.startswith("- "):
+                    cname = cline[2:].split("(")[0].split("→")[0].strip()
+                    if "." in cname:
+                        cname = cname.rsplit(".", 1)[-1]
+                    if cname and cname != "*(无调用者)*":
+                        caller_names.append(cname)
+            if caller_names:
+                func_info["callers"] = ", ".join(caller_names[:5])
+
+        if "## 使用示例" in content:
+            usage_start = content.index("## 使用示例")
+            usage_code_start = content.find("```", usage_start)
+            usage_code_end = (
+                content.find("```", usage_code_start + 3) if usage_code_start != -1 else -1
+            )
+            if usage_code_start != -1 and usage_code_end != -1:
+                first_nl = content.index("\n", usage_code_start)
+                usage_snippet = content[first_nl + 1 : usage_code_end].strip()
+                if len(usage_snippet) > 500:
+                    usage_snippet = usage_snippet[:500] + "\n    /* ... */"
+                func_info["usage_example"] = usage_snippet
+
+        if "name" in func_info:
+            todo_funcs.append(func_info)
+
+    return todo_funcs
+
+
 def generate_descriptions_step(
     artifact_dir: Path,
     repo_path: Path,
@@ -281,118 +352,61 @@ def generate_descriptions_step(
     Reads L3 API doc files, finds those with TODO placeholders,
     generates descriptions via LLM, and writes them back.
 
-    This step is optional -- skipped silently if no LLM API key is configured.
+    **Resumable**: completed descriptions are written to disk immediately.
+    Files whose TODO placeholder has already been replaced are skipped on
+    re-scan, so the function can be called again after an interruption and
+    will automatically continue from where it left off.
+
+    **Circuit breaker**: after ``_DESC_MAX_CONSECUTIVE_FAILURES`` consecutive
+    batch failures the function stops early to avoid wasting quota on an
+    unresponsive provider.
+
+    **Graceful interrupt**: ``KeyboardInterrupt`` is caught so that progress
+    made before the interrupt is preserved.
 
     Returns:
-        Summary dict with generated_count, skipped_count, error_count.
+        Summary dict with generated_count, skipped_count, error_count,
+        and interrupted (bool).
     """
     if create_llm_client is None:
         logger.info("LLM client not available, skipping description generation")
-        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0, "interrupted": False}
 
     try:
         client = create_llm_client()
     except (ValueError, RuntimeError) as e:
         logger.info(f"No LLM API key configured, skipping description generation: {e}")
-        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0, "interrupted": False}
 
     funcs_dir = artifact_dir / "api_docs" / "funcs"
     if not funcs_dir.exists():
         logger.warning("No API docs found, skipping description generation")
-        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0, "interrupted": False}
 
-    # Collect functions needing descriptions
-    todo_funcs: list[dict] = []  # {path, name, signature, source, module_qn, content}
-
-    for md_file in sorted(funcs_dir.glob("*.md")):
-        content = md_file.read_text(encoding="utf-8")
-        if "<!-- TODO:" not in content:
-            continue
-
-        # Parse minimal info from the markdown
-        func_info: dict = {"path": md_file, "content": content}
-        for line in content.splitlines():
-            if line.startswith("# "):
-                func_info["name"] = line[2:].strip()
-            elif line.startswith("- 签名:") or line.startswith("- 定义:"):
-                # Extract signature from backticks
-                start = line.find("`")
-                end = line.rfind("`")
-                if start != -1 and end > start:
-                    func_info["signature"] = line[start + 1 : end]
-            elif line.startswith("- 模块:"):
-                func_info["module_qn"] = (
-                    line[len("- 模块:") :].strip().split(" —")[0].strip()
-                )
-
-        # Read source from the implementation section
-        if "## 实现" in content:
-            source_start = content.index("## 实现")
-            # Extract code between ``` markers
-            code_start = content.find("```", source_start)
-            code_end = (
-                content.find("```", code_start + 3) if code_start != -1 else -1
-            )
-            if code_start != -1 and code_end != -1:
-                # Skip the ```c or ```cpp line
-                first_newline = content.index("\n", code_start)
-                func_info["source"] = content[first_newline + 1 : code_end].strip()
-
-        # Extract "called by" list from the "被调用" section
-        if "## 被调用" in content:
-            called_by_start = content.index("## 被调用")
-            # Collect caller names from the bullet list
-            caller_names: list[str] = []
-            for cline in content[called_by_start:].splitlines()[2:]:
-                cline = cline.strip()
-                if not cline or cline.startswith("#"):
-                    break
-                if cline.startswith("- "):
-                    # "- tinycc.tccgen.type_decl (tinycc.tccgen) → ..."
-                    cname = cline[2:].split("(")[0].split("→")[0].strip()
-                    if "." in cname:
-                        cname = cname.rsplit(".", 1)[-1]
-                    if cname and cname != "*(无调用者)*":
-                        caller_names.append(cname)
-            if caller_names:
-                func_info["callers"] = ", ".join(caller_names[:5])
-
-        # Extract first usage example snippet
-        if "## 使用示例" in content:
-            usage_start = content.index("## 使用示例")
-            usage_code_start = content.find("```", usage_start)
-            usage_code_end = (
-                content.find("```", usage_code_start + 3) if usage_code_start != -1 else -1
-            )
-            if usage_code_start != -1 and usage_code_end != -1:
-                first_nl = content.index("\n", usage_code_start)
-                usage_snippet = content[first_nl + 1 : usage_code_end].strip()
-                # Limit size for prompt
-                if len(usage_snippet) > 500:
-                    usage_snippet = usage_snippet[:500] + "\n    /* ... */"
-                func_info["usage_example"] = usage_snippet
-
-        if "name" in func_info:
-            todo_funcs.append(func_info)
+    todo_funcs = _collect_todo_funcs(funcs_dir)
 
     if not todo_funcs:
         logger.info("All functions already have descriptions")
-        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0, "interrupted": False}
 
-    logger.info(f"Generating descriptions for {len(todo_funcs)} functions")
+    total = len(todo_funcs)
+    logger.info(f"Generating descriptions for {total} functions")
 
     generated = 0
     errors = 0
-    total_batches = (len(todo_funcs) + _DESC_BATCH_SIZE - 1) // _DESC_BATCH_SIZE
+    consecutive_failures = 0
+    interrupted = False
+    total_batches = (total + _DESC_BATCH_SIZE - 1) // _DESC_BATCH_SIZE
 
-    for batch_idx in range(0, len(todo_funcs), _DESC_BATCH_SIZE):
+    for batch_idx in range(0, total, _DESC_BATCH_SIZE):
         batch = todo_funcs[batch_idx : batch_idx + _DESC_BATCH_SIZE]
         current_batch = batch_idx // _DESC_BATCH_SIZE + 1
 
         if progress_cb:
             pct = int(current_batch / total_batches * 100)
             progress_cb(
-                f"Generating descriptions: batch {current_batch}/{total_batches}",
+                f"Generating descriptions: batch {current_batch}/{total_batches} "
+                f"({generated} done, {errors} errors, {total - generated - errors} remaining)",
                 float(pct),
             )
 
@@ -408,12 +422,12 @@ def generate_descriptions_step(
 
             descriptions = _parse_desc_response(response.content, len(batch))
 
+            batch_ok = 0
             for func_info, desc in zip(batch, descriptions):
                 if not desc:
                     errors += 1
                     continue
 
-                # Replace TODO placeholder with generated description
                 old_content = func_info["content"]
                 new_content = ""
                 for line in old_content.splitlines(keepends=True):
@@ -424,16 +438,48 @@ def generate_descriptions_step(
 
                 func_info["path"].write_text(new_content, encoding="utf-8")
                 generated += 1
+                batch_ok += 1
+
+            # Reset circuit breaker on any success
+            if batch_ok > 0:
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+
+        except KeyboardInterrupt:
+            logger.warning(
+                f"Interrupted by user after batch {current_batch}/{total_batches}. "
+                f"Progress saved: {generated} generated, {errors} errors. "
+                f"Run again to resume from remaining {total - generated - errors} functions."
+            )
+            interrupted = True
+            break
 
         except Exception as e:
-            logger.warning(f"LLM description generation failed for batch: {e}")
+            logger.warning(f"LLM batch {current_batch}/{total_batches} failed: {e}")
             errors += len(batch)
+            consecutive_failures += 1
 
-    logger.info(f"Generated {generated} descriptions, {errors} errors")
+        # Circuit breaker: stop if provider appears down
+        if consecutive_failures >= _DESC_MAX_CONSECUTIVE_FAILURES:
+            logger.error(
+                f"Circuit breaker tripped: {consecutive_failures} consecutive batch failures. "
+                f"Stopping early. Progress saved: {generated} generated. "
+                f"Run again to resume from remaining {total - generated - errors} functions."
+            )
+            interrupted = True
+            break
+
+    remaining = total - generated - errors
+    logger.info(
+        f"Description generation {'interrupted' if interrupted else 'complete'}: "
+        f"{generated} generated, {errors} errors, {remaining} remaining"
+    )
     return {
         "generated_count": generated,
-        "skipped_count": len(todo_funcs) - generated - errors,
+        "skipped_count": remaining,
         "error_count": errors,
+        "interrupted": interrupted,
     }
 
 

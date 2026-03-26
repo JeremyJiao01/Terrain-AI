@@ -37,6 +37,7 @@ from ..tools.semantic_search import SemanticSearchService
 from .file_editor import FileEditor
 from .pipeline import (
     ProgressCb,
+    _collect_todo_funcs,
     artifact_dir_for,
     build_graph,
     build_vector_index,
@@ -327,161 +328,66 @@ class MCPToolsRegistry:
                 },
             ),
             ToolDefinition(
-                name="query_code_graph",
+                name="link_repository",
                 description=(
-                    "Translate a natural-language question into Cypher and execute it "
-                    "against the code knowledge graph. Returns raw graph rows."
+                    "Link a new repository path to an existing index. "
+                    "Reuses the graph database, API docs, and embeddings from a "
+                    "previously indexed repository without re-generating anything. "
+                    "Useful when multiple working copies share the same codebase."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "question": {
+                        "repo_path": {
                             "type": "string",
-                            "description": "Natural language question about the codebase.",
-                        }
+                            "description": "Absolute path to the new repository to link.",
+                        },
+                        "source_repo": {
+                            "type": "string",
+                            "description": (
+                                "Name of the already-indexed repository to link to "
+                                "(e.g. 'tinycc' or 'tinycc_4a16f1cf'). "
+                                "Use list_repositories to see available names."
+                            ),
+                        },
                     },
-                    "required": ["question"],
+                    "required": ["repo_path", "source_repo"],
                 },
             ),
+            # -----------------------------------------------------------------
+            # Core query tools: fuzzy locate → browse → deep dive
+            # -----------------------------------------------------------------
             ToolDefinition(
-                name="get_code_snippet",
+                name="find_api",
                 description=(
-                    "Retrieve source code of a function, method, or class by fully qualified name."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "qualified_name": {
-                            "type": "string",
-                            "description": "Fully qualified name, e.g. 'mymodule.MyClass.my_method'.",
-                        }
-                    },
-                    "required": ["qualified_name"],
-                },
-            ),
-            ToolDefinition(
-                name="semantic_search",
-                description=(
-                    "Search the codebase semantically using vector embeddings. "
-                    "Returns the most relevant functions/classes for the query. "
-                    "Available after initialize_repository completes."
+                    "Find relevant APIs by natural language description. "
+                    "Combines semantic vector search with API documentation lookup "
+                    "in a single call — returns matching functions along with their "
+                    "signatures, docstrings, and call graphs. "
+                    "This is the primary tool for locating code from vague requirements."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Natural language description of what to find.",
+                            "description": "Natural language description of the API to find.",
                         },
                         "top_k": {
                             "type": "integer",
                             "description": "Number of results. Default: 5.",
-                        },
-                        "entity_types": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Filter by type: 'Function', 'Class', 'Method', etc.",
                         },
                     },
                     "required": ["query"],
                 },
             ),
             ToolDefinition(
-                name="list_wiki_pages",
-                description="List all generated wiki pages for the active repository.",
-                input_schema={"type": "object", "properties": {}, "required": []},
-            ),
-            ToolDefinition(
-                name="get_wiki_page",
-                description="Read the content of a generated wiki page.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "page_id": {
-                            "type": "string",
-                            "description": (
-                                "Page ID (e.g. 'page-1') or 'index' for the summary page. "
-                                "Use list_wiki_pages to see available pages."
-                            ),
-                        }
-                    },
-                    "required": ["page_id"],
-                },
-            ),
-            ToolDefinition(
-                name="locate_function",
-                description=(
-                    "Locate a function or method in the repository using Tree-sitter AST. "
-                    "Returns the source code, start/end line numbers, and qualified name."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Relative path from repo root.",
-                        },
-                        "function_name": {
-                            "type": "string",
-                            "description": (
-                                "Function or method name. "
-                                "Use 'ClassName.method' to disambiguate overloads."
-                            ),
-                        },
-                        "line_number": {
-                            "type": "integer",
-                            "description": "Optional: line number to disambiguate overloads.",
-                        },
-                    },
-                    "required": ["file_path", "function_name"],
-                },
-            ),
-            ToolDefinition(
-                name="list_api_interfaces",
-                description=(
-                    "List public API interfaces for a module or the entire project. "
-                    "Returns function signatures, struct/union/enum definitions with "
-                    "members, typedef declarations, and macro definitions. Particularly "
-                    "useful for C codebases to understand module boundaries."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "module": {
-                            "type": "string",
-                            "description": (
-                                "Module qualified name to query. "
-                                "If omitted, returns APIs across all modules."
-                            ),
-                        },
-                        "visibility": {
-                            "type": "string",
-                            "enum": ["public", "static", "extern", "all"],
-                            "description": (
-                                "Filter by visibility: 'public' (default) for functions "
-                                "declared in headers, 'extern' for non-static functions "
-                                "not in headers, 'static' for file-local functions, "
-                                "'all' for everything."
-                            ),
-                        },
-                        "include_types": {
-                            "type": "boolean",
-                            "description": (
-                                "Include struct/union/enum definitions and typedefs. "
-                                "Defaults to true."
-                            ),
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            ToolDefinition(
                 name="list_api_docs",
                 description=(
-                    "List available API documentation. Returns the L1 module index "
-                    "or the L2 module detail page listing all interfaces in that module. "
-                    "Use this for efficient hierarchical browsing: first list modules, "
-                    "then drill into a specific module."
+                    "Browse API documentation hierarchically. Without arguments, "
+                    "returns the L1 module index. With a module name, returns the "
+                    "L2 module page listing all functions, types, and macros. "
+                    "Use when you need to explore a module's structure."
                 ),
                 input_schema={
                     "type": "object",
@@ -500,9 +406,12 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="get_api_doc",
                 description=(
-                    "Read the detailed API documentation for a specific function. "
-                    "Includes signature, docstring, and full call graph "
-                    "(who calls it and what it calls)."
+                    "Read the detailed L3 API documentation for a specific function. "
+                    "Includes signature, description, full call tree (callees with depth), "
+                    "caller list with locations, real usage examples extracted from "
+                    "the codebase, parameter ownership, and source code implementation. "
+                    "Use this to understand how to call a function and how to combine "
+                    "it with other APIs."
                 ),
                 input_schema={
                     "type": "object",
@@ -518,163 +427,42 @@ class MCPToolsRegistry:
                     "required": ["qualified_name"],
                 },
             ),
-            ToolDefinition(
-                name="find_api",
-                description=(
-                    "Find relevant APIs by natural language description. "
-                    "Combines semantic vector search with API documentation lookup "
-                    "in a single call — returns matching functions along with their "
-                    "signatures, docstrings, and call graphs. "
-                    "Equivalent to running semantic_search + get_api_doc for each result."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural language description of the API to find.",
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Number of results. Default: 5.",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            ),
-            ToolDefinition(
-                name="generate_wiki",
-                description=(
-                    "Regenerate the wiki using existing graph and embeddings. "
-                    "Use this when wiki generation failed or you want to regenerate "
-                    "with different settings, without rebuilding the graph or embeddings. "
-                    "Requires initialize_repository to have been run at least once."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "wiki_mode": {
-                            "type": "string",
-                            "enum": ["comprehensive", "concise"],
-                            "description": (
-                                "comprehensive: 8-10 wiki pages (default). "
-                                "concise: 4-5 wiki pages."
-                            ),
-                        },
-                        "rebuild": {
-                            "type": "boolean",
-                            "description": (
-                                "If true, force-regenerate wiki structure and all pages "
-                                "even if cached. Default: false (regenerates pages only)."
-                            ),
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            ToolDefinition(
-                name="rebuild_embeddings",
-                description=(
-                    "Rebuild vector embeddings using the existing knowledge graph. "
-                    "Use this when embeddings are missing, corrupted, or when you "
-                    "want to re-embed after changing the embedding model/config. "
-                    "Requires a graph to have been built first "
-                    "(via initialize_repository or build_graph)."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "rebuild": {
-                            "type": "boolean",
-                            "description": (
-                                "If true, force-rebuild embeddings even if cached. "
-                                "Default: false (reuses cache if available)."
-                            ),
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            ToolDefinition(
-                name="build_graph",
-                description=(
-                    "Build the code knowledge graph from source code using "
-                    "Tree-sitter AST parsing. This is step 1 of the pipeline. "
-                    "After building, use generate_api_docs, rebuild_embeddings, "
-                    "and generate_wiki as separate steps."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Absolute path to the repository to index.",
-                        },
-                        "rebuild": {
-                            "type": "boolean",
-                            "description": (
-                                "If true, force-rebuild graph even if cached. "
-                                "Default: false."
-                            ),
-                        },
-                        "backend": {
-                            "type": "string",
-                            "enum": ["kuzu", "memgraph", "memory"],
-                            "description": (
-                                "Graph database backend. Default: kuzu (embedded)."
-                            ),
-                        },
-                    },
-                    "required": ["repo_path"],
-                },
-            ),
+            # -----------------------------------------------------------------
+            # Doc generation
+            # -----------------------------------------------------------------
             ToolDefinition(
                 name="generate_api_docs",
                 description=(
                     "Generate hierarchical API documentation from the existing "
-                    "knowledge graph. Produces L1 module index, L2 per-module pages, "
-                    "and L3 per-function detail pages with call graphs. "
-                    "Requires only a graph database — no embeddings or LLM needed. "
-                    "This is step 2 of the pipeline."
+                    "knowledge graph. Supports two modes:\n"
+                    "  • 'full' — rebuild all docs from graph + LLM descriptions\n"
+                    "  • 'resume' — only generate LLM descriptions for remaining TODO placeholders\n"
+                    "LLM descriptions are resumable: interrupted runs can be continued "
+                    "with mode='resume'. A circuit breaker stops after 3 consecutive "
+                    "LLM failures to avoid wasting quota."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "rebuild": {
-                            "type": "boolean",
+                        "mode": {
+                            "type": "string",
+                            "enum": ["full", "resume"],
                             "description": (
-                                "If true, force-regenerate API docs even if cached. "
-                                "Default: false."
+                                "'full': regenerate all API docs from the graph database, "
+                                "then run LLM description generation for undocumented functions. "
+                                "'resume': skip graph-based doc generation, only run LLM "
+                                "descriptions for functions that still have TODO placeholders "
+                                "(useful after an interruption or provider outage). "
+                                "Default: 'full'."
                             ),
                         },
                     },
                     "required": [],
                 },
             ),
-            ToolDefinition(
-                name="prepare_guidance",
-                description=(
-                    "Analyze a design document and generate a code generation "
-                    "guidance file. An internal LLM agent searches the codebase "
-                    "for relevant APIs, similar implementations, and dependency "
-                    "relationships, then synthesises a structured guidance "
-                    "Markdown document for downstream code generation."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "design_doc": {
-                            "type": "string",
-                            "description": (
-                                "The design document content (Markdown). "
-                                "The agent reads this, researches the codebase, "
-                                "and produces a guidance file."
-                            ),
-                        },
-                    },
-                    "required": ["design_doc"],
-                },
-            ),
+            # -----------------------------------------------------------------
+            # Configuration / diagnostics
+            # -----------------------------------------------------------------
             ToolDefinition(
                 name="get_config",
                 description=(
@@ -684,6 +472,14 @@ class MCPToolsRegistry:
                 ),
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
+            # -----------------------------------------------------------------
+            # Hidden tools — handlers preserved, not exposed to MCP clients.
+            # Superseded by API-doc-based workflows above.
+            #   query_code_graph, get_code_snippet, semantic_search,
+            #   locate_function, list_api_interfaces,
+            #   list_wiki_pages, get_wiki_page, generate_wiki,
+            #   rebuild_embeddings, build_graph, prepare_guidance
+            # -----------------------------------------------------------------
         ]
 
         return defs
@@ -694,6 +490,7 @@ class MCPToolsRegistry:
             "get_repository_info": self._handle_get_repository_info,
             "list_repositories": self._handle_list_repositories,
             "switch_repository": self._handle_switch_repository,
+            "link_repository": self._handle_link_repository,
             "query_code_graph": self._handle_query_code_graph,
             "get_code_snippet": self._handle_get_code_snippet,
             "semantic_search": self._handle_semantic_search,
@@ -1039,6 +836,103 @@ class MCPToolsRegistry:
             "repo_path": meta.get("repo_path"),
             "artifact_dir": str(target),
             "steps": meta.get("steps", {}),
+        }
+
+    # -------------------------------------------------------------------------
+    # link_repository — symlink a new repo path to an existing index
+    # -------------------------------------------------------------------------
+
+    async def _handle_link_repository(
+        self,
+        repo_path: str,
+        source_repo: str,
+    ) -> dict[str, Any]:
+        repo = Path(repo_path).resolve()
+        if not repo.is_dir():
+            raise ToolError(f"repo_path does not exist: {repo_path}")
+
+        # Find source artifact dir (same logic as switch_repository)
+        source_dir: Path | None = None
+        for child in self._workspace.iterdir():
+            if not child.is_dir():
+                continue
+            if child.name == source_repo:
+                source_dir = child
+                break
+        if source_dir is None:
+            for child in sorted(self._workspace.iterdir()):
+                if not child.is_dir():
+                    continue
+                meta_file = child / "meta.json"
+                if not meta_file.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if meta.get("repo_name") == source_repo:
+                    source_dir = child
+                    break
+
+        if source_dir is None or not (source_dir / "meta.json").exists():
+            raise ToolError({
+                "error": f"Source repository not found: {source_repo}",
+                "hint": "Use list_repositories to see available repos.",
+            })
+
+        # Create new artifact dir for this repo_path
+        new_dir = artifact_dir_for(self._workspace, repo)
+        if new_dir == source_dir:
+            raise ToolError("repo_path resolves to the same artifact as source_repo.")
+
+        if new_dir.exists():
+            raise ToolError({
+                "error": f"Artifact directory already exists: {new_dir.name}",
+                "hint": "Use switch_repository to activate it, or delete it first.",
+            })
+
+        new_dir.mkdir(parents=True)
+
+        # Symlink all data artifacts from source
+        artifacts = ["graph.db", "api_docs", "vectors.pkl", "wiki"]
+        linked = []
+        for name in artifacts:
+            src = source_dir / name
+            if src.exists():
+                dst = new_dir / name
+                dst.symlink_to(src)
+                linked.append(name)
+
+        # Write meta.json (not symlinked — stores this repo's own path)
+        source_meta = json.loads(
+            (source_dir / "meta.json").read_text(encoding="utf-8")
+        )
+        new_meta = {
+            **source_meta,
+            "repo_path": str(repo),
+            "repo_name": repo.name,
+            "linked_to": str(source_dir),
+            "linked_source_repo": source_meta.get("repo_name", source_dir.name),
+        }
+        (new_dir / "meta.json").write_text(
+            json.dumps(new_meta, ensure_ascii=False, indent=2)
+        )
+
+        # Activate the new linked repo
+        self._set_active(new_dir)
+        self._load_services(new_dir)
+
+        return {
+            "status": "success",
+            "repo_path": str(repo),
+            "artifact_dir": str(new_dir),
+            "linked_to": source_dir.name,
+            "linked_artifacts": linked,
+            "message": (
+                f"Linked {repo.name} → {source_dir.name}. "
+                f"Shared artifacts: {', '.join(linked)}. "
+                f"Now active."
+            ),
         }
 
     # -------------------------------------------------------------------------
@@ -1738,15 +1632,21 @@ class MCPToolsRegistry:
 
     async def _handle_generate_api_docs(
         self,
-        rebuild: bool = False,
+        mode: str = "full",
         _progress_cb: ProgressCb = None,
+        # Legacy param kept for backward compatibility
+        rebuild: bool = False,
     ) -> dict[str, Any]:
         self._require_active()
 
         if self._active_artifact_dir is None or self._active_repo_path is None:
             raise ToolError("No active repository. Call build_graph or initialize_repository first.")
 
+        if mode not in ("full", "resume"):
+            raise ToolError(f"Invalid mode '{mode}'. Must be 'full' or 'resume'.")
+
         artifact_dir = self._active_artifact_dir
+        repo_path = self._active_repo_path
 
         loop = asyncio.get_event_loop()
 
@@ -1754,10 +1654,9 @@ class MCPToolsRegistry:
             if _progress_cb is not None:
                 asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
 
-        repo_path = self._active_repo_path
         result = await loop.run_in_executor(
             None,
-            lambda: self._run_generate_api_docs(artifact_dir, repo_path, rebuild, sync_progress),
+            lambda: self._run_generate_api_docs(artifact_dir, repo_path, mode, sync_progress),
         )
         return result
 
@@ -1765,33 +1664,89 @@ class MCPToolsRegistry:
         self,
         artifact_dir: Path,
         repo_path: Path | None,
-        rebuild: bool,
+        mode: str = "full",
         progress_cb: ProgressCb = None,
     ) -> dict[str, Any]:
-        """Synchronous API docs generation from existing graph."""
+        """Synchronous API docs generation from existing graph.
+
+        Args:
+            mode: 'full' = regenerate docs from graph + LLM descriptions.
+                  'resume' = only run LLM descriptions for remaining TODOs.
+        """
         try:
-            assert self._ingestor is not None
+            if mode == "full":
+                assert self._ingestor is not None
 
-            result = generate_api_docs_step(
-                self._ingestor, artifact_dir, rebuild, progress_cb,
-                repo_path=repo_path,
-            )
+                result = generate_api_docs_step(
+                    self._ingestor, artifact_dir, True, progress_cb,
+                    repo_path=repo_path,
+                )
 
-            # LLM description generation for undocumented functions
-            if repo_path is not None:
+                # LLM description generation for undocumented functions
+                if repo_path is not None:
+                    desc_stats = generate_descriptions_step(
+                        artifact_dir=artifact_dir,
+                        repo_path=repo_path,
+                        progress_cb=progress_cb,
+                    )
+                    result["desc_stats"] = desc_stats
+
+                return {
+                    "status": result.get("status", "success"),
+                    "artifact_dir": str(artifact_dir),
+                    **{k: v for k, v in result.items() if k != "status"},
+                }
+
+            else:  # mode == "resume"
+                funcs_dir = artifact_dir / "api_docs" / "funcs"
+                if not funcs_dir.exists():
+                    raise ToolError(
+                        "No API docs found. Run with mode='full' first to "
+                        "generate docs from the graph database."
+                    )
+
+                # Report how many TODOs remain before starting
+                todo_funcs = _collect_todo_funcs(funcs_dir)
+                total_todo = len(todo_funcs)
+
+                if total_todo == 0:
+                    return {
+                        "status": "success",
+                        "message": "All functions already have LLM descriptions. Nothing to do.",
+                        "remaining_todo": 0,
+                    }
+
+                if progress_cb:
+                    progress_cb(
+                        f"Resuming LLM description generation: {total_todo} functions remaining",
+                        0.0,
+                    )
+
                 desc_stats = generate_descriptions_step(
                     artifact_dir=artifact_dir,
                     repo_path=repo_path,
                     progress_cb=progress_cb,
                 )
-                result["desc_stats"] = desc_stats
 
-            return {
-                "status": result.get("status", "success"),
-                "artifact_dir": str(artifact_dir),
-                **{k: v for k, v in result.items() if k != "status"},
-            }
+                # Count remaining after this run
+                remaining = len(_collect_todo_funcs(funcs_dir))
 
+                return {
+                    "status": "success" if not desc_stats.get("interrupted") else "interrupted",
+                    "artifact_dir": str(artifact_dir),
+                    "generated_count": desc_stats["generated_count"],
+                    "error_count": desc_stats["error_count"],
+                    "remaining_todo": remaining,
+                    "message": (
+                        f"Generated {desc_stats['generated_count']} descriptions. "
+                        f"{remaining} functions still need descriptions."
+                        + (" Run again with mode='resume' to continue."
+                           if remaining > 0 else "")
+                    ),
+                }
+
+        except ToolError:
+            raise
         except Exception as exc:
             logger.exception("API docs generation failed")
             raise ToolError({"error": str(exc), "status": "error"}) from exc
