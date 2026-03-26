@@ -333,14 +333,15 @@ function runServer(cmd, args) {
 }
 
 function startServer(extraArgs = []) {
-  if (commandExists("uvx")) {
+  // Prefer pip-installed package first (most reliable, includes all deps)
+  if (pythonPackageInstalled()) {
+    runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
+  } else if (commandExists("uvx")) {
     runServer("uvx", [PYTHON_PACKAGE, ...extraArgs]);
   } else if (commandExists("uv")) {
     runServer("uv", ["tool", "run", PYTHON_PACKAGE, ...extraArgs]);
   } else if (commandExists("pipx")) {
     runServer("pipx", ["run", PYTHON_PACKAGE, ...extraArgs]);
-  } else if (pythonPackageInstalled()) {
-    runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
   } else {
     const pipCmd = IS_WIN ? "pip" : "pip install";
     const uvInstall = IS_WIN
