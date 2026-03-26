@@ -200,6 +200,53 @@ def generate_api_docs_step(
     return {"status": "success", **result}
 
 
+def validate_api_docs(artifact_dir: Path) -> dict[str, Any]:
+    """Validate that generated API docs meet minimum quality standards.
+
+    Checks:
+        1. ``api_docs/index.md`` exists and is non-empty.
+        2. ``api_docs/modules/`` contains at least one ``.md`` file.
+        3. ``api_docs/funcs/`` contains at least one ``.md`` file.
+
+    Returns:
+        A dict with ``valid`` (bool), ``issues`` (list of strings),
+        and counts for ``modules``, ``funcs``.
+    """
+    api_dir = artifact_dir / "api_docs"
+    index_file = api_dir / "index.md"
+    modules_dir = api_dir / "modules"
+    funcs_dir = api_dir / "funcs"
+
+    issues: list[str] = []
+
+    # Check index
+    if not index_file.exists():
+        issues.append("index.md does not exist")
+    elif index_file.stat().st_size == 0:
+        issues.append("index.md is empty")
+
+    # Count module pages
+    module_count = 0
+    if modules_dir.exists():
+        module_count = len(list(modules_dir.glob("*.md")))
+    if module_count == 0:
+        issues.append("No module documentation files found in api_docs/modules/")
+
+    # Count function pages
+    func_count = 0
+    if funcs_dir.exists():
+        func_count = len(list(funcs_dir.glob("*.md")))
+    if func_count == 0:
+        issues.append("No function documentation files found in api_docs/funcs/")
+
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "modules": module_count,
+        "funcs": func_count,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Step 1b: LLM-powered description generation for undocumented functions
 # ---------------------------------------------------------------------------

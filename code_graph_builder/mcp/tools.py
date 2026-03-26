@@ -44,6 +44,7 @@ from .pipeline import (
     generate_descriptions_step,
     run_wiki_generation,
     save_meta,
+    validate_api_docs,
 )
 
 
@@ -802,11 +803,45 @@ class MCPToolsRegistry:
             # lock contention and wastes time).
             with builder:
                 # Step 2: generate API docs
-                generate_api_docs_step(
+                api_result = generate_api_docs_step(
                     builder, artifact_dir, rebuild,
                     progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
                     repo_path=repo_path,
                 )
+
+                # Validate API docs — if missing or empty, retry with
+                # the ingestor directly (bypasses CodeGraphBuilder.query
+                # which wraps with a new context manager each time).
+                validation = validate_api_docs(artifact_dir)
+                if not validation["valid"]:
+                    logger.warning(
+                        f"API docs validation failed after initial generation "
+                        f"(status={api_result.get('status')}): {validation['issues']}"
+                    )
+                    _step_progress(
+                        2, total_steps,
+                        f"API docs incomplete ({', '.join(validation['issues'])}), retrying...",
+                        12.0,
+                    )
+                    # Retry: force rebuild using the builder's ingestor directly
+                    ingestor = builder._get_ingestor()
+                    retry_result = generate_api_docs_step(
+                        ingestor, artifact_dir, rebuild=True,
+                        progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
+                        repo_path=repo_path,
+                    )
+                    retry_validation = validate_api_docs(artifact_dir)
+                    if retry_validation["valid"]:
+                        logger.info(
+                            f"API docs retry succeeded: "
+                            f"{retry_validation['modules']} modules, "
+                            f"{retry_validation['funcs']} functions"
+                        )
+                    else:
+                        logger.warning(
+                            f"API docs retry still incomplete: {retry_validation['issues']}. "
+                            f"Graph may not contain Module→Function relationships for this language."
+                        )
 
                 # Step 2b: LLM description generation for undocumented functions
                 generate_descriptions_step(
@@ -848,19 +883,28 @@ class MCPToolsRegistry:
                     _step_progress(3, total_steps, "Embedding skipped.", 40.0)
                     _step_progress(4, total_steps, "Wiki skipped (requires embeddings).", 100.0)
 
+            # Final API docs validation for the return value
+            final_validation = validate_api_docs(artifact_dir)
+
             # Session closed — safe to load services (which opens a new connection)
             save_meta(artifact_dir, repo_path, page_count)
             self._set_active(artifact_dir)
             self._load_services(artifact_dir)
 
-            return {
+            result: dict[str, Any] = {
                 "status": "success",
                 "repo_path": str(repo_path),
                 "artifact_dir": str(artifact_dir),
                 "wiki_index": str(index_path),
                 "wiki_pages": page_count,
                 "skipped": skipped,
+                "api_docs": final_validation,
             }
+            if not final_validation["valid"]:
+                result["warnings"] = [
+                    f"API docs incomplete: {', '.join(final_validation['issues'])}"
+                ]
+            return result
 
         except Exception as exc:
             logger.exception("Pipeline failed")
@@ -1771,6 +1815,21 @@ class MCPToolsRegistry:
                 self._ingestor, artifact_dir, rebuild, progress_cb,
                 repo_path=repo_path,
             )
+
+            # Validate and include diagnostics
+            validation = validate_api_docs(artifact_dir)
+            if not validation["valid"] and result.get("status") != "cached":
+                logger.warning(
+                    f"API docs validation failed: {validation['issues']}. "
+                    f"Retrying with rebuild=True..."
+                )
+                result = generate_api_docs_step(
+                    self._ingestor, artifact_dir, rebuild=True, progress_cb=progress_cb,
+                    repo_path=repo_path,
+                )
+                validation = validate_api_docs(artifact_dir)
+
+            result["validation"] = validation
 
             # LLM description generation for undocumented functions
             if repo_path is not None:
