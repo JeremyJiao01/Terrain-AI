@@ -77,12 +77,16 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 _FUNC_DOC_QUERY = """
-    MATCH (m:Module)-[:DEFINES]->(f:Function)
-    RETURN DISTINCT m.qualified_name, m.path,
+    MATCH (f:Function)
+    WHERE f.qualified_name IS NOT NULL
+    OPTIONAL MATCH (m:Module)-[]->(f)
+    RETURN DISTINCT
+           COALESCE(m.qualified_name, 'unknown') AS module_qn,
+           COALESCE(m.path, f.path) AS module_path,
            f.qualified_name, f.name, f.signature, f.return_type,
            f.visibility, f.parameters, f.docstring,
            f.start_line, f.end_line, f.path, f.kind
-    ORDER BY m.qualified_name, f.start_line
+    ORDER BY module_qn, f.start_line
 """
 
 _TYPE_DOC_QUERY_CLASS = """
@@ -100,7 +104,7 @@ _TYPE_DOC_QUERY_TYPE = """
 """
 
 _CALLS_QUERY = """
-    MATCH (caller:Function)-[:CALLS]->(callee:Function)
+    MATCH (caller:Function)-[]->(callee:Function)
     RETURN DISTINCT caller.qualified_name, callee.qualified_name,
            callee.path, callee.start_line,
            caller.path, caller.start_line, caller.end_line
@@ -484,36 +488,479 @@ def generate_descriptions_step(
 
 
 # ---------------------------------------------------------------------------
-# Step 2: vector index with per-batch progress
+# Step 1c: LLM-powered module summaries and usage workflows
+# ---------------------------------------------------------------------------
+
+_ENHANCE_BATCH_SIZE = 5  # Modules per LLM call
+
+_MODULE_SUMMARY_SYSTEM = """\
+You are a senior software architect. Given a module's function list with \
+signatures and brief descriptions, generate:
+1. A one-sentence summary of the module's purpose (field: summary).
+2. If the module has public API functions that are commonly used together, \
+   describe 1-3 typical usage workflows as numbered steps. Each step should \
+   name the function and briefly explain what it does in that context. \
+   If no clear workflow exists, return an empty list (field: workflows).
+
+Reply in JSON format:
+{"summary": "...", "workflows": ["1. call_a() — do X\\n2. call_b() — do Y", ...]}
+Reply with ONLY the JSON, nothing else."""
+
+
+def _parse_module_content(module_path: Path) -> dict[str, Any] | None:
+    """Parse an L2 module Markdown to extract function signatures."""
+    content = module_path.read_text(encoding="utf-8")
+    if len(content) < 50:
+        return None
+
+    module_qn = ""
+    funcs: list[str] = []
+
+    for line in content.splitlines():
+        if line.startswith("# ") and not module_qn:
+            module_qn = line[2:].strip()
+        # Table rows: | [func_name](...) | `signature` | description |
+        if line.startswith("| ["):
+            parts = line.split("|")
+            if len(parts) >= 4:
+                name_part = parts[1].strip()
+                sig_part = parts[2].strip().strip("`")
+                desc_part = parts[3].strip()
+                # Extract function name from [name](link)
+                if "](" in name_part:
+                    fname = name_part.split("](")[0].lstrip("[")
+                else:
+                    fname = name_part
+                entry = f"{fname}: {sig_part}"
+                if desc_part and desc_part != "—":
+                    entry += f" — {desc_part}"
+                funcs.append(entry)
+
+    if not module_qn or not funcs:
+        return None
+
+    return {
+        "module_qn": module_qn,
+        "path": module_path,
+        "content": content,
+        "funcs": funcs,
+    }
+
+
+def enhance_api_docs_step(
+    artifact_dir: Path,
+    progress_cb: ProgressCb = None,
+) -> dict[str, Any]:
+    """Generate module summaries and usage workflows via LLM.
+
+    Reads L2 module pages, sends function lists to LLM, writes back:
+    - Module summary into L1 index (replaces "—" in 职责 column)
+    - Usage workflows appended to L2 module page
+
+    Resumable: modules with existing summaries in the L1 index are skipped.
+
+    Returns summary dict with generated_count, skipped_count, error_count.
+    """
+    if create_llm_client is None:
+        logger.info("LLM client not available, skipping enhancement")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    try:
+        client = create_llm_client()
+    except (ValueError, RuntimeError) as e:
+        logger.info(f"No LLM API key configured, skipping enhancement: {e}")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    modules_dir = artifact_dir / "api_docs" / "modules"
+    index_file = artifact_dir / "api_docs" / "index.md"
+    if not modules_dir.exists() or not index_file.exists():
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    # Read current index to check which modules already have summaries
+    index_content = index_file.read_text(encoding="utf-8")
+    # Parse index table: | [module](link) | summary | ...
+    already_done: set[str] = set()
+    for line in index_content.splitlines():
+        if line.startswith("| ["):
+            parts = line.split("|")
+            if len(parts) >= 3:
+                summary = parts[2].strip()
+                if summary and summary != "—":
+                    # Extract module name from [name](link)
+                    name_part = parts[1].strip()
+                    if "](" in name_part:
+                        mname = name_part.split("](")[0].lstrip("[")
+                        already_done.add(mname)
+
+    # Collect modules needing enhancement
+    todo_modules: list[dict] = []
+    for md_file in sorted(modules_dir.glob("*.md")):
+        parsed = _parse_module_content(md_file)
+        if parsed and parsed["module_qn"] not in already_done:
+            # Skip very small modules (< 3 functions) — not worth LLM call
+            if len(parsed["funcs"]) >= 3:
+                todo_modules.append(parsed)
+
+    if not todo_modules:
+        logger.info("All modules already have summaries")
+        return {"generated_count": 0, "skipped_count": 0, "error_count": 0}
+
+    total = len(todo_modules)
+    logger.info(f"Enhancing {total} modules with LLM summaries and workflows")
+
+    generated = 0
+    errors = 0
+    consecutive_failures = 0
+    interrupted = False
+    total_batches = (total + _ENHANCE_BATCH_SIZE - 1) // _ENHANCE_BATCH_SIZE
+
+    # Collect results to batch-update index at the end
+    summaries: dict[str, str] = {}  # module_qn → summary
+
+    for batch_idx in range(0, total, _ENHANCE_BATCH_SIZE):
+        batch = todo_modules[batch_idx : batch_idx + _ENHANCE_BATCH_SIZE]
+        current_batch = batch_idx // _ENHANCE_BATCH_SIZE + 1
+
+        if progress_cb:
+            pct = int(current_batch / total_batches * 100)
+            progress_cb(
+                f"Enhancing modules: batch {current_batch}/{total_batches} "
+                f"({generated} done, {errors} errors)",
+                float(pct),
+            )
+
+        # Build prompt for this batch
+        prompt_parts: list[str] = []
+        for i, mod in enumerate(batch):
+            func_list = "\n".join(f"  - {f}" for f in mod["funcs"][:30])
+            prompt_parts.append(
+                f"[{i+1}] Module: {mod['module_qn']}\n"
+                f"Functions ({len(mod['funcs'])}):\n{func_list}\n"
+            )
+        prompt = (
+            "\n".join(prompt_parts)
+            + f"\nGenerate exactly {len(batch)} JSON objects, one per line, "
+            f"numbered [1] to [{len(batch)}]."
+        )
+
+        try:
+            response = client.chat(
+                query=prompt,
+                system_prompt=_MODULE_SUMMARY_SYSTEM,
+                max_tokens=4096,
+                temperature=1.0,
+            )
+
+            # Parse response: expect [N] {json} per line
+            import re as _re
+            for line in response.content.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = _re.match(r"^\[?(\d+)[.\)\]]\s*(.*)", line)
+                if not m:
+                    continue
+                idx = int(m.group(1)) - 1
+                json_str = m.group(2).strip()
+                if 0 <= idx < len(batch):
+                    try:
+                        data = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Try extracting JSON from the line
+                        json_start = json_str.find("{")
+                        json_end = json_str.rfind("}") + 1
+                        if json_start != -1 and json_end > json_start:
+                            try:
+                                data = json.loads(json_str[json_start:json_end])
+                            except json.JSONDecodeError:
+                                errors += 1
+                                continue
+                        else:
+                            errors += 1
+                            continue
+
+                    mod = batch[idx]
+                    summary = data.get("summary", "").strip()
+                    workflows = data.get("workflows", [])
+
+                    if summary:
+                        summaries[mod["module_qn"]] = summary
+
+                        # Append workflows to L2 module page if any
+                        if workflows:
+                            workflow_section = "\n\n## 使用工作流\n"
+                            for wf in workflows:
+                                workflow_section += f"\n{wf}\n"
+
+                            old_content = mod["content"]
+                            # Only add if not already present
+                            if "## 使用工作流" not in old_content:
+                                new_content = old_content.rstrip() + workflow_section + "\n"
+                                mod["path"].write_text(new_content, encoding="utf-8")
+
+                        generated += 1
+                    else:
+                        errors += 1
+
+            consecutive_failures = 0 if generated > 0 else consecutive_failures + 1
+
+        except KeyboardInterrupt:
+            logger.warning(f"Interrupted. {generated} modules enhanced.")
+            interrupted = True
+            break
+        except Exception as e:
+            logger.warning(f"LLM enhancement batch {current_batch} failed: {e}")
+            errors += len(batch)
+            consecutive_failures += 1
+
+        if consecutive_failures >= _DESC_MAX_CONSECUTIVE_FAILURES:
+            logger.error(f"Circuit breaker: {consecutive_failures} consecutive failures.")
+            interrupted = True
+            break
+
+    # Update L1 index with summaries
+    if summaries:
+        new_index_lines: list[str] = []
+        for line in index_content.splitlines():
+            if line.startswith("| ["):
+                parts = line.split("|")
+                if len(parts) >= 3:
+                    name_part = parts[1].strip()
+                    if "](" in name_part:
+                        mname = name_part.split("](")[0].lstrip("[")
+                        if mname in summaries:
+                            parts[2] = f" {summaries[mname]} "
+                            line = "|".join(parts)
+            new_index_lines.append(line)
+        index_file.write_text("\n".join(new_index_lines), encoding="utf-8")
+
+    logger.info(f"Enhancement complete: {generated} modules, {errors} errors")
+    return {
+        "generated_count": generated,
+        "skipped_count": total - generated - errors,
+        "error_count": errors,
+        "interrupted": interrupted,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 3: vector index with per-batch progress
 # ---------------------------------------------------------------------------
 
 _EMBED_BATCH_SIZE = 10
 
 
-def _build_embedding_text(
-    func: dict,
-    callers: list[str],
-    callees: list[str],
-    source: str,
-) -> str:
-    """Compose rich embedding text for a function.
+def _parse_l3_for_embedding(md_path: Path) -> tuple[dict, str] | None:
+    """Parse an L3 API doc Markdown file and extract structured info + embedding text.
 
-    Combines name, file location, docstring, call relationships, and source
-    code so that semantic search can match abstract descriptions even when
-    functions lack formal documentation.
+    Returns (func_info, embedding_text) or None if the file is too small.
+    The embedding text is a de-formatted semantic string optimised for vector
+    retrieval — Markdown formatting noise is stripped so the embedding model
+    receives only meaningful semantic tokens.
     """
-    parts: list[str] = [f"Function: {func['name']}"]
-    if func.get("path"):
-        parts.append(f"File: {func['path']}")
-    if func.get("docstring"):
-        parts.append(f"Description: {func['docstring']}")
-    if callers:
-        parts.append(f"Called by: {', '.join(callers[:10])}")
-    if callees:
-        parts.append(f"Calls: {', '.join(callees[:10])}")
-    parts.append("---")
-    parts.append(source)
-    return "\n".join(parts)
+    content = md_path.read_text(encoding="utf-8")
+    if len(content) < 30:
+        return None
+
+    func_info: dict[str, Any] = {}
+    lines = content.splitlines()
+
+    # ---- Parse header metadata ----
+    for line in lines:
+        if line.startswith("# "):
+            func_info["name"] = line[2:].strip()
+        elif line.startswith("> ") and "name" in func_info and "description" not in func_info:
+            desc = line[2:].strip()
+            if not desc.startswith("<!--"):
+                func_info["description"] = desc
+        elif line.startswith("- 签名:") or line.startswith("- 定义:"):
+            start = line.find("`")
+            end = line.rfind("`")
+            if start != -1 and end > start:
+                func_info["signature"] = line[start + 1 : end]
+        elif line.startswith("- 返回:"):
+            start = line.find("`")
+            end = line.rfind("`")
+            if start != -1 and end > start:
+                func_info["return_type"] = line[start + 1 : end]
+        elif line.startswith("- 可见性:"):
+            func_info["visibility"] = line[len("- 可见性:"):].strip().split("|")[0].strip()
+        elif line.startswith("- 位置:"):
+            func_info["location"] = line[len("- 位置:"):].strip()
+        elif line.startswith("- 模块:"):
+            func_info["module"] = line[len("- 模块:"):].strip()
+        elif line.startswith("- 类型: 宏定义"):
+            func_info["kind"] = "macro"
+
+    # Derive qualified_name from filename (filename = sanitised qn)
+    stem = md_path.stem  # e.g. "tinycc.tccgen.gv"
+    func_info["qualified_name"] = stem
+
+    if not func_info.get("name"):
+        return None
+
+    # Infer kind if not already set
+    if "kind" not in func_info:
+        func_info["kind"] = "function"
+
+    # ---- Split content into sections for priority-based truncation ----
+    sections = _split_into_sections(lines)
+
+    embedding_text = _build_embedding_text(func_info, sections)
+
+    return func_info, embedding_text
+
+
+def _split_into_sections(lines: list[str]) -> dict[str, list[str]]:
+    """Split L3 Markdown lines into named sections.
+
+    Returns a dict mapping section names to their content lines.
+    Recognised sections: header, description, call_tree, callers,
+    usage_examples, params, source.
+    """
+    sections: dict[str, list[str]] = {"header": []}
+    current = "header"
+
+    section_map = {
+        "## 描述": "description",
+        "## 调用树": "call_tree",
+        "## 被调用": "callers",
+        "## 使用示例": "usage_examples",
+        "## 参数与内存": "params",
+        "## 实现": "source",
+    }
+
+    for line in lines:
+        matched = False
+        for prefix, name in section_map.items():
+            if line.startswith(prefix):
+                current = name
+                sections.setdefault(current, [])
+                matched = True
+                break
+        if not matched:
+            sections.setdefault(current, [])
+            sections[current].append(line)
+
+    return sections
+
+
+def _build_embedding_text(
+    func_info: dict[str, Any],
+    sections: dict[str, list[str]],
+    max_chars: int = 4000,
+) -> str:
+    """Build a de-formatted semantic text optimised for embedding retrieval.
+
+    Strips Markdown syntax (headings, backticks, table borders, fences) and
+    assembles a plain-text representation ordered by semantic importance:
+
+        1. Identity + description  (always included)
+        2. Call tree               (high value for structural queries)
+        3. Callers                 (medium value)
+        4. Source code             (lowest priority, truncated first)
+
+    The result is capped at *max_chars* by dropping lower-priority sections
+    from the tail rather than cutting mid-sentence.
+    """
+    parts: list[str] = []
+
+    # --- 1. Identity block (always included) ---
+    name = func_info.get("name", "")
+    sig = func_info.get("signature", name)
+    kind = func_info.get("kind", "function")
+    module = func_info.get("module", "")
+    desc = func_info.get("description", "")
+    ret = func_info.get("return_type", "")
+
+    identity = f"[{kind}] {sig}"
+    if ret:
+        identity += f" -> {ret}"
+    parts.append(identity)
+
+    if module:
+        parts.append(f"模块: {module}")
+    if desc:
+        parts.append(desc)
+
+    # Full docstring from description section (if longer than the summary)
+    if "description" in sections:
+        full_doc = _strip_markdown("\n".join(sections["description"])).strip()
+        if full_doc and full_doc != desc:
+            parts.append(full_doc)
+
+    # --- 2. Call tree (high value for "what does X call" queries) ---
+    if "call_tree" in sections:
+        tree_text = _strip_markdown("\n".join(sections["call_tree"])).strip()
+        if tree_text:
+            parts.append(f"调用: {tree_text}")
+
+    # --- 3. Callers (medium value for "who calls X" queries) ---
+    if "callers" in sections:
+        caller_lines = []
+        for line in sections["callers"]:
+            stripped = line.strip()
+            if stripped.startswith("- ") and stripped != "*(无调用者)*":
+                caller_lines.append(stripped[2:].split("→")[0].strip())
+        if caller_lines:
+            parts.append(f"被调用: {', '.join(caller_lines)}")
+
+    # --- 4. Source code (lowest priority) ---
+    if "source" in sections:
+        source_lines = []
+        in_fence = False
+        for line in sections["source"]:
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                source_lines.append(line)
+        if source_lines:
+            parts.append("源码:\n" + "\n".join(source_lines))
+
+    # --- Priority-based truncation ---
+    result = "\n".join(parts)
+    if len(result) <= max_chars:
+        return result
+
+    # Drop sections from the tail until we fit
+    while len(parts) > 1 and len("\n".join(parts)) > max_chars:
+        parts.pop()
+
+    return "\n".join(parts)[:max_chars]
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove common Markdown formatting tokens from *text*.
+
+    Strips: heading markers, backtick fences/inline code, bullet prefixes,
+    table borders, blockquote markers, and HTML comments.
+    """
+    out: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        # Skip table borders and HTML comments
+        if line.strip().startswith("|--") or line.strip().startswith("<!--"):
+            continue
+        # Strip heading markers
+        stripped = line.lstrip("#").strip()
+        # Strip blockquote markers
+        if stripped.startswith("> "):
+            stripped = stripped[2:]
+        # Strip bullet prefix
+        if stripped.startswith("- "):
+            stripped = stripped[2:]
+        # Strip inline backticks
+        stripped = stripped.replace("`", "")
+        if stripped:
+            out.append(stripped)
+    return "\n".join(out)
 
 
 def build_vector_index(
@@ -523,7 +970,11 @@ def build_vector_index(
     rebuild: bool,
     progress_cb: ProgressCb = None,
 ) -> tuple[Any, Any, dict[int, dict]]:
-    """Build or load vector embeddings, reporting after every API batch call."""
+    """Build or load vector embeddings from L3 API doc Markdown files.
+
+    No graph database access needed — reads directly from api_docs/funcs/*.md.
+    The ``builder`` parameter is kept for backward compatibility but is not used.
+    """
     from ..embeddings.qwen3_embedder import create_embedder
     from ..embeddings.vector_store import MemoryVectorStore, VectorRecord
 
@@ -536,85 +987,41 @@ def build_vector_index(
         func_map: dict[int, dict] = cache["func_map"]
         if progress_cb:
             progress_cb(
-                f"[Step 2/3] Loaded {len(vector_store)} embeddings from cache: {vectors_path}",
+                f"Loaded {len(vector_store)} embeddings from cache.",
                 40.0,
             )
         return vector_store, embedder, func_map
 
-    # ---- Query functions with docstring and module path ----
-    rows = builder.query("""
-        MATCH (m:Module)-[:DEFINES]->(f:Function)
-        RETURN DISTINCT f.name AS name,
-               f.qualified_name AS qualified_name,
-               f.start_line AS start_line,
-               f.end_line AS end_line,
-               f.docstring AS docstring,
-               m.path AS path
-    """)
-    all_funcs: list[dict] = []
-    seen_qn: set[str] = set()
-    for row in rows:
-        qn = row.get("qualified_name") or ""
-        if not qn or qn in seen_qn:
-            continue
-        seen_qn.add(qn)
-        all_funcs.append({
-            "name": row.get("name") or "",
-            "qualified_name": qn,
-            "start_line": row.get("start_line") or 0,
-            "end_line": row.get("end_line") or 0,
-            "docstring": row.get("docstring") or "",
-            "path": row.get("path") or "",
-        })
-
-    # ---- Build caller/callee maps for richer embedding context ----
-    from collections import defaultdict
-    call_rows = builder.query("""
-        MATCH (caller:Function)-[:CALLS]->(callee:Function)
-        RETURN DISTINCT caller.qualified_name AS caller_qn,
-               callee.qualified_name AS callee_qn
-    """)
-    callees_of: dict[str, list[str]] = defaultdict(list)
-    callers_of: dict[str, list[str]] = defaultdict(list)
-    seen_edges: set[tuple[str, str]] = set()
-    for row in call_rows:
-        caller_qn = row.get("caller_qn") or ""
-        callee_qn = row.get("callee_qn") or ""
-        if not caller_qn or not callee_qn:
-            continue
-        edge = (caller_qn, callee_qn)
-        if edge in seen_edges:
-            continue
-        seen_edges.add(edge)
-        callees_of[caller_qn].append(callee_qn.split(".")[-1])
-        callers_of[callee_qn].append(caller_qn.split(".")[-1])
+    # ---- Read from L3 API doc files (no Kuzu needed) ----
+    # artifact_dir is vectors_path's parent
+    funcs_dir = vectors_path.parent / "api_docs" / "funcs"
+    if not funcs_dir.exists():
+        logger.warning("No API docs found for embedding. Run generate_api_docs first.")
+        vector_store = MemoryVectorStore(dimension=embedder.get_embedding_dimension())
+        return vector_store, embedder, {}
 
     embeddable: list[tuple[int, dict, str]] = []
-    for i, func in enumerate(all_funcs):
-        source = _read_function_source(func, repo_path)
-        if source:
-            text = _build_embedding_text(
-                func,
-                callers=callers_of.get(func["qualified_name"], []),
-                callees=callees_of.get(func["qualified_name"], []),
-                source=source,
-            )
-            embeddable.append((i, func, text))
+    for i, md_file in enumerate(sorted(funcs_dir.glob("*.md"))):
+        parsed = _parse_l3_for_embedding(md_file)
+        if parsed:
+            func_info, text = parsed
+            embeddable.append((i, func_info, text))
 
     total = len(embeddable)
     if progress_cb:
         progress_cb(
-            f"[Step 2/3] Embedding {total} functions "
-            f"(batch size {_EMBED_BATCH_SIZE}, {(total + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE} API calls)...",
+            f"Embedding {total} functions "
+            f"(batch size {_EMBED_BATCH_SIZE}, "
+            f"{(total + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE} API calls)...",
             16.0,
         )
 
     vector_store = MemoryVectorStore(dimension=embedder.get_embedding_dimension())
-    func_map = {}
+    func_map: dict[int, dict] = {}
     records: list[VectorRecord] = []
 
     for batch_start in range(0, total, _EMBED_BATCH_SIZE):
-        batch = embeddable[batch_start: batch_start + _EMBED_BATCH_SIZE]
+        batch = embeddable[batch_start : batch_start + _EMBED_BATCH_SIZE]
         batch_texts = [t for _, _, t in batch]
 
         batch_embeddings = embedder.embed_batch(batch_texts)
@@ -625,20 +1032,21 @@ def build_vector_index(
                 qualified_name=func["qualified_name"],
                 embedding=embedding,
                 metadata={
-                    "name": func["name"],
-                    "start_line": func["start_line"],
-                    "end_line": func["end_line"],
+                    "name": func.get("name", ""),
+                    "location": func.get("location", ""),
+                    "module": func.get("module", ""),
+                    "kind": func.get("kind", "function"),
+                    "visibility": func.get("visibility", ""),
+                    "signature": func.get("signature", ""),
                 },
             ))
             func_map[node_id] = func
 
         done = min(batch_start + _EMBED_BATCH_SIZE, total)
-        local_pct = done * 100 // total
-        # Map local 0-100% to overall 16-40%
-        overall_pct = 16.0 + (done / total) * 24.0
-        if progress_cb:
+        if progress_cb and total > 0:
+            overall_pct = 16.0 + (done / total) * 24.0
             progress_cb(
-                f"[Step 2/3] Embedded {done}/{total} functions ({local_pct}%).",
+                f"Embedded {done}/{total} functions.",
                 overall_pct,
             )
 
@@ -648,7 +1056,7 @@ def build_vector_index(
         pickle.dump({"vector_store": vector_store, "func_map": func_map}, fh)
 
     if progress_cb:
-        progress_cb(f"[Step 2/3] Done — {len(records)} embeddings saved.", 40.0)
+        progress_cb(f"Done — {len(records)} embeddings saved.", 40.0)
 
     return vector_store, embedder, func_map
 

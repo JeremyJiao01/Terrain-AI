@@ -292,14 +292,25 @@ class KuzuIngestor:
             """)
             logger.info(f"Created relationship table: {rel_type} ({from_label}→{to_label})")
         except Exception:
-            # Table may already exist — check if it supports this label pair
+            # Table already exists — check if it actually supports this label pair
+            # by inspecting show_connection() rather than a probe MATCH (which
+            # returns empty instead of raising when the pair is unsupported).
+            pair_supported = False
             try:
-                # Try a probe MATCH with the specific labels
-                self._conn.execute(
-                    f"MATCH (a:{from_label})-[r:{rel_type}]->(b:{to_label}) RETURN r LIMIT 1"
+                result = self._conn.execute(
+                    f'CALL show_connection("{rel_type}") RETURN *'
                 )
-            except Exception:
-                # Label pair not supported — try creating a REL TABLE GROUP
+                while result.has_next():
+                    row = result.get_next()
+                    # row is a list: [source_table_name, dest_table_name, src_pk, dst_pk]
+                    if len(row) >= 2 and row[0] == from_label and row[1] == to_label:
+                        pair_supported = True
+                        break
+            except Exception as e:
+                logger.debug(f"show_connection check failed for {rel_type}: {e}")
+
+            if not pair_supported:
+                # Label pair not supported — create a separate REL TABLE
                 group_name = f"{rel_type}_{from_label}_{to_label}"
                 try:
                     self._conn.execute(f"""
@@ -309,8 +320,6 @@ class KuzuIngestor:
                         )
                     """)
                     logger.info(f"Created additional rel table: {group_name} ({from_label}→{to_label})")
-                    # Update the relationship buffer to use the new table name
-                    # We need to intercept flush_relationships for this label pair
                     if not hasattr(self, "_rel_table_overrides"):
                         self._rel_table_overrides: dict[tuple[str, str, str], str] = {}
                     self._rel_table_overrides[(rel_type, from_label, to_label)] = group_name
@@ -345,6 +354,9 @@ class KuzuIngestor:
         """
         self.relationship_buffer.append((source, rel_type, target, properties))
         if len(self.relationship_buffer) >= self.batch_size:
+            # Flush nodes first — rel table creation requires node tables to exist
+            if self.node_buffer:
+                self.flush_nodes()
             self.flush_relationships()
 
     def _value_to_cypher(self, value: PropertyValue) -> str:

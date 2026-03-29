@@ -806,28 +806,42 @@ def generate_api_docs(
         # Remove empty strings
         mod_data["files"].discard("")
 
-    # ---- Generate L3: per-function detail pages ----
-    total_funcs = 0
+    # ---- Generate L3: per-function detail pages (parallel) ----
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import os
+
+    # Collect all func tasks
+    _l3_tasks: list[dict[str, Any]] = []
     for mod_data in modules.values():
         for func in mod_data["funcs"]:
-            qn = func["qn"]
-            if not qn:
-                continue
-            content = _render_func_detail(
-                func,
-                callers=callers_of.get(qn, []),
-                callees=callees_of.get(qn, []),
-                callees_of=callees_of,
-                func_lookup=func_lookup,
-                repo_path=repo_path,
-            )
-            safe = _sanitise_filename(qn)
-            (funcs_dir / f"{safe}.md").write_text(content, encoding="utf-8")
-            total_funcs += 1
+            if func["qn"]:
+                _l3_tasks.append(func)
 
-    # ---- Generate L2: per-module pages ----
-    module_summaries: list[dict[str, Any]] = []
-    for module_qn in sorted(modules):
+    def _write_l3(func: dict[str, Any]) -> None:
+        qn = func["qn"]
+        content = _render_func_detail(
+            func,
+            callers=callers_of.get(qn, []),
+            callees=callees_of.get(qn, []),
+            callees_of=callees_of,
+            func_lookup=func_lookup,
+            repo_path=repo_path,
+        )
+        safe = _sanitise_filename(qn)
+        (funcs_dir / f"{safe}.md").write_text(content, encoding="utf-8")
+
+    max_workers = min(os.cpu_count() or 4, 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_write_l3, func) for func in _l3_tasks]
+        for fut in as_completed(futures):
+            exc = fut.exception()
+            if exc:
+                logger.warning(f"L3 doc generation error: {exc}")
+
+    total_funcs = len(_l3_tasks)
+
+    # ---- Generate L2: per-module pages (parallel) ----
+    def _write_l2(module_qn: str) -> dict[str, Any]:
         mod_data = modules[module_qn]
         funcs = mod_data["funcs"]
         types = mod_data["types"]
@@ -841,13 +855,12 @@ def generate_api_docs(
         safe = _sanitise_filename(module_qn)
         (modules_dir / f"{safe}.md").write_text(content, encoding="utf-8")
 
-        # Summary stats
         vis_counts: dict[str, int] = defaultdict(int)
         for f in funcs:
             vis_counts[f.get("visibility") or "unknown"] += 1
         macro_count = sum(1 for f in funcs if f.get("kind") == "macro")
 
-        module_summaries.append({
+        return {
             "qn": module_qn,
             "files": files,
             "public": vis_counts.get("public", 0),
@@ -856,7 +869,20 @@ def generate_api_docs(
             "types": len(types),
             "total": len(funcs) + len(types),
             "macros": macro_count,
-        })
+        }
+
+    module_summaries: list[dict[str, Any]] = []
+    sorted_modules = sorted(modules)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_write_l2, mq): mq for mq in sorted_modules}
+        for fut in as_completed(futures):
+            exc = fut.exception()
+            if exc:
+                logger.warning(f"L2 doc generation error: {exc}")
+            else:
+                module_summaries.append(fut.result())
+    # Restore sorted order
+    module_summaries.sort(key=lambda s: s["qn"])
 
     # ---- Generate L1: global index ----
     total_types = sum(len(m["types"]) for m in modules.values())

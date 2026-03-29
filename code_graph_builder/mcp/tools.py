@@ -41,6 +41,7 @@ from .pipeline import (
     artifact_dir_for,
     build_graph,
     build_vector_index,
+    enhance_api_docs_step,
     generate_api_docs_step,
     generate_descriptions_step,
     run_wiki_generation,
@@ -231,8 +232,8 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="initialize_repository",
                 description=(
-                    "Index a code repository: builds the knowledge graph, generates vector "
-                    "embeddings, and produces a multi-page wiki. "
+                    "Index a code repository: builds the knowledge graph, generates "
+                    "API documentation, and creates vector embeddings for semantic search. "
                     "Must be called before using any query tools. "
                     "Takes 2-10 minutes depending on repo size."
                 ),
@@ -246,38 +247,15 @@ class MCPToolsRegistry:
                         "rebuild": {
                             "type": "boolean",
                             "description": (
-                                "If true, force-rebuild graph, embeddings, and wiki "
+                                "If true, force-rebuild graph, API docs, and embeddings "
                                 "even if cached data exists. Default: false."
-                            ),
-                        },
-                        "wiki_mode": {
-                            "type": "string",
-                            "enum": ["comprehensive", "concise"],
-                            "description": (
-                                "comprehensive: 8-10 wiki pages (default). "
-                                "concise: 4-5 wiki pages."
-                            ),
-                        },
-                        "backend": {
-                            "type": "string",
-                            "enum": ["kuzu", "memgraph", "memory"],
-                            "description": (
-                                "Graph database backend. Default: kuzu (embedded, no Docker)."
-                            ),
-                        },
-                        "skip_wiki": {
-                            "type": "boolean",
-                            "description": (
-                                "Skip wiki generation (graph + embeddings only). "
-                                "Use generate_wiki later to create wiki separately. "
-                                "Default: false."
                             ),
                         },
                         "skip_embed": {
                             "type": "boolean",
                             "description": (
-                                "Skip embeddings and wiki (graph only, fastest). "
-                                "Semantic search will be unavailable. Default: false."
+                                "Skip embedding generation (graph + API docs only, fastest). "
+                                "Semantic search (find_api) will be unavailable. Default: false."
                             ),
                         },
                     },
@@ -433,26 +411,24 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="generate_api_docs",
                 description=(
-                    "Generate hierarchical API documentation from the existing "
-                    "knowledge graph. Supports two modes:\n"
-                    "  • 'full' — rebuild all docs from graph + LLM descriptions\n"
-                    "  • 'resume' — only generate LLM descriptions for remaining TODO placeholders\n"
-                    "LLM descriptions are resumable: interrupted runs can be continued "
-                    "with mode='resume'. A circuit breaker stops after 3 consecutive "
-                    "LLM failures to avoid wasting quota."
+                    "Generate and enhance API documentation. Supports three modes:\n"
+                    "  • 'full' — rebuild all docs from graph + LLM function descriptions\n"
+                    "  • 'resume' — only generate LLM descriptions for remaining TODOs\n"
+                    "  • 'enhance' — generate module summaries and API usage workflows via LLM\n"
+                    "All modes are resumable with circuit breaker protection."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "mode": {
                             "type": "string",
-                            "enum": ["full", "resume"],
+                            "enum": ["full", "resume", "enhance"],
                             "description": (
                                 "'full': regenerate all API docs from the graph database, "
-                                "then run LLM description generation for undocumented functions. "
-                                "'resume': skip graph-based doc generation, only run LLM "
-                                "descriptions for functions that still have TODO placeholders "
-                                "(useful after an interruption or provider outage). "
+                                "then run LLM description generation. "
+                                "'resume': only run LLM descriptions for remaining TODOs. "
+                                "'enhance': generate module-level summaries (what each module does) "
+                                "and API usage workflows (how to combine functions). "
                                 "Default: 'full'."
                             ),
                         },
@@ -553,104 +529,73 @@ class MCPToolsRegistry:
         skip_wiki: bool = False,
         skip_embed: bool = False,
     ) -> dict[str, Any]:
-        """Synchronous pipeline orchestrator: graph → api_docs → embeddings → wiki.
+        """Synchronous pipeline orchestrator: graph → api_docs → embeddings.
 
-        Each step calls the same standalone pipeline functions that the
-        individual tool handlers use, so behaviour is identical whether
-        invoked from ``initialize_repository`` or step-by-step.
+        Wiki generation is not part of the main pipeline — use the
+        ``generate_wiki`` tool separately if needed.
         """
-        from ..examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
-
-        if skip_embed:
-            skip_wiki = True  # wiki requires embeddings
-
         artifact_dir = artifact_dir_for(self._workspace, repo_path)
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
         db_path = artifact_dir / "graph.db"
         vectors_path = artifact_dir / "vectors.pkl"
-        wiki_dir = artifact_dir / "wiki"
-        comprehensive = wiki_mode != "concise"
-        max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
+
+        total_steps = 2 if skip_embed else 3
 
         def _step_progress(step: int, total: int, msg: str, pct: float) -> None:
             if progress_cb:
                 progress_cb(f"[Step {step}/{total}] {msg}", pct)
-
-        total_steps = 4
-        if skip_embed:
-            total_steps = 2  # graph + api_docs only
-        elif skip_wiki:
-            total_steps = 3  # graph + api_docs + embeddings
 
         try:
             # Close existing MCP connection first so the builder can
             # open the database without lock contention.
             self.close()
 
-            # Step 1: build graph (read-write) — returns a CodeGraphBuilder
+            # Step 1: build graph (read-write)
             builder = build_graph(
                 repo_path, db_path, rebuild, progress_cb=lambda msg, pct: _step_progress(1, total_steps, msg, pct),
                 backend=backend,
             )
-            # build_graph's internal `with ingestor:` has already closed
-            # the read-write connection.  All subsequent steps only need
-            # to read the graph, so we open a read-only ingestor.  This
-            # avoids holding a write lock during the (potentially long)
-            # API-doc / embedding / wiki generation and allows other
-            # processes to read the same database concurrently.
+            # IMPORTANT: On Windows, Kuzu holds mandatory file locks via
+            # the C++ Database object.  We must delete all references and
+            # force GC before opening a new connection.
+            import gc
+            if hasattr(builder, '_ingestor'):
+                builder._ingestor = None
+            del builder
+            gc.collect()
 
+            # Step 2: generate API docs (needs read-only Kuzu access)
             ro_ingestor = KuzuIngestor(db_path, read_only=True)
             with ro_ingestor:
-                # Step 2: generate API docs (read-only)
                 generate_api_docs_step(
                     ro_ingestor, artifact_dir, rebuild,
                     progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
                     repo_path=repo_path,
                 )
+            # Kuzu no longer needed after this point
 
-                # Step 2b: LLM description generation for undocumented functions
-                generate_descriptions_step(
-                    artifact_dir=artifact_dir,
-                    repo_path=repo_path,
-                    progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
+            # Step 2b: LLM description generation for undocumented functions
+            generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
+                progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
+            )
+
+            skipped = []
+
+            if not skip_embed:
+                # Step 3: build embeddings from API doc Markdown files (no Kuzu)
+                build_vector_index(
+                    None, repo_path, vectors_path, rebuild,
+                    progress_cb=lambda msg, pct: _step_progress(3, total_steps, msg, pct),
                 )
+            else:
+                skipped.append("embed")
+                _step_progress(total_steps, total_steps, "Embedding skipped.", 100.0)
 
-                page_count = 0
-                index_path = wiki_dir / "index.md"
-                skipped = []
-
-                if not skip_embed:
-                    # Step 3: build embeddings (read-only queries)
-                    vector_store, embedder, func_map = build_vector_index(
-                        ro_ingestor, repo_path, vectors_path, rebuild,
-                        progress_cb=lambda msg, pct: _step_progress(3, total_steps, msg, pct),
-                    )
-
-                    if not skip_wiki:
-                        # Step 4: generate wiki (read-only queries)
-                        index_path, page_count = run_wiki_generation(
-                            builder=ro_ingestor,
-                            repo_path=repo_path,
-                            output_dir=wiki_dir,
-                            max_pages=max_pages,
-                            rebuild=rebuild,
-                            comprehensive=comprehensive,
-                            vector_store=vector_store,
-                            embedder=embedder,
-                            func_map=func_map,
-                            progress_cb=lambda msg, pct: _step_progress(4, total_steps, msg, pct),
-                        )
-                    else:
-                        skipped.append("wiki")
-                        _step_progress(4, total_steps, "Wiki generation skipped.", 100.0)
-                else:
-                    skipped.extend(["embed", "wiki"])
-                    _step_progress(3, total_steps, "Embedding skipped.", 40.0)
-                    _step_progress(4, total_steps, "Wiki skipped (requires embeddings).", 100.0)
-
-            # Read-only session closed — _load_services opens its own read-only connection
-            save_meta(artifact_dir, repo_path, page_count)
+            #
+            save_meta(artifact_dir, repo_path, 0)
             self._set_active(artifact_dir)
             self._load_services(artifact_dir)
 
@@ -658,8 +603,6 @@ class MCPToolsRegistry:
                 "status": "success",
                 "repo_path": str(repo_path),
                 "artifact_dir": str(artifact_dir),
-                "wiki_index": str(index_path),
-                "wiki_pages": page_count,
                 "skipped": skipped,
             }
 
@@ -1604,6 +1547,13 @@ class MCPToolsRegistry:
                 repo_path, db_path, rebuild, progress_cb, backend=backend,
             )
 
+            # Release builder references so Windows file locks are freed
+            import gc
+            if hasattr(builder, '_ingestor'):
+                builder._ingestor = None
+            del builder
+            gc.collect()
+
             # Build is done (write connection closed). Open read-only
             # to get statistics, then release for _load_services.
             ro_ingestor = KuzuIngestor(db_path, read_only=True)
@@ -1642,8 +1592,8 @@ class MCPToolsRegistry:
         if self._active_artifact_dir is None or self._active_repo_path is None:
             raise ToolError("No active repository. Call build_graph or initialize_repository first.")
 
-        if mode not in ("full", "resume"):
-            raise ToolError(f"Invalid mode '{mode}'. Must be 'full' or 'resume'.")
+        if mode not in ("full", "resume", "enhance"):
+            raise ToolError(f"Invalid mode '{mode}'. Must be 'full', 'resume', or 'enhance'.")
 
         artifact_dir = self._active_artifact_dir
         repo_path = self._active_repo_path
@@ -1697,22 +1647,20 @@ class MCPToolsRegistry:
                     **{k: v for k, v in result.items() if k != "status"},
                 }
 
-            else:  # mode == "resume"
+            elif mode == "resume":
                 funcs_dir = artifact_dir / "api_docs" / "funcs"
                 if not funcs_dir.exists():
                     raise ToolError(
-                        "No API docs found. Run with mode='full' first to "
-                        "generate docs from the graph database."
+                        "No API docs found. Run with mode='full' first."
                     )
 
-                # Report how many TODOs remain before starting
                 todo_funcs = _collect_todo_funcs(funcs_dir)
                 total_todo = len(todo_funcs)
 
                 if total_todo == 0:
                     return {
                         "status": "success",
-                        "message": "All functions already have LLM descriptions. Nothing to do.",
+                        "message": "All functions already have LLM descriptions.",
                         "remaining_todo": 0,
                     }
 
@@ -1728,7 +1676,6 @@ class MCPToolsRegistry:
                     progress_cb=progress_cb,
                 )
 
-                # Count remaining after this run
                 remaining = len(_collect_todo_funcs(funcs_dir))
 
                 return {
@@ -1742,6 +1689,29 @@ class MCPToolsRegistry:
                         f"{remaining} functions still need descriptions."
                         + (" Run again with mode='resume' to continue."
                            if remaining > 0 else "")
+                    ),
+                }
+
+            else:  # mode == "enhance"
+                if not (artifact_dir / "api_docs" / "modules").exists():
+                    raise ToolError(
+                        "No API docs found. Run with mode='full' first."
+                    )
+
+                if progress_cb:
+                    progress_cb("Generating module summaries and usage workflows...", 0.0)
+
+                result = enhance_api_docs_step(
+                    artifact_dir=artifact_dir,
+                    progress_cb=progress_cb,
+                )
+
+                return {
+                    "status": "success" if not result.get("interrupted") else "interrupted",
+                    "artifact_dir": str(artifact_dir),
+                    **result,
+                    "message": (
+                        f"Enhanced {result['generated_count']} modules with summaries and workflows."
                     ),
                 }
 
