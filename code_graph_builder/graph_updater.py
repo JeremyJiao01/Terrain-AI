@@ -491,7 +491,8 @@ class GraphUpdater:
 
             root_node, language = self.ast_cache[file_path]
 
-            source_code = file_path.read_text(encoding="utf-8", errors="ignore")
+            from .utils.encoding import read_source_file
+            source_code = read_source_file(file_path)
 
             entity_name = parts[-1]
             lines = source_code.split("\n")

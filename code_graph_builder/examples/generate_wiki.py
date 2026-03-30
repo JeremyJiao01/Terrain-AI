@@ -413,7 +413,8 @@ def read_readme(repo_path: Path) -> str:
     for name in ("README.md", "README.rst", "README.txt", "README"):
         readme = repo_path / name
         if readme.exists():
-            text = readme.read_text(encoding="utf-8", errors="replace")
+            from ..utils.encoding import read_source_file
+            text = read_source_file(readme)
             if len(text) > MAX_README_CHARS:
                 text = text[:MAX_README_CHARS] + "\n... (truncated)"
             return text
@@ -555,7 +556,8 @@ def generate_page_content(
         fpath = repo_path / rel_file
         if fpath.exists() and fpath.is_file():
             try:
-                text = fpath.read_text(encoding="utf-8", errors="replace")
+                from ..utils.encoding import read_source_file
+                text = read_source_file(fpath)
                 if len(text) > 4000:
                     text = text[:4000] + "\n... (truncated)"
                 suffix = fpath.suffix.lstrip(".") or "txt"

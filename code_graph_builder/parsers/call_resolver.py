@@ -108,13 +108,28 @@ class CallResolver:
         return None
 
     def _resolve_via_imports(self, call_name: str, module_qn: str) -> str | None:
-        """Try to resolve call through import mapping."""
+        """Try to resolve call through import mapping.
+
+        For C/C++, also checks functions defined in modules referenced by
+        ``#include`` directives.  The import processor stores included module
+        qualified names with a ``__c_module__`` prefix.
+        """
         import_map = self.import_processor.get_import_mapping(module_qn)
 
+        # Standard path: direct function name in import map (Python/JS/Java)
         if call_name in import_map:
             imported_qn = import_map[call_name]
             if imported_qn in self.function_registry:
                 return imported_qn
+
+        # C/C++ path: check functions in all #include'd modules
+        for key, imported_module_qn in import_map.items():
+            if not key.startswith("__c_module__"):
+                continue
+            # Try: imported_module_qn + "." + call_name
+            candidate_qn = f"{imported_module_qn}.{call_name}"
+            if candidate_qn in self.function_registry:
+                return candidate_qn
 
         return None
 
@@ -128,12 +143,30 @@ class CallResolver:
         return None
 
     def _resolve_via_registry(self, call_name: str, module_qn: str) -> str | None:
-        """Try to find function in registry by simple name."""
-        # This is a fallback that might return incorrect results
-        # if multiple functions have the same name
-        for qn in self.function_registry._entries.keys() if hasattr(self.function_registry, '_entries') else []:
-            if qn.endswith(f".{call_name}"):
-                logger.debug(f"Resolved {call_name} to {qn} via registry lookup")
-                return qn
+        """Try to find function in registry by simple name.
 
-        return None
+        This is a global fallback — it walks the entire registry and returns
+        the first entry whose qualified name ends with ``.call_name``.  It may
+        return an incorrect match when multiple functions share the same name;
+        prefer ``_resolve_via_imports`` or ``_resolve_same_module`` first.
+        """
+        suffix = f".{call_name}"
+        entries = getattr(self.function_registry, '_entries', None)
+        if entries is None:
+            return None
+
+        # Prefer a match in the same project/top-level package
+        top_pkg = module_qn.split(cs.SEPARATOR_DOT)[0] if module_qn else ""
+        best: str | None = None
+
+        for qn in entries:
+            if qn.endswith(suffix):
+                if top_pkg and qn.startswith(top_pkg + cs.SEPARATOR_DOT):
+                    logger.debug(f"Resolved {call_name} to {qn} via registry (same project)")
+                    return qn
+                if best is None:
+                    best = qn
+
+        if best:
+            logger.debug(f"Resolved {call_name} to {best} via registry (global fallback)")
+        return best

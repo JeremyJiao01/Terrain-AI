@@ -956,7 +956,8 @@ class MCPToolsRegistry:
             if not fp.is_absolute() and self._active_repo_path:
                 fp = self._active_repo_path / fp
             try:
-                lines = fp.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+                from ..utils.encoding import read_source_file
+                lines = read_source_file(fp).splitlines(keepends=True)
                 s = max(0, int(start_line) - 1)
                 e = min(len(lines), int(end_line))
                 source_code = "".join(lines[s:e])

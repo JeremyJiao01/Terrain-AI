@@ -62,8 +62,9 @@ def _read_function_source(func: dict, repo_path: Path) -> str | None:
     if file_path is None:
         return None
     try:
-        with open(file_path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
+        from ..utils.encoding import read_source_file
+        content = read_source_file(file_path)
+        lines = content.splitlines(keepends=True)
         source = "".join(lines[start_line - 1: end_line])
         if len(source) > _MAX_SOURCE_CHARS:
             source = source[:_MAX_SOURCE_CHARS] + "\n    /* ... truncated ... */"

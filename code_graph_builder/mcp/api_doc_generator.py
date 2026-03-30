@@ -107,7 +107,8 @@ def _read_source_snippet(
         return None
 
     try:
-        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        from ..utils.encoding import read_source_lines
+        lines = read_source_lines(file_path)
         # start_line and end_line are 1-based
         start = max(0, start_line - 1)
         end = min(len(lines), end_line)
@@ -195,7 +196,8 @@ def _extract_usage_snippet(
         return None
 
     try:
-        all_lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        from ..utils.encoding import read_source_lines
+        all_lines = read_source_lines(file_path)
     except (OSError, UnicodeDecodeError):
         return None
 

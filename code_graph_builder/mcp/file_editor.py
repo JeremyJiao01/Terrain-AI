@@ -175,7 +175,8 @@ class FileEditor:
             if not file_path.is_file():
                 return {"success": False, "error": f"File not found: {file_path}"}
 
-            original = file_path.read_text(encoding=cs.ENCODING_UTF8)
+            from ..utils.encoding import read_source_file
+            original = read_source_file(file_path)
 
             if target_block not in original:
                 return {"success": False, "error": "Target block not found in file."}

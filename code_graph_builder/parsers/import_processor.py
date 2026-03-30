@@ -262,7 +262,13 @@ class ImportProcessor:
             self.import_mapping[module_qn][key] = path
 
     def _parse_c_cpp_imports(self, captures: dict, module_qn: str) -> None:
-        """Parse C/C++ #include directives."""
+        """Parse C/C++ #include directives.
+
+        For each ``#include "header.h"`` (local include), resolves the header
+        path to a module qualified name and stores it.  This allows
+        ``_resolve_via_imports`` to search the included module's functions
+        when resolving cross-file calls.
+        """
         import_nodes = captures.get(cs.CAPTURE_IMPORT, [])
 
         for node in import_nodes:
@@ -275,8 +281,52 @@ class ImportProcessor:
                         header = safe_decode_text(child)
                         if header:
                             header = header.strip('"<>')
+                            # Store raw header name (legacy)
                             key = header.replace(".", "_")
                             self.import_mapping[module_qn][key] = header
+
+                            # Resolve local header to module qualified name
+                            # so cross-file call resolution works.
+                            header_module_qn = self._resolve_c_header_to_module_qn(
+                                header, module_qn
+                            )
+                            if header_module_qn:
+                                # Store with a special prefix so _resolve_via_imports
+                                # can enumerate imported modules for C.
+                                c_key = f"__c_module__{header_module_qn}"
+                                self.import_mapping[module_qn][c_key] = header_module_qn
+
+    def _resolve_c_header_to_module_qn(
+        self, header_path: str, current_module_qn: str
+    ) -> str | None:
+        """Resolve a C #include path to the module qualified name.
+
+        Assumes .c and .h files are uniquely named across the repo.
+        Simply searches the entire repo for a matching filename,
+        preferring the .c/.cpp implementation over the .h header.
+        """
+        project_name = current_module_qn.split(cs.SEPARATOR_DOT)[0]
+        header_stem = Path(header_path).stem
+
+        # Build file name cache on first call (scan once, reuse)
+        if not hasattr(self, "_file_cache"):
+            self._file_cache: dict[str, Path] = {}
+            for f in self.repo_path.rglob("*"):
+                if f.is_file() and f.suffix in (".c", ".cpp", ".cc", ".h", ".hpp"):
+                    self._file_cache.setdefault(f.stem, f)
+
+        # Prefer .c implementation file, fallback to .h header
+        found = self._file_cache.get(header_stem)
+        if not found:
+            return None
+
+        try:
+            rel = found.relative_to(self.repo_path)
+            return cs.SEPARATOR_DOT.join(
+                [project_name] + list(rel.with_suffix("").parts)
+            )
+        except ValueError:
+            return None
 
     def _get_dotted_name(self, node: Node) -> str | None:
         """Get dotted name from a node."""
