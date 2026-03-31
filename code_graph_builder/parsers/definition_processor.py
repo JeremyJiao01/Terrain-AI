@@ -194,9 +194,18 @@ class DefinitionProcessor:
 
                 func_qn = f"{module_qn}.{func_name}"
 
+                # Derive relative file path for this function
+                func_file_path = ""
+                if file_path:
+                    try:
+                        func_file_path = str(file_path.relative_to(self.repo_path))
+                    except ValueError:
+                        func_file_path = str(file_path)
+
                 func_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: func_qn,
                     cs.KEY_NAME: func_name,
+                    cs.KEY_PATH: func_file_path,
                     cs.KEY_START_LINE: func_node.start_point[0] + 1,
                     cs.KEY_END_LINE: func_node.end_point[0] + 1,
                 }
@@ -249,6 +258,8 @@ class DefinitionProcessor:
         queries: dict[cs.SupportedLanguage, LanguageQueries],
     ) -> None:
         """Ingest classes and their methods from the AST."""
+        file_path = self.module_qn_to_file_path.get(module_qn)
+
         lang_queries = queries.get(language)
         if not lang_queries:
             return
@@ -274,9 +285,18 @@ class DefinitionProcessor:
 
                 class_qn = f"{module_qn}.{class_name}"
 
+                # Derive relative file path for this class
+                class_file_path = ""
+                if file_path:
+                    try:
+                        class_file_path = str(file_path.relative_to(self.repo_path))
+                    except ValueError:
+                        class_file_path = str(file_path)
+
                 class_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: class_qn,
                     cs.KEY_NAME: class_name,
+                    cs.KEY_PATH: class_file_path,
                     cs.KEY_START_LINE: class_node.start_point[0] + 1,
                     cs.KEY_END_LINE: class_node.end_point[0] + 1,
                 }
@@ -609,6 +629,14 @@ class DefinitionProcessor:
         queries: dict[cs.SupportedLanguage, LanguageQueries],
     ) -> None:
         """Extract typedef declarations and create Type nodes."""
+        file_path = self.module_qn_to_file_path.get(module_qn)
+        td_file_path = ""
+        if file_path:
+            try:
+                td_file_path = str(file_path.relative_to(self.repo_path))
+            except ValueError:
+                td_file_path = str(file_path)
+
         lang_queries = queries.get(cs.SupportedLanguage.C)
         if not lang_queries:
             return
@@ -639,6 +667,7 @@ class DefinitionProcessor:
                 td_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: td_qn,
                     cs.KEY_NAME: td_name,
+                    cs.KEY_PATH: td_file_path,
                     cs.KEY_START_LINE: td_node.start_point[0] + 1,
                     cs.KEY_END_LINE: td_node.end_point[0] + 1,
                     cs.KEY_SIGNATURE: signature,
@@ -687,6 +716,14 @@ class DefinitionProcessor:
         queries: dict[cs.SupportedLanguage, LanguageQueries],
     ) -> None:
         """Extract #define macro definitions and create Function nodes with kind='macro'."""
+        file_path = self.module_qn_to_file_path.get(module_qn)
+        macro_file_path = ""
+        if file_path:
+            try:
+                macro_file_path = str(file_path.relative_to(self.repo_path))
+            except ValueError:
+                macro_file_path = str(file_path)
+
         lang_queries = queries.get(cs.SupportedLanguage.C)
         if not lang_queries:
             return
@@ -717,6 +754,7 @@ class DefinitionProcessor:
                 macro_props: PropertyDict = {
                     cs.KEY_QUALIFIED_NAME: macro_qn,
                     cs.KEY_NAME: macro_name,
+                    cs.KEY_PATH: macro_file_path,
                     cs.KEY_START_LINE: macro_node.start_point[0] + 1,
                     cs.KEY_END_LINE: macro_node.end_point[0] + 1,
                     cs.KEY_SIGNATURE: signature,
