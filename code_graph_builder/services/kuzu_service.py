@@ -360,7 +360,11 @@ class KuzuIngestor:
             self.flush_relationships()
 
     def _value_to_cypher(self, value: PropertyValue) -> str:
-        """Convert Python value to Cypher literal."""
+        """Convert Python value to Cypher literal.
+
+        Handles backslashes (Windows paths), newlines, single quotes,
+        and other special characters that would break Cypher syntax.
+        """
         if value is None:
             return "NULL"
         if isinstance(value, bool):
@@ -368,13 +372,19 @@ class KuzuIngestor:
         if isinstance(value, (int, float)):
             return str(value)
         if isinstance(value, str):
-            # Escape quotes
-            escaped = value.replace("'", "\\'")
+            # Escape backslashes FIRST (before escaping quotes)
+            escaped = value.replace("\\", "\\\\")
+            # Escape single quotes
+            escaped = escaped.replace("'", "\\'")
+            # Replace newlines and tabs with escaped versions
+            escaped = escaped.replace("\n", "\\n")
+            escaped = escaped.replace("\r", "\\r")
+            escaped = escaped.replace("\t", "\\t")
             return f"'{escaped}'"
         if isinstance(value, list):
             items = [self._value_to_cypher(v) for v in value]
             return f"[{', '.join(items)}]"
-        return f"'{str(value)}'"
+        return self._value_to_cypher(str(value))
 
     def flush_nodes(self) -> None:
         """Flush node buffer to database."""
@@ -392,18 +402,18 @@ class KuzuIngestor:
             self._ensure_schema(label)
 
             for props in nodes:
-                # Build CREATE statement
+                # Build CREATE statement with safe type coercion
                 qualified_name = props.get("qualified_name", props.get("name", ""))
                 name = props.get("name", "")
                 path = props.get("path", "")
-                start_line = props.get("start_line", 0)
-                end_line = props.get("end_line", 0)
-                docstring = props.get("docstring", "")
-                return_type = props.get("return_type", "")
-                signature = props.get("signature", "")
-                visibility = props.get("visibility", "")
+                start_line = int(props.get("start_line") or 0)
+                end_line = int(props.get("end_line") or 0)
+                docstring = props.get("docstring", "") or ""
+                return_type = props.get("return_type", "") or ""
+                signature = props.get("signature", "") or ""
+                visibility = props.get("visibility", "") or ""
                 parameters = props.get("parameters")
-                kind = props.get("kind", "")
+                kind = props.get("kind", "") or ""
 
                 try:
                     cypher = f"""
@@ -421,9 +431,12 @@ class KuzuIngestor:
                             kind: {self._value_to_cypher(kind)}
                         }})
                     """
-                    self._conn.execute(cypher)
+                    self._execute_with_retry(cypher)
                 except Exception as e:
-                    logger.debug(f"Error creating node: {e}")
+                    logger.warning(
+                        f"Failed to create {label} node "
+                        f"(qn={qualified_name!r}, name={name!r}): {e}"
+                    )
 
         logger.debug(f"Flushed {len(self.node_buffer)} nodes")
         self.node_buffer = []
@@ -458,9 +471,12 @@ class KuzuIngestor:
                           (b:{to_label} {{{to_key}: {self._value_to_cypher(to_val)}}})
                     CREATE (a)-[:{actual_rel}]->(b)
                 """
-                self._conn.execute(cypher)
+                self._execute_with_retry(cypher)
             except Exception as e:
-                logger.debug(f"Error creating relationship: {e}")
+                logger.warning(
+                    f"Failed to create relationship {actual_rel}: "
+                    f"{from_label}({from_val!r}) -> {to_label}({to_val!r}): {e}"
+                )
 
         logger.debug(f"Flushed {len(self.relationship_buffer)} relationships")
         self.relationship_buffer = []
