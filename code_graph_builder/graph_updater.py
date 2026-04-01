@@ -336,12 +336,13 @@ class GraphUpdater:
                 unignore_paths=self.unignore_paths,
             ):
                 lang_config = get_language_spec(filepath.suffix)
-                # Fallback: if the mapped language (e.g. CPP for .h) isn't
-                # available but C is, use C for header files.
+                # For .h header files: prefer C over C++ when the C parser is
+                # available.  This ensures header declarations are tracked for
+                # visibility resolution and C-specific properties (signature,
+                # return_type, parameters) are extracted.
                 if (
                     lang_config
                     and isinstance(lang_config.language, cs.SupportedLanguage)
-                    and lang_config.language not in self.parsers
                     and filepath.suffix == cs.EXT_H
                     and cs.SupportedLanguage.C in self.parsers
                 ):

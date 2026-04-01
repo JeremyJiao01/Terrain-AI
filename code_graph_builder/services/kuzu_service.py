@@ -417,19 +417,31 @@ class KuzuIngestor:
 
                 try:
                     cypher = f"""
-                        CREATE (n:{label} {{
-                            qualified_name: {self._value_to_cypher(qualified_name)},
-                            name: {self._value_to_cypher(name)},
-                            path: {self._value_to_cypher(path)},
-                            start_line: {start_line},
-                            end_line: {end_line},
-                            docstring: {self._value_to_cypher(docstring)},
-                            return_type: {self._value_to_cypher(return_type)},
-                            signature: {self._value_to_cypher(signature)},
-                            visibility: {self._value_to_cypher(visibility)},
-                            parameters: {self._value_to_cypher(parameters if parameters else [])},
-                            kind: {self._value_to_cypher(kind)}
+                        MERGE (n:{label} {{
+                            qualified_name: {self._value_to_cypher(qualified_name)}
                         }})
+                        ON CREATE SET
+                            n.name = {self._value_to_cypher(name)},
+                            n.path = {self._value_to_cypher(path)},
+                            n.start_line = {start_line},
+                            n.end_line = {end_line},
+                            n.docstring = {self._value_to_cypher(docstring)},
+                            n.return_type = {self._value_to_cypher(return_type)},
+                            n.signature = {self._value_to_cypher(signature)},
+                            n.visibility = {self._value_to_cypher(visibility)},
+                            n.parameters = {self._value_to_cypher(parameters if parameters else [])},
+                            n.kind = {self._value_to_cypher(kind)}
+                        ON MATCH SET
+                            n.name = {self._value_to_cypher(name)},
+                            n.path = {self._value_to_cypher(path)},
+                            n.start_line = {start_line},
+                            n.end_line = {end_line},
+                            n.docstring = {self._value_to_cypher(docstring)},
+                            n.return_type = {self._value_to_cypher(return_type)},
+                            n.signature = {self._value_to_cypher(signature)},
+                            n.visibility = {self._value_to_cypher(visibility)},
+                            n.parameters = {self._value_to_cypher(parameters if parameters else [])},
+                            n.kind = {self._value_to_cypher(kind)}
                     """
                     self._execute_with_retry(cypher)
                 except Exception as e:
