@@ -12,7 +12,7 @@
 
 import { spawn, execFileSync, execSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 
@@ -23,12 +23,151 @@ const ENV_FILE = join(WORKSPACE_DIR, ".env");
 const IS_WIN = platform() === "win32";
 
 // ---------------------------------------------------------------------------
+// Tree-style UI helpers
+// ---------------------------------------------------------------------------
+
+const T = {
+  // Box drawing
+  TOP:    "╭",
+  BOT:    "╰",
+  SIDE:   "│",
+  TEE:    "├",
+  BEND:   "╰",
+  DASH:   "─",
+  // Status
+  OK:     "✓",
+  FAIL:   "✗",
+  WARN:   "⚠",
+  WORK:   "…",
+  DOT:    "●",
+  // Indents
+  PIPE:   "│  ",
+  SPACE:  "   ",
+  BRANCH: "├─ ",
+  LAST:   "╰─ ",
+};
+
+/**
+ * Interactive single-select menu.
+ * Arrow keys to navigate, Space to select, Enter to confirm.
+ * Returns the index of the selected option, or -1 if cancelled (Ctrl+C).
+ *
+ * @param {string[]} options - Display labels for each option
+ * @param {string} prefix - Tree prefix for each line (e.g. "  │  ")
+ * @param {number} defaultIndex - Initially highlighted index
+ * @returns {Promise<number>}
+ */
+function selectMenu(options, prefix = "  ", defaultIndex = 0) {
+  return new Promise((resolve) => {
+    const out = process.stderr;
+    let cursor = defaultIndex;
+    let selected = -1;
+
+    const RADIO_ON  = "◉";
+    const RADIO_OFF = "○";
+    const DIM   = "\x1b[2m";
+    const BOLD  = "\x1b[1m";
+    const CYAN  = "\x1b[36m";
+    const RESET = "\x1b[0m";
+
+    function render(initial = false) {
+      // Move cursor up to overwrite previous render (skip on first draw)
+      if (!initial) {
+        out.write(`\x1b[${options.length}A`);
+      }
+      for (let i = 0; i < options.length; i++) {
+        const isActive = i === cursor;
+        const isSelected = i === selected;
+        const radio = (isSelected || (selected === -1 && isActive)) && isActive
+          ? `${CYAN}${RADIO_ON}${RESET}`
+          : `${DIM}${RADIO_OFF}${RESET}`;
+        const label = isActive
+          ? `${BOLD}${CYAN}${options[i]}${RESET}`
+          : `${options[i]}`;
+        // Clear line then write
+        out.write(`\x1b[2K${prefix}${radio} ${label}\n`);
+      }
+    }
+
+    // Hide cursor
+    out.write("\x1b[?25l");
+    render(true);
+
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    function cleanup() {
+      stdin.setRawMode(wasRaw || false);
+      stdin.removeListener("data", onKey);
+      // Show cursor
+      out.write("\x1b[?25h");
+    }
+
+    function onKey(buf) {
+      const key = buf.toString();
+
+      // Ctrl+C
+      if (key === "\x03") {
+        cleanup();
+        resolve(-1);
+        return;
+      }
+
+      // Arrow up / k
+      if (key === "\x1b[A" || key === "k") {
+        cursor = (cursor - 1 + options.length) % options.length;
+        render();
+        return;
+      }
+
+      // Arrow down / j
+      if (key === "\x1b[B" || key === "j") {
+        cursor = (cursor + 1) % options.length;
+        render();
+        return;
+      }
+
+      // Space — toggle selection
+      if (key === " ") {
+        selected = cursor;
+        render();
+        return;
+      }
+
+      // Enter — confirm
+      if (key === "\r" || key === "\n") {
+        if (selected === -1) selected = cursor;
+        cleanup();
+        resolve(selected);
+        return;
+      }
+    }
+
+    stdin.on("data", onKey);
+  });
+}
+
+function box(title) {
+  const pad = 54;
+  const inner = `  ${title}  `;
+  const fill = pad - inner.length;
+  const left = Math.floor(fill / 2);
+  const right = fill - left;
+  return [
+    `  ${T.TOP}${"─".repeat(pad)}╮`,
+    `  ${T.SIDE}${" ".repeat(left)}${inner}${" ".repeat(right)}${T.SIDE}`,
+    `  ${T.BOT}${"─".repeat(pad)}╯`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
 function commandExists(cmd) {
   try {
-    // "which" on Unix/macOS, "where" on Windows
     const checker = IS_WIN ? "where" : "which";
     execFileSync(checker, [cmd], { stdio: "pipe" });
     return true;
@@ -37,11 +176,6 @@ function commandExists(cmd) {
   }
 }
 
-/**
- * Find a working Python command.  On Windows the command is typically
- * "python" (the py-launcher or Store stub), while on Unix it is "python3".
- * Returns the command string or null if none is found.
- */
 function findPython() {
   const candidates = IS_WIN
     ? ["python", "python3", "py"]
@@ -49,14 +183,15 @@ function findPython() {
   for (const cmd of candidates) {
     try {
       const ver = execFileSync(cmd, ["--version"], { stdio: "pipe" }).toString().trim();
-      // Ensure it is Python 3.x
-      if (ver.includes("3.")) return cmd;
+      if (ver.includes("3.")) return { cmd, ver };
     } catch { /* skip */ }
   }
   return null;
 }
 
-const PYTHON_CMD = findPython();
+const pythonInfo = findPython();
+const PYTHON_CMD = pythonInfo?.cmd || null;
+const PYTHON_VER = pythonInfo?.ver || null;
 
 function pythonPackageInstalled() {
   if (!PYTHON_CMD) return false;
@@ -70,6 +205,17 @@ function pythonPackageInstalled() {
   }
 }
 
+function getPackageVersion() {
+  if (!PYTHON_CMD) return null;
+  try {
+    return execFileSync(PYTHON_CMD, ["-c",
+      `import code_graph_builder; print(getattr(code_graph_builder, '__version__', 'unknown'))`
+    ], { stdio: "pipe" }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
 function loadEnvFile() {
   if (!existsSync(ENV_FILE)) return {};
   const vars = {};
@@ -80,7 +226,6 @@ function loadEnvFile() {
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim();
     let val = trimmed.slice(eq + 1).trim();
-    // Strip surrounding quotes
     if ((val.startsWith('"') && val.endsWith('"')) ||
         (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
@@ -109,154 +254,247 @@ function mask(s) {
   return s.slice(0, 4) + "****" + s.slice(-4);
 }
 
+function findPip() {
+  for (const cmd of IS_WIN ? ["pip", "pip3"] : ["pip3", "pip"]) {
+    if (commandExists(cmd)) return [cmd];
+  }
+  if (PYTHON_CMD) {
+    try {
+      execFileSync(PYTHON_CMD, ["-m", "pip", "--version"], { stdio: "pipe" });
+      return [PYTHON_CMD, "-m", "pip"];
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+/**
+ * Clear npx cache for code-graph-builder to ensure latest version.
+ */
+function clearNpxCache() {
+  try {
+    const cacheDir = execSync("npm config get cache", { stdio: "pipe", shell: true })
+      .toString().trim();
+    const npxCacheDir = join(cacheDir, "_npx");
+
+    if (existsSync(npxCacheDir)) {
+      for (const entry of readdirSync(npxCacheDir)) {
+        const pkgJsonPath = join(npxCacheDir, entry, "node_modules", "code-graph-builder", "package.json");
+        const altPkgJson = join(npxCacheDir, entry, "package.json");
+        try {
+          let found = false;
+          if (existsSync(pkgJsonPath)) {
+            found = true;
+          } else if (existsSync(altPkgJson)) {
+            const content = readFileSync(altPkgJson, "utf-8");
+            if (content.includes("code-graph-builder")) found = true;
+          }
+          if (found) {
+            rmSync(join(npxCacheDir, entry), { recursive: true, force: true });
+          }
+        } catch { /* skip */ }
+      }
+    }
+  } catch { /* cache clear is best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
-// Interactive setup wizard (runs on stderr so stdout stays clean)
+// Interactive setup wizard
 // ---------------------------------------------------------------------------
 
 async function runSetup() {
-  const rl = createInterface({
+  let rl = createInterface({
     input: process.stdin,
     output: process.stderr,
   });
 
-  const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
-  const log = (msg) => process.stderr.write(msg + "\n");
+  let ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+  const log = (msg = "") => process.stderr.write(msg + "\n");
 
-  log("");
-  log("╔══════════════════════════════════════════════════════════╗");
-  log("║        code-graph-builder  Setup Wizard                 ║");
-  log("╚══════════════════════════════════════════════════════════╝");
-  log("");
+  log();
+  log(box("code-graph-builder  Setup Wizard"));
+  log();
+
+  // --- Step 0: Clear npx cache ---
+  log(`  ${T.DOT} Preparing`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} Clearing npx cache...`);
+
+  await clearNpxCache();
+
+  log(`  ${T.LAST} ${T.OK} Cache cleared`);
+  log();
 
   // Load existing config
   const existing = loadEnvFile();
 
-  // --- Workspace ---
-  log("── 1/3  Workspace ──────────────────────────────────────────");
-  log(`Workspace stores indexed repos, graphs, and embeddings.`);
+  // --- Step 1: Workspace ---
+  log(`  ${T.DOT} Step 1/3  Workspace`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} Stores indexed repos, graphs, and embeddings`);
+
   const workspace =
-    (await ask(`  Workspace path [${WORKSPACE_DIR}]: `)).trim() || WORKSPACE_DIR;
-  log("");
+    (await ask(`  ${T.SIDE}  Path [${WORKSPACE_DIR}]: `)).trim() || WORKSPACE_DIR;
 
-  // --- LLM Provider ---
-  log("── 2/3  LLM Provider (for natural language queries & descriptions) ──");
-  log("");
-  log("  Select your LLM provider:");
-  log("");
-  log("    1) Moonshot / Kimi    https://platform.moonshot.cn");
-  log("    2) OpenAI             https://platform.openai.com");
-  log("    3) DeepSeek           https://platform.deepseek.com");
-  log("    4) OpenRouter         https://openrouter.ai");
-  log("    5) LiteLLM Proxy      (OpenAI-compatible gateway)");
-  log("    6) Custom (any OpenAI-compatible endpoint)");
-  log("    7) Skip (configure later)");
-  log("");
+  log(`  ${T.LAST} ${T.OK} ${workspace}`);
+  log();
 
-  const providers = {
-    "1": { name: "Moonshot",    url: "https://api.moonshot.cn/v1",   model: "kimi-k2.5" },
-    "2": { name: "OpenAI",      url: "https://api.openai.com/v1",    model: "gpt-4o" },
-    "3": { name: "DeepSeek",    url: "https://api.deepseek.com/v1",  model: "deepseek-chat" },
-    "4": { name: "OpenRouter",  url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4" },
-    "5": { name: "LiteLLM",     url: "http://localhost:4000/v1",     model: "gpt-4o" },
-  };
+  // --- Step 2: LLM Provider ---
+  log(`  ${T.DOT} Step 2/3  LLM Provider`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} For natural language queries & descriptions`);
+  log(`  ${T.SIDE}  Use ↑↓ to navigate, Space to select, Enter to confirm`);
+  log(`  ${T.SIDE}`);
 
   if (existing.LLM_API_KEY) {
-    log(`  Current: ${mask(existing.LLM_API_KEY)} → ${existing.LLM_BASE_URL || "?"}`);
+    log(`  ${T.SIDE}  Current: ${mask(existing.LLM_API_KEY)} → ${existing.LLM_BASE_URL || "?"}`);
+    log(`  ${T.SIDE}`);
   }
 
-  const choice = (await ask("  Choose provider [1-7]: ")).trim() || "7";
+  const llmOptions = [
+    "Moonshot / Kimi      platform.moonshot.cn",
+    "OpenAI               platform.openai.com",
+    "DeepSeek             platform.deepseek.com",
+    "OpenRouter           openrouter.ai",
+    "LiteLLM Proxy        localhost:4000",
+    "Custom endpoint",
+    "Skip (configure later)",
+  ];
+
+  const llmProviders = [
+    { name: "Moonshot",   url: "https://api.moonshot.cn/v1",   model: "kimi-k2.5" },
+    { name: "OpenAI",     url: "https://api.openai.com/v1",    model: "gpt-4o" },
+    { name: "DeepSeek",   url: "https://api.deepseek.com/v1",  model: "deepseek-chat" },
+    { name: "OpenRouter",  url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4" },
+    { name: "LiteLLM",    url: "http://localhost:4000/v1",     model: "gpt-4o" },
+  ];
+
+  // Close readline before raw mode menu, reopen after
+  rl.close();
+  const llmChoice = await selectMenu(llmOptions, `  ${T.SIDE}  `, 6);
+  rl = createInterface({ input: process.stdin, output: process.stderr });
+  ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 
   let llmKey = existing.LLM_API_KEY || "";
   let llmBaseUrl = existing.LLM_BASE_URL || "";
   let llmModel = existing.LLM_MODEL || "";
+  let llmProviderName = "skipped";
 
-  if (choice !== "7") {
-    const provider = providers[choice];
+  if (llmChoice >= 0 && llmChoice < 5) {
+    // Known provider
+    const provider = llmProviders[llmChoice];
+    llmBaseUrl = provider.url;
+    llmModel = provider.model;
+    llmProviderName = provider.name;
 
-    if (provider) {
-      log(`\n  → ${provider.name} selected`);
-      llmBaseUrl = provider.url;
-      llmModel = provider.model;
-    } else {
-      // Choice "6" or invalid → custom
-      log("\n  → Custom provider");
-      llmBaseUrl = (await ask("  API Base URL: ")).trim() || llmBaseUrl;
-      llmModel = (await ask("  Model name: ")).trim() || llmModel || "gpt-4o";
-    }
-
-    llmKey = (await ask(`  API Key (sk-...): `)).trim() || existing.LLM_API_KEY || "";
+    log(`  ${T.SIDE}`);
+    llmKey = (await ask(`  ${T.SIDE}  API Key (sk-...): `)).trim() || existing.LLM_API_KEY || "";
 
     if (llmKey) {
-      // Allow overriding URL and model
-      const urlOverride = (await ask(`  Base URL [${llmBaseUrl}]: `)).trim();
+      const urlOverride = (await ask(`  ${T.SIDE}  Base URL [${llmBaseUrl}]: `)).trim();
       if (urlOverride) llmBaseUrl = urlOverride;
-      const modelOverride = (await ask(`  Model [${llmModel}]: `)).trim();
+      const modelOverride = (await ask(`  ${T.SIDE}  Model [${llmModel}]: `)).trim();
       if (modelOverride) llmModel = modelOverride;
     }
+  } else if (llmChoice === 5) {
+    // Custom
+    llmProviderName = "Custom";
+    const defUrl = llmBaseUrl || existing.LLM_BASE_URL || "";
+    const defModel = llmModel || existing.LLM_MODEL || "gpt-4o";
+    const defKey = existing.LLM_API_KEY || "";
+    log(`  ${T.SIDE}`);
+    llmBaseUrl = (await ask(`  ${T.SIDE}  API Base URL${defUrl ? ` [${defUrl}]` : ""}: `)).trim() || defUrl;
+    llmModel = (await ask(`  ${T.SIDE}  Model${defModel ? ` [${defModel}]` : ""}: `)).trim() || defModel;
+    llmKey = (await ask(`  ${T.SIDE}  API Key${defKey ? ` [${mask(defKey)}]` : " (sk-...)"}: `)).trim() || defKey;
   }
-  log("");
+  // llmChoice === 6 or -1 → skip
 
-  // --- Embedding Provider ---
-  log("── 3/3  Embedding Provider (for semantic code search) ─────");
-  log("");
-  log("  Select your embedding provider:");
-  log("");
-  log("    1) DashScope / Qwen    https://dashscope.console.aliyun.com  (free tier)");
-  log("    2) OpenAI Embeddings   https://platform.openai.com");
-  log("    3) Custom (any OpenAI-compatible embedding endpoint)");
-  log("    4) Skip (configure later)");
-  log("");
+  if (llmKey) {
+    log(`  ${T.LAST} ${T.OK} ${llmProviderName} / ${llmModel}`);
+  } else {
+    log(`  ${T.LAST} ${T.WARN} Skipped (configure later in ${ENV_FILE})`);
+  }
+  log();
 
-  const embedProviders = {
-    "1": { name: "DashScope",  url: "https://dashscope.aliyuncs.com/api/v1", model: "text-embedding-v4", keyEnv: "DASHSCOPE_API_KEY", urlEnv: "DASHSCOPE_BASE_URL" },
-    "2": { name: "OpenAI",     url: "https://api.openai.com/v1",             model: "text-embedding-3-small", keyEnv: "OPENAI_API_KEY", urlEnv: "OPENAI_BASE_URL" },
-  };
+  // --- Step 3: Embedding Provider ---
+  log(`  ${T.DOT} Step 3/3  Embedding Provider`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} For semantic code search`);
+  log(`  ${T.SIDE}  Use ↑↓ to navigate, Space to select, Enter to confirm`);
+  log(`  ${T.SIDE}`);
 
   if (existing.DASHSCOPE_API_KEY || existing.EMBED_API_KEY) {
     const ek = existing.DASHSCOPE_API_KEY || existing.EMBED_API_KEY;
-    log(`  Current: ${mask(ek)} → ${existing.DASHSCOPE_BASE_URL || existing.EMBED_BASE_URL || "?"}`);
+    log(`  ${T.SIDE}  Current: ${mask(ek)} → ${existing.DASHSCOPE_BASE_URL || existing.EMBED_BASE_URL || "?"}`);
+    log(`  ${T.SIDE}`);
   }
 
-  const embedChoice = (await ask("  Choose provider [1-4]: ")).trim() || "4";
+  const embedOptions = [
+    "DashScope / Qwen     dashscope.console.aliyun.com  (free tier)",
+    "OpenAI Embeddings    platform.openai.com",
+    "Custom endpoint",
+    "Skip (configure later)",
+  ];
+
+  const embedProvidersList = [
+    { name: "DashScope", url: "https://dashscope.aliyuncs.com/api/v1", model: "text-embedding-v4", keyEnv: "DASHSCOPE_API_KEY", urlEnv: "DASHSCOPE_BASE_URL" },
+    { name: "OpenAI",    url: "https://api.openai.com/v1",             model: "text-embedding-3-small", keyEnv: "OPENAI_API_KEY", urlEnv: "OPENAI_BASE_URL" },
+  ];
+
+  rl.close();
+  const embedChoice = await selectMenu(embedOptions, `  ${T.SIDE}  `, 3);
+  rl = createInterface({ input: process.stdin, output: process.stderr });
+  ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 
   let embedKey = "";
   let embedUrl = "";
   let embedModel = "";
   let embedKeyEnv = "DASHSCOPE_API_KEY";
   let embedUrlEnv = "DASHSCOPE_BASE_URL";
+  let embedProviderName = "skipped";
 
-  if (embedChoice !== "4") {
-    const ep = embedProviders[embedChoice];
+  if (embedChoice >= 0 && embedChoice < 2) {
+    // Known provider
+    const ep = embedProvidersList[embedChoice];
+    embedUrl = ep.url;
+    embedModel = ep.model;
+    embedKeyEnv = ep.keyEnv;
+    embedUrlEnv = ep.urlEnv;
+    embedProviderName = ep.name;
 
-    if (ep) {
-      log(`\n  → ${ep.name} selected`);
-      embedUrl = ep.url;
-      embedModel = ep.model;
-      embedKeyEnv = ep.keyEnv;
-      embedUrlEnv = ep.urlEnv;
-    } else {
-      // Choice "3" or invalid → custom
-      log("\n  → Custom embedding provider");
-      embedUrl = (await ask("  Embedding API Base URL: ")).trim();
-      embedModel = (await ask("  Embedding model name: ")).trim() || "text-embedding-3-small";
-      embedKeyEnv = "EMBED_API_KEY";
-      embedUrlEnv = "EMBED_BASE_URL";
-    }
-
-    embedKey = (await ask(`  API Key: `)).trim() ||
+    log(`  ${T.SIDE}`);
+    embedKey = (await ask(`  ${T.SIDE}  API Key: `)).trim() ||
       existing[embedKeyEnv] || existing.DASHSCOPE_API_KEY || "";
 
     if (embedKey) {
-      const urlOverride = (await ask(`  Base URL [${embedUrl}]: `)).trim();
+      const urlOverride = (await ask(`  ${T.SIDE}  Base URL [${embedUrl}]: `)).trim();
       if (urlOverride) embedUrl = urlOverride;
-      const modelOverride = (await ask(`  Model [${embedModel}]: `)).trim();
+      const modelOverride = (await ask(`  ${T.SIDE}  Model [${embedModel}]: `)).trim();
       if (modelOverride) embedModel = modelOverride;
     }
+  } else if (embedChoice === 2) {
+    // Custom
+    embedProviderName = "Custom";
+    const defEmbedUrl = existing.EMBED_BASE_URL || existing.DASHSCOPE_BASE_URL || "";
+    const defEmbedModel = existing.EMBED_MODEL || "text-embedding-3-small";
+    const defEmbedKey = existing.EMBED_API_KEY || existing.DASHSCOPE_API_KEY || "";
+    log(`  ${T.SIDE}`);
+    embedUrl = (await ask(`  ${T.SIDE}  API Base URL${defEmbedUrl ? ` [${defEmbedUrl}]` : ""}: `)).trim() || defEmbedUrl;
+    embedModel = (await ask(`  ${T.SIDE}  Model${defEmbedModel ? ` [${defEmbedModel}]` : ""}: `)).trim() || defEmbedModel;
+    embedKey = (await ask(`  ${T.SIDE}  API Key${defEmbedKey ? ` [${mask(defEmbedKey)}]` : ""}: `)).trim() || defEmbedKey;
+    embedKeyEnv = "EMBED_API_KEY";
+    embedUrlEnv = "EMBED_BASE_URL";
+  }
+  // embedChoice === 3 or -1 → skip
+
+  if (embedKey) {
+    log(`  ${T.LAST} ${T.OK} ${embedProviderName} / ${embedModel}`);
+  } else {
+    log(`  ${T.LAST} ${T.WARN} Skipped (configure later in ${ENV_FILE})`);
   }
 
   rl.close();
 
-  // --- Save ---
+  // --- Save config ---
   const config = {
     CGB_WORKSPACE: workspace,
     LLM_API_KEY: llmKey,
@@ -264,7 +502,6 @@ async function runSetup() {
     LLM_MODEL: llmModel,
   };
 
-  // Save embedding config with the correct env var names
   if (embedKey) {
     config[embedKeyEnv] = embedKey;
     config[embedUrlEnv] = embedUrl;
@@ -273,59 +510,65 @@ async function runSetup() {
 
   saveEnvFile(config);
 
-  const embedDisplay = embedKey
-    ? `${mask(embedKey)} → ${embedModel || embedUrl}`
-    : "not configured (optional)";
+  log();
+  log(`  ${T.DOT} Configuration saved`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} File:      ${ENV_FILE}`);
+  log(`  ${T.BRANCH} LLM:       ${llmKey ? `${llmProviderName} / ${llmModel}` : "not configured"}`);
+  log(`  ${T.BRANCH} Embedding: ${embedKey ? `${embedProviderName} / ${embedModel}` : "not configured"}`);
+  log(`  ${T.LAST} Workspace: ${workspace}`);
+  log();
 
-  log("");
-  log("── Configuration saved ─────────────────────────────────────");
-  log(`  File: ${ENV_FILE}`);
-  log("");
-  log("  LLM:       " + (llmKey ? `${mask(llmKey)} → ${llmModel}` : "not configured (optional)"));
-  log("  Embedding: " + embedDisplay);
-  log("  Workspace: " + workspace);
-  log("");
+  // --- Verification ---
+  log(`  ${T.DOT} Verification`);
+  log(`  ${T.SIDE}`);
 
-  // --- Verify installation ---
-  log("── Verifying installation ──────────────────────────────────");
-  log("");
-
-  // Step 1: Python available?
+  // 1. Python
   if (!PYTHON_CMD) {
-    log("  ✗ Python 3 not found on PATH");
-    log("    Install Python 3.10+ and re-run: npx code-graph-builder --setup");
-    log("");
-    rl.close();
+    log(`  ${T.BRANCH} ${T.FAIL} Python 3 not found`);
+    log(`  ${T.LAST}   Install Python 3.10+ and re-run: npx code-graph-builder@latest --setup`);
+    log();
     return;
   }
-  log(`  ✓ Python found: ${PYTHON_CMD}`);
+  log(`  ${T.BRANCH} ${T.OK} ${PYTHON_VER}`);
 
-  // Step 2: Package installed? If not, auto-install.
+  // 2. Package — auto-install or upgrade
+  const pip = findPip();
   if (!pythonPackageInstalled()) {
-    log(`  … Installing ${PYTHON_PACKAGE} via pip...`);
-    const pip = findPip();
+    log(`  ${T.SIDE}  ${T.WORK} Installing ${PYTHON_PACKAGE}...`);
     if (pip) {
       try {
         execSync(
-          [...pip, "install", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+          [...pip, "install", "--upgrade", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
           { stdio: "pipe", shell: true }
         );
       } catch { /* handled below */ }
     }
+  } else {
+    // Already installed — upgrade to latest
+    log(`  ${T.SIDE}  ${T.WORK} Upgrading ${PYTHON_PACKAGE} to latest...`);
+    if (pip) {
+      try {
+        execSync(
+          [...pip, "install", "--upgrade", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+          { stdio: "pipe", shell: true }
+        );
+      } catch { /* upgrade is best-effort */ }
+    }
   }
 
   if (pythonPackageInstalled()) {
-    log(`  ✓ Python package installed: ${PYTHON_PACKAGE}`);
+    const ver = getPackageVersion();
+    log(`  ${T.BRANCH} ${T.OK} ${PYTHON_PACKAGE} ${ver || ""}`);
   } else {
-    log(`  ✗ Python package not installed`);
-    log(`    Run manually: pip install ${PYTHON_PACKAGE}`);
-    log("");
-    rl.close();
+    log(`  ${T.BRANCH} ${T.FAIL} Package not installed`);
+    log(`  ${T.LAST}   Run manually: pip install ${PYTHON_PACKAGE}`);
+    log();
     return;
   }
 
-  // Step 3: MCP server smoke test — spawn server, send initialize, check tools/list
-  log("  … Starting MCP server smoke test...");
+  // 3. MCP server smoke test
+  log(`  ${T.SIDE}  ${T.WORK} MCP server smoke test...`);
 
   const verified = await new Promise((resolve) => {
     const envVars = loadEnvFile();
@@ -348,14 +591,12 @@ async function runSetup() {
       resolve({ success, detail });
     };
 
-    // Timeout after 15s
     const timer = setTimeout(() => finish(false, "Server did not respond within 15s"), 15000);
 
-    child.stderr.on("data", () => {}); // Suppress server logs
+    child.stderr.on("data", () => {});
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
-      // MCP stdio uses JSON lines (one JSON-RPC message per line)
       const lines = stdout.split("\n");
       for (const line of lines) {
         const trimmed = line.trim();
@@ -363,7 +604,6 @@ async function runSetup() {
         try {
           const msg = JSON.parse(trimmed);
           if (msg.result && msg.result.capabilities) {
-            // Got initialize response, now request tools/list
             const toolsReq = JSON.stringify({
               jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
             });
@@ -373,10 +613,10 @@ async function runSetup() {
           }
           if (msg.result && msg.result.tools) {
             clearTimeout(timer);
-            finish(true, `${msg.result.tools.length} tools available`);
+            finish(true, `${msg.result.tools.length} tools`);
             return;
           }
-        } catch { /* partial JSON, wait for more */ }
+        } catch { /* partial JSON */ }
       }
     });
 
@@ -390,7 +630,6 @@ async function runSetup() {
       if (!resolved) finish(false, `Server exited with code ${code}`);
     });
 
-    // Send MCP initialize request as JSON line
     const initReq = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -405,55 +644,51 @@ async function runSetup() {
   });
 
   if (verified.success) {
-    log(`  ✓ MCP server started successfully (${verified.detail})`);
+    log(`  ${T.BRANCH} ${T.OK} MCP server (${verified.detail})`);
   } else {
-    log(`  ✗ MCP server smoke test failed: ${verified.detail}`);
-    log("    The server may still work — try: npx code-graph-builder --server");
+    log(`  ${T.BRANCH} ${T.FAIL} MCP smoke test: ${verified.detail}`);
   }
 
-  // Step 4: Auto-register in Claude Code if available
-  log("");
-  log("── Registering MCP server ─────────────────────────────────");
-  log("");
-
+  // 4. Claude Code registration
   if (commandExists("claude")) {
     try {
-      // Remove existing entry first (ignore errors if not found)
       try {
         execSync("claude mcp remove code-graph-builder", { stdio: "pipe", shell: true });
-      } catch { /* not found, fine */ }
+      } catch { /* not found */ }
 
       const addCmd = IS_WIN
         ? 'claude mcp add --scope user --transport stdio code-graph-builder -- cmd /c npx -y code-graph-builder@latest --server'
         : 'claude mcp add --scope user --transport stdio code-graph-builder -- npx -y code-graph-builder@latest --server';
 
       execSync(addCmd, { stdio: "pipe", shell: true });
-      log("  ✓ Registered in Claude Code (global): code-graph-builder");
-    } catch (err) {
-      log("  ⚠ Failed to register in Claude Code automatically");
-      log("    Run manually:");
+      log(`  ${T.LAST} ${T.OK} Claude Code MCP registered (global)`);
+    } catch {
+      log(`  ${T.LAST} ${T.WARN} Claude Code auto-register failed`);
+      log(`       Run manually:`);
       if (IS_WIN) {
-        log('    claude mcp add --scope user --transport stdio code-graph-builder -- cmd /c npx -y code-graph-builder@latest --server');
+        log(`       claude mcp add --scope user --transport stdio code-graph-builder -- cmd /c npx -y code-graph-builder@latest --server`);
       } else {
-        log('    claude mcp add --scope user --transport stdio code-graph-builder -- npx -y code-graph-builder@latest --server');
+        log(`       claude mcp add --scope user --transport stdio code-graph-builder -- npx -y code-graph-builder@latest --server`);
       }
     }
   } else {
-    log("  Claude Code CLI not found. Add manually to your MCP client config:");
-    log("");
-    log('  {');
-    log('    "mcpServers": {');
-    log('      "code-graph-builder": {');
-    log('        "command": "npx",');
-    log('        "args": ["-y", "code-graph-builder@latest", "--server"]');
-    log("      }");
-    log("    }");
-    log("  }");
+    log(`  ${T.LAST} ${T.WARN} Claude Code CLI not found`);
+    log();
+    log(`       Add to your MCP client config manually:`);
+    log();
+    log(`       {`);
+    log(`         "mcpServers": {`);
+    log(`           "code-graph-builder": {`);
+    log(`             "command": "npx",`);
+    log(`             "args": ["-y", "code-graph-builder@latest", "--server"]`);
+    log(`           }`);
+    log(`         }`);
+    log(`       }`);
   }
 
-  log("");
-  log("── Setup complete ─────────────────────────────────────────");
-  log("");
+  log();
+  log(`  ${T.DOT} Setup complete`);
+  log();
 }
 
 // ---------------------------------------------------------------------------
@@ -461,11 +696,9 @@ async function runSetup() {
 // ---------------------------------------------------------------------------
 
 function runServer(cmd, args) {
-  // Merge .env file into environment
   const envVars = loadEnvFile();
   const mergedEnv = { ...process.env, ...envVars };
 
-  // Ensure CGB_WORKSPACE is set
   if (!mergedEnv.CGB_WORKSPACE) {
     mergedEnv.CGB_WORKSPACE = WORKSPACE_DIR;
   }
@@ -473,7 +706,7 @@ function runServer(cmd, args) {
   const child = spawn(cmd, args, {
     stdio: "inherit",
     env: mergedEnv,
-    shell: IS_WIN,  // Windows needs shell for .cmd/.ps1 scripts (uvx, pipx, etc.)
+    shell: IS_WIN,
   });
 
   child.on("error", (err) => {
@@ -486,28 +719,6 @@ function runServer(cmd, args) {
   });
 }
 
-/**
- * Find a working pip command.  Returns [cmd, ...prefixArgs] or null.
- * Tries: pip3, pip, python3 -m pip, python -m pip
- */
-function findPip() {
-  // Standalone pip
-  for (const cmd of IS_WIN ? ["pip", "pip3"] : ["pip3", "pip"]) {
-    if (commandExists(cmd)) return [cmd];
-  }
-  // python -m pip fallback
-  if (PYTHON_CMD) {
-    try {
-      execFileSync(PYTHON_CMD, ["-m", "pip", "--version"], { stdio: "pipe" });
-      return [PYTHON_CMD, "-m", "pip"];
-    } catch { /* skip */ }
-  }
-  return null;
-}
-
-/**
- * Auto-install the Python package via pip, then start the server.
- */
 function autoInstallAndStart(extraArgs) {
   const pip = findPip();
   if (!pip) {
@@ -537,7 +748,6 @@ function autoInstallAndStart(extraArgs) {
     process.exit(1);
   }
 
-  // Verify installation succeeded
   if (!pythonPackageInstalled()) {
     process.stderr.write(
       `\nInstallation completed but package not importable.\n` +
@@ -551,42 +761,39 @@ function autoInstallAndStart(extraArgs) {
 }
 
 // ---------------------------------------------------------------------------
-// Uninstall — remove Python package, config, workspace data, Claude MCP entry
+// Uninstall
 // ---------------------------------------------------------------------------
 
 async function runUninstall() {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
-  const log = (msg) => process.stderr.write(msg + "\n");
+  const log = (msg = "") => process.stderr.write(msg + "\n");
 
-  log("");
-  log("╔══════════════════════════════════════════════════════════╗");
-  log("║        code-graph-builder  Uninstall                    ║");
-  log("╚══════════════════════════════════════════════════════════╝");
-  log("");
+  log();
+  log(box("code-graph-builder  Uninstall"));
+  log();
 
-  // 1. Show what will be removed
   const pip = findPip();
   const hasPythonPkg = pythonPackageInstalled();
   const hasWorkspace = existsSync(WORKSPACE_DIR);
   const hasEnv = existsSync(ENV_FILE);
 
-  // Check if code-graph-builder is registered in Claude Code
   let hasClaudeConfig = false;
   try {
     const mcpList = execFileSync("claude", ["mcp", "list"], { stdio: "pipe" }).toString();
     hasClaudeConfig = mcpList.includes("code-graph-builder");
   } catch { /* claude CLI not available */ }
 
-  log("  The following will be removed:");
-  log("");
-  if (hasPythonPkg) log("    ✓ Python package: code-graph-builder");
-  else              log("    - Python package: not installed");
-  if (hasWorkspace)  log(`    ✓ Workspace data: ${WORKSPACE_DIR}`);
-  else               log("    - Workspace data: not found");
-  if (hasEnv)        log(`    ✓ Config file:    ${ENV_FILE}`);
-  if (hasClaudeConfig) log("    ✓ Claude Code MCP server entry");
-  log("");
+  log(`  ${T.DOT} Components detected`);
+  log(`  ${T.SIDE}`);
+  if (hasPythonPkg)    log(`  ${T.BRANCH} Python package:  code-graph-builder`);
+  else                 log(`  ${T.BRANCH} Python package:  (not installed)`);
+  if (hasWorkspace)    log(`  ${T.BRANCH} Workspace data:  ${WORKSPACE_DIR}`);
+  else                 log(`  ${T.BRANCH} Workspace data:  (not found)`);
+  if (hasEnv)          log(`  ${T.BRANCH} Config file:     ${ENV_FILE}`);
+  if (hasClaudeConfig) log(`  ${T.BRANCH} Claude Code MCP: registered`);
+  log(`  ${T.LAST}`);
+  log();
 
   const answer = (await ask("  Proceed with uninstall? [y/N]: ")).trim().toLowerCase();
   rl.close();
@@ -596,50 +803,54 @@ async function runUninstall() {
     process.exit(0);
   }
 
-  log("");
+  log();
+  log(`  ${T.DOT} Removing`);
+  log(`  ${T.SIDE}`);
 
-  // 2. Remove Claude Code MCP entry
+  // Claude Code MCP entry
   if (hasClaudeConfig) {
     try {
       execSync("claude mcp remove code-graph-builder", { stdio: "pipe", shell: true });
-      log("  ✓ Removed Claude Code MCP entry");
+      log(`  ${T.BRANCH} ${T.OK} Claude Code MCP entry`);
     } catch {
-      log("  ⚠ Could not remove Claude Code MCP entry (may not exist)");
+      log(`  ${T.BRANCH} ${T.WARN} Claude Code MCP entry (manual removal needed)`);
     }
   }
 
-  // 3. Uninstall Python package
+  // Python package
   if (hasPythonPkg && pip) {
     try {
       execSync(
         [...pip, "uninstall", "-y", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
-        { stdio: "inherit", shell: true }
+        { stdio: "pipe", shell: true }
       );
-      log("  ✓ Uninstalled Python package");
+      log(`  ${T.BRANCH} ${T.OK} Python package`);
     } catch {
-      log("  ⚠ Failed to uninstall Python package. Try manually: pip uninstall code-graph-builder");
+      log(`  ${T.BRANCH} ${T.WARN} Python package (try: pip uninstall code-graph-builder)`);
     }
   }
 
-  // 4. Remove workspace data
+  // Workspace data
   if (hasWorkspace) {
-    const { rmSync } = await import("node:fs");
     try {
       rmSync(WORKSPACE_DIR, { recursive: true, force: true });
-      log(`  ✓ Removed workspace: ${WORKSPACE_DIR}`);
+      log(`  ${T.BRANCH} ${T.OK} Workspace data`);
     } catch (err) {
-      log(`  ⚠ Failed to remove workspace: ${err.message}`);
+      log(`  ${T.BRANCH} ${T.WARN} Workspace: ${err.message}`);
     }
   }
 
-  log("");
-  log("  Uninstall complete.");
-  log("  To also clear the npx cache: npx clear-npx-cache");
-  log("");
+  // npx cache
+  log(`  ${T.SIDE}  ${T.WORK} Clearing npx cache...`);
+  await clearNpxCache();
+  log(`  ${T.LAST} ${T.OK} npx cache`);
+
+  log();
+  log(`  ${T.DOT} Uninstall complete`);
+  log();
 }
 
 function startServer(extraArgs = []) {
-  // Prefer pip-installed package first (most reliable, includes all deps)
   if (pythonPackageInstalled()) {
     runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
   } else if (commandExists("uvx")) {
@@ -649,7 +860,6 @@ function startServer(extraArgs = []) {
   } else if (commandExists("pipx")) {
     runServer("pipx", ["run", PYTHON_PACKAGE, ...extraArgs]);
   } else {
-    // Auto-install via pip
     autoInstallAndStart(extraArgs);
   }
 }
@@ -662,10 +872,8 @@ const args = process.argv.slice(2);
 const mode = args[0];
 
 if (mode === "--setup") {
-  // Explicit setup request
   runSetup();
 } else if (mode === "--server" || mode === "--pip" || mode === "--python") {
-  // Start MCP server directly
   if (mode === "--pip" || mode === "--python") {
     if (!PYTHON_CMD || !pythonPackageInstalled()) {
       process.stderr.write(
@@ -681,23 +889,24 @@ if (mode === "--setup") {
 } else if (mode === "--uninstall") {
   runUninstall();
 } else if (mode === "--help" || mode === "-h") {
-  process.stderr.write(
-    `code-graph-builder - Code knowledge graph MCP server\n\n` +
-      `Usage:\n` +
-      `  npx code-graph-builder              Interactive setup wizard\n` +
-      `  npx code-graph-builder --server     Start MCP server\n` +
-      `  npx code-graph-builder --setup      Re-run setup wizard\n` +
-      `  npx code-graph-builder --uninstall  Completely uninstall\n` +
-      `  npx code-graph-builder --help       Show this help\n\n` +
-      `Config: ${ENV_FILE}\n`
-  );
+  const log = (msg) => process.stderr.write(msg + "\n");
+  log("");
+  log(box("code-graph-builder"));
+  log("");
+  log("  Usage:");
+  log("");
+  log("    npx code-graph-builder              Interactive setup wizard");
+  log("    npx code-graph-builder --server     Start MCP server");
+  log("    npx code-graph-builder --setup      Re-run setup wizard");
+  log("    npx code-graph-builder --uninstall  Completely uninstall");
+  log("    npx code-graph-builder --help       Show this help");
+  log("");
+  log(`  Config: ${ENV_FILE}`);
+  log("");
 } else {
-  // No args: auto-detect
   if (!existsSync(ENV_FILE)) {
-    // First run → setup wizard
     runSetup();
   } else {
-    // Config exists → start server
     startServer(args);
   }
 }
