@@ -64,3 +64,6 @@ CLAUDE.md
 
 #entire
 .entire/
+
+# npm binary packages
+npm-package/*.tgz
