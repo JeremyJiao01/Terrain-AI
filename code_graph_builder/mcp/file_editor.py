@@ -11,6 +11,7 @@ from tree_sitter import Node, Parser
 from .. import constants as cs
 from ..language_spec import get_language_for_extension, get_language_spec
 from ..parser_loader import load_parsers
+from ..utils.encoding import normalize_to_utf8_bytes
 
 
 class FileEditor:
@@ -62,7 +63,7 @@ class FileEditor:
             return None
 
         try:
-            content = file_path.read_bytes()
+            content = normalize_to_utf8_bytes(file_path.read_bytes())
         except OSError as exc:
             logger.warning(f"Cannot read {file_path}: {exc}")
             return None

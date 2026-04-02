@@ -278,6 +278,10 @@ class GraphUpdater:
         self._process_files()
 
         logger.info(f"Found {len(self.function_registry)} functions")
+        logger.debug(
+            "Function registry: {} entries, simple_name_lookup: {} unique names",
+            len(self.function_registry), len(self.simple_name_lookup),
+        )
 
         # Pass 3: Calls
         logger.info("Pass 3: Processing function calls")
@@ -291,6 +295,10 @@ class GraphUpdater:
             logger.info("Pass 4: Generating semantic embeddings")
             self._generate_semantic_embeddings()
 
+        logger.debug(
+            "Graph build summary: {} functions/methods in registry, {} ASTs cached",
+            len(self.function_registry), len(self.ast_cache),
+        )
         logger.info("Analysis complete")
         self.ingestor.flush_all()
 
@@ -328,6 +336,7 @@ class GraphUpdater:
             self.repo_path.rglob("*"),
             key=lambda p: (0 if p.suffix == cs.EXT_H else 1, str(p)),
         )
+        files_processed = 0
         for filepath in all_files:
             if filepath.is_file() and not should_skip_path(
                 filepath,
@@ -362,12 +371,18 @@ class GraphUpdater:
                     if result:
                         root_node, language = result
                         self.ast_cache[filepath] = (root_node, language)
+                        files_processed += 1
                 elif self._is_dependency_file(filepath.name, filepath):
                     self.factory.definition_processor.process_dependencies(filepath)
 
                 self.factory.structure_processor.process_generic_file(
                     filepath, filepath.name
                 )
+
+        logger.debug(
+            "File processing complete: {} files parsed, {} ASTs cached",
+            files_processed, len(self.ast_cache),
+        )
 
     def _process_function_calls(self) -> None:
         """Process function calls in all cached ASTs."""

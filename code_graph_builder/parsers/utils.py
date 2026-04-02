@@ -44,8 +44,12 @@ def get_function_captures(
 
 @lru_cache(maxsize=10000)
 def _cached_decode_bytes(text_bytes: bytes) -> str:
-    """Cached byte decoding for performance."""
-    return text_bytes.decode(cs.ENCODING_UTF8)
+    """Cached byte decoding for performance.
+
+    After :func:`normalize_to_utf8_bytes` pre-processing, input should
+    always be valid UTF-8.  ``errors="replace"`` is a safety net.
+    """
+    return text_bytes.decode(cs.ENCODING_UTF8, errors="replace")
 
 
 def safe_decode_text(node: ASTNode | None) -> str | None:

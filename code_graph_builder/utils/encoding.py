@@ -25,11 +25,38 @@ def smart_decode(raw: bytes) -> str:
     """
     for enc in _FALLBACK_ENCODINGS:
         try:
-            return raw.decode(enc)
+            result = raw.decode(enc)
+            if enc != "utf-8":
+                logger.debug(
+                    "Decoded {} bytes with fallback encoding: {}", len(raw), enc
+                )
+            return result
         except (UnicodeDecodeError, LookupError):
             continue
     # latin-1 never fails, but just in case:
+    logger.debug(
+        "All encodings failed for {} bytes, using utf-8 with replacement", len(raw)
+    )
     return raw.decode("utf-8", errors="replace")
+
+
+def normalize_to_utf8_bytes(raw: bytes) -> bytes:
+    """Normalize raw file bytes to clean UTF-8 with LF line endings.
+
+    1. Detect encoding via :func:`smart_decode` (GBK/GB2312/GB18030/Latin-1).
+    2. Strip ``\\r`` characters (CRLF → LF).
+    3. Re-encode to UTF-8 bytes.
+
+    This is intended for feeding source files to tree-sitter, which
+    expects UTF-8.  The original file on disk is **not** modified.
+    """
+    text = smart_decode(raw)
+    if "\r" in text:
+        logger.debug(
+            "Stripped CR characters from {} bytes (CRLF → LF)", len(raw)
+        )
+        text = text.replace("\r", "")
+    return text.encode("utf-8")
 
 
 def read_source_file(path: Path) -> str:

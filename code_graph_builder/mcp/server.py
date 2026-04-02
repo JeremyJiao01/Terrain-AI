@@ -45,6 +45,19 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+# --- CGB_DEBUG file logging ---
+if os.environ.get("CGB_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+    _debug_log = _ws.expanduser() / "debug.log"
+    _debug_log.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        str(_debug_log),
+        level="DEBUG",
+        rotation="10 MB",
+        retention="3 days",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    )
+    logger.debug("CGB_DEBUG enabled, logging to {}", _debug_log)
+
 from .tools import MCPToolsRegistry, ToolError
 
 SERVER_NAME = "code-graph-builder"

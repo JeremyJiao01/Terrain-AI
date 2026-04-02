@@ -11,6 +11,7 @@ from tree_sitter import Node, QueryCursor
 from .. import constants as cs
 from ..services import IngestorProtocol
 from ..types import LanguageQueries, NodeType, PropertyDict, SimpleNameLookup
+from ..utils.encoding import normalize_to_utf8_bytes
 from .utils import safe_decode_text
 
 if TYPE_CHECKING:
@@ -67,9 +68,19 @@ class DefinitionProcessor:
                 logger.warning(f"No parser for language: {language}")
                 return None
 
-            source_bytes = file_path.read_bytes()
+            source_bytes = normalize_to_utf8_bytes(file_path.read_bytes())
             tree = parser.parse(source_bytes)
             root_node = tree.root_node
+
+            # Debug: log parse quality
+            if root_node.has_error:
+                error_count = sum(
+                    1 for c in root_node.children if c.type == "ERROR"
+                )
+                logger.debug(
+                    "Tree-sitter parse errors in {}: {} ERROR node(s)",
+                    relative_path, error_count,
+                )
 
             # Build module qualified name
             module_qn = cs.SEPARATOR_DOT.join(
@@ -247,6 +258,8 @@ class DefinitionProcessor:
                     (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, func_qn),
                 )
 
+            logger.debug("Module {}: {} function(s) ingested", module_qn, len(func_nodes))
+
         except Exception as e:
             logger.debug(f"Error ingesting functions: {e}")
 
@@ -330,6 +343,8 @@ class DefinitionProcessor:
                 self._ingest_class_methods(
                     class_node, class_qn, module_qn, language, queries
                 )
+
+            logger.debug("Module {}: {} class(es) ingested", module_qn, len(class_nodes))
 
         except Exception as e:
             logger.debug(f"Error ingesting classes: {e}")
@@ -772,6 +787,8 @@ class DefinitionProcessor:
                     cs.RelationshipType.DEFINES,
                     (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, macro_qn),
                 )
+
+            logger.debug("Module {}: {} macro(s) ingested", module_qn, len(macro_nodes))
 
         except Exception as e:
             logger.debug(f"Error ingesting macros: {e}")
