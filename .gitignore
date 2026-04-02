@@ -11,7 +11,6 @@ __pycache__/
 *.so
 .Python
 build/
-dist/
 *.egg-info/
 .eggs/
 *.egg
@@ -73,7 +72,6 @@ CLAUDE.md
 .entire/
 
 # npm binary packages
-npm-package/*.tgz
 npm-package/node_modules/
 node_modules/
 package-lock.json
