@@ -560,8 +560,8 @@ class MCPToolsRegistry:
         # effect without restarting the MCP server.
         from ..settings import reload_env
         changes = reload_env(workspace=self._workspace)
-        if changes.get("updated") or changes.get("removed"):
-            logger.info(f"Config hot-reloaded before initialize: {changes}")
+        # if changes.get("updated") or changes.get("removed"):
+        #     logger.info(f"Config hot-reloaded before initialize: {changes}")
 
         repo = Path(repo_path).resolve()
         if not repo.exists():

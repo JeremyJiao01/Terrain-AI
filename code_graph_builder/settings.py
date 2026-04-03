@@ -159,11 +159,11 @@ def reload_env(workspace: Path | None = None) -> dict[str, list[str]]:
                 del os.environ[key]
                 removed.append(key)
 
-    if updated:
-        logger.info(f"Config reloaded — updated: {', '.join(updated)}")
-    if removed:
-        logger.info(f"Config reloaded — removed: {', '.join(removed)}")
-    if not updated and not removed:
-        logger.info("Config reloaded — no changes detected")
+    # if updated:
+    #     logger.info(f"Config reloaded — updated: {', '.join(updated)}")
+    # if removed:
+    #     logger.info(f"Config reloaded — removed: {', '.join(removed)}")
+    # if not updated and not removed:
+    #     logger.info("Config reloaded — no changes detected")
 
     return {"updated": updated, "removed": removed}
