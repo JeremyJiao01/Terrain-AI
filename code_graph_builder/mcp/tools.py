@@ -478,12 +478,38 @@ class MCPToolsRegistry:
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
             # -----------------------------------------------------------------
+            # Embedding
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="rebuild_embeddings",
+                description=(
+                    "Build or rebuild vector embeddings for the active repository. "
+                    "Requires a previously initialized repository with API docs. "
+                    "After completion, semantic_search and find_api will use the "
+                    "new embeddings. Set rebuild=true to force regeneration even "
+                    "if cached embeddings exist."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "Force rebuild embeddings even if cached. "
+                                "Default: false (reuse cache if available)."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Hidden tools — handlers preserved, not exposed to MCP clients.
             # Superseded by API-doc-based workflows above.
             #   query_code_graph, get_code_snippet, semantic_search,
             #   locate_function, list_api_interfaces,
             #   list_wiki_pages, get_wiki_page, generate_wiki,
-            #   rebuild_embeddings, build_graph, prepare_guidance
+            #   build_graph, prepare_guidance
             # -----------------------------------------------------------------
         ]
 

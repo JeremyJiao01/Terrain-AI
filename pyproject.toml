@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-graph-builder"
-version = "0.26.0"
+version = "0.27.0"
 description = "Code knowledge graph builder with MCP server for AI-assisted code navigation"
 readme = "README.md"
 license = {text = "MIT"}
