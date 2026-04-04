@@ -231,12 +231,14 @@ def scan_file(file_path: str, file_layer_path: str | None = None) -> list[str]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source = f.read()
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"WARNING: skipping {file_path}: {e}", file=sys.stderr)
         return []
 
     try:
         tree = ast.parse(source, filename=file_path)
-    except SyntaxError:
+    except SyntaxError as e:
+        print(f"WARNING: skipping {file_path}: {e}", file=sys.stderr)
         return []
 
     violations: list[str] = []

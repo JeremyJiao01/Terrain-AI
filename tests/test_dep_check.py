@@ -182,11 +182,19 @@ class TestCheckImport(unittest.TestCase):
         )
         self.assertIsNotNone(result)
 
-    def test_l1_cannot_import_l1(self):
+    def test_l1_cannot_import_l1_cross_subdirectory(self):
         # L1 parsers cannot import L1 services
         result = check_import(
             "code_graph_builder/foundation/parsers/python.py",
             "code_graph_builder.foundation.services.graph",
+        )
+        self.assertIsNotNone(result)
+
+    def test_l1_cannot_import_l1_same_subdirectory(self):
+        # L1 parsers cannot import another L1 parsers module either
+        result = check_import(
+            "code_graph_builder/foundation/parsers/factory.py",
+            "code_graph_builder.foundation.parsers.utils",
         )
         self.assertIsNotNone(result)
 
