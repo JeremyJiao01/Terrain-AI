@@ -98,6 +98,82 @@ class CallProcessor:
         except Exception as e:
             logger.warning(f"Failed to process calls in {file_path}: {e}")
 
+    def process_func_ptr_assignments(
+        self,
+        file_path: Path,
+        root_node: Node,
+        language: cs.SupportedLanguage,
+        queries: dict[cs.SupportedLanguage, LanguageQueries],
+    ) -> None:
+        """Detect struct field function pointer assignments and create indirect CALLS edges.
+
+        Matches patterns like:
+            config.on_error = handle_error;
+            ptr->callback = process_data;
+
+        Creates CALLS edges with indirect=True property.
+        """
+        relative_path = file_path.relative_to(self.repo_path)
+
+        try:
+            lang_queries = queries.get(language)
+            if not lang_queries:
+                return
+
+            fp_query = lang_queries.get(cs.QUERY_FUNC_PTR_ASSIGN)
+            if not fp_query:
+                return
+
+            module_qn = cs.SEPARATOR_DOT.join(
+                [self.project_name] + list(relative_path.with_suffix("").parts)
+            )
+
+            cursor = QueryCursor(fp_query)
+            captures = cursor.captures(root_node)
+
+            assign_nodes = captures.get(cs.CAPTURE_ASSIGN, [])
+            field_nodes = captures.get(cs.CAPTURE_FIELD, [])
+            rhs_nodes = captures.get(cs.CAPTURE_RHS, [])
+
+            for i, assign_node in enumerate(assign_nodes):
+                if not isinstance(assign_node, Node):
+                    continue
+                if i >= len(field_nodes) or i >= len(rhs_nodes):
+                    continue
+
+                field_name = safe_decode_text(field_nodes[i])
+                rhs_name = safe_decode_text(rhs_nodes[i])
+                if not field_name or not rhs_name:
+                    continue
+
+                # Find enclosing function
+                caller_qn = self._find_caller_function(assign_node, module_qn, language)
+                if not caller_qn:
+                    continue
+
+                # Resolve RHS to a known function
+                resolver = self._get_call_resolver()
+                target_qn = resolver.resolve_call(rhs_name, module_qn, None)
+                if not target_qn:
+                    continue
+
+                # Register in func_ptr_map for later call resolution
+                resolver.register_func_ptr(field_name, target_qn)
+
+                # Create indirect CALLS edge
+                self.ingestor.ensure_relationship_batch(
+                    (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, caller_qn),
+                    cs.RelationshipType.CALLS,
+                    (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, target_qn),
+                    properties={"indirect": True, "via_field": field_name},
+                )
+                logger.debug(
+                    f"Created indirect CALLS: {caller_qn} -> {target_qn} via .{field_name}"
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to process func ptr assignments in {file_path}: {e}")
+
     def _process_call_node(
         self,
         call_node: Node,
