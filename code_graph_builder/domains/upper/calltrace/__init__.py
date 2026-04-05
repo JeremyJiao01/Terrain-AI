@@ -2,6 +2,7 @@
 
 from code_graph_builder.domains.upper.calltrace.tracer import (
     CallPath,
+    EdgeInfo,
     NodeInfo,
     SingleTraceResult,
     TraceResult,
@@ -10,6 +11,7 @@ from code_graph_builder.domains.upper.calltrace.tracer import (
 
 __all__ = [
     "CallPath",
+    "EdgeInfo",
     "NodeInfo",
     "SingleTraceResult",
     "TraceResult",

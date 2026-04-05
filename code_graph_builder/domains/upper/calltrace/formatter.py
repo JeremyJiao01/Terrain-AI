@@ -108,9 +108,16 @@ def format_tree(result: SingleTraceResult, column_width: int = 80) -> str:
         for path in paths:
             for depth_idx, node in enumerate(path.nodes):
                 loc = _node_location(node)
-                lines.append(
-                    _format_path_line(node.name, loc, depth_idx, column_width)
-                )
+                # Mark indirect edges: if the edge FROM previous node TO this
+                # node is indirect, annotate the line.
+                indirect_marker = ""
+                if depth_idx > 0 and depth_idx - 1 < len(path.edges):
+                    edge = path.edges[depth_idx - 1]
+                    if edge.indirect:
+                        via = f" via .{edge.via_field}" if edge.via_field else ""
+                        indirect_marker = f"  [indirect{via}]"
+                line = _format_path_line(node.name, loc, depth_idx, column_width)
+                lines.append(line + indirect_marker)
             lines.append("")
 
         if result.truncated:

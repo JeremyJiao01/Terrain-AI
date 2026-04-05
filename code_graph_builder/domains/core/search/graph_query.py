@@ -251,6 +251,48 @@ class GraphQueryService:
             logger.error(f"Failed to fetch callers of {function_name}: {e}")
             return []
 
+    def fetch_callers_with_rel_props(
+        self, function_name: str
+    ) -> list[tuple[GraphNode, dict]]:
+        """Find all callers with CALLS relationship properties.
+
+        Returns a list of ``(caller_node, rel_properties)`` tuples.
+        ``rel_properties`` may contain ``{"indirect": True, "via_field": "..."}``
+        for function-pointer-based calls.
+        """
+        query = """
+            MATCH (caller:Function)-[r:CALLS]->(callee)
+            WHERE callee.qualified_name = $name
+               OR callee.name = $name
+            RETURN caller,
+                   caller.node_id AS node_id,
+                   caller.id AS id,
+                   caller.qualified_name AS qualified_name,
+                   caller.name AS name,
+                   labels(caller) AS labels,
+                   caller.path AS path,
+                   caller.start_line AS start_line,
+                   caller.end_line AS end_line,
+                   r.indirect AS indirect,
+                   r.via_field AS via_field
+        """
+
+        try:
+            results = self.graph_service.fetch_all(query, {"name": function_name})
+            output: list[tuple[GraphNode, dict]] = []
+            for row in results:
+                node = self._row_to_node(row)
+                rel_props: dict = {}
+                if row.get("indirect"):
+                    rel_props["indirect"] = True
+                if row.get("via_field"):
+                    rel_props["via_field"] = str(row["via_field"])
+                output.append((node, rel_props))
+            return output
+        except Exception as e:
+            logger.error(f"Failed to fetch callers with props of {function_name}: {e}")
+            return []
+
     def fetch_callees(self, function_name: str) -> list[GraphNode]:
         """Find all functions called by the given function.
 

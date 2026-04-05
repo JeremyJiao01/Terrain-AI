@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from code_graph_builder.domains.upper.calltrace.tracer import (
     CallPath,
+    EdgeInfo,
     NodeInfo,
     SingleTraceResult,
     TraceResult,
@@ -67,6 +68,50 @@ def _read_source_snippet(repo_root: Path, node: NodeInfo) -> str | None:
 # ---------------------------------------------------------------------------
 # Wiki page renderer
 # ---------------------------------------------------------------------------
+
+
+def _render_indirect_section(paths: list[CallPath]) -> str:
+    """Build the Indirect Call Paths table from edge metadata.
+
+    If no indirect edges are found, returns FILL placeholders.
+    """
+    rows: list[str] = []
+    seen: set[str] = set()
+
+    for cp in paths:
+        for i, edge in enumerate(cp.edges):
+            if not edge.indirect:
+                continue
+            # The edge goes from nodes[i] -> nodes[i+1]
+            caller = cp.nodes[i]
+            callee = cp.nodes[i + 1] if i + 1 < len(cp.nodes) else None
+            via = edge.via_field or "?"
+            key = f"{caller.qualified_name}->{via}"
+            if key in seen:
+                continue
+            seen.add(key)
+
+            callee_name = callee.name if callee else "?"
+            callee_loc = f"{callee.path}:{callee.start_line}" if callee and callee.path else "?"
+            caller_loc = f"{caller.path}:{caller.start_line}" if caller.path else "?"
+            rows.append(
+                f"| `{callee_name}` | `{callee_loc}` | `.{via}` "
+                f"| `{caller.name}` | `{caller_loc}` |"
+            )
+
+    header = (
+        "| 注册函数 | 注册文件 | 结构体/字段 | 间接调用点 | 调用文件 |\n"
+        "|----------|----------|-------------|-----------|----------|\n"
+    )
+
+    if rows:
+        return header + "\n".join(rows) + "\n\n**注册模式描述：** <!-- FILL -->\n"
+    else:
+        return (
+            header
+            + "| <!-- FILL --> | <!-- FILL --> | <!-- FILL --> | <!-- FILL --> | <!-- FILL --> |\n"
+            "\n**注册模式描述：** <!-- FILL -->\n"
+        )
 
 
 def _render_wiki_page(
@@ -192,11 +237,8 @@ def _render_wiki_page(
         f"\n"
         f"## Indirect Call Paths (Function Pointer / Callback)\n"
         f"\n"
-        f"| 注册函数 | 注册文件 | 结构体/字段 | 间接调用点 | 调用文件 |\n"
-        f"|----------|----------|-------------|-----------|----------|\n"
-        f"| <!-- FILL --> | <!-- FILL --> | <!-- FILL --> | <!-- FILL --> | <!-- FILL --> |\n"
-        f"\n"
-        f"**注册模式描述：** <!-- FILL -->\n"
+        + _render_indirect_section(paths)
+        +
         f"\n"
         f"## Log Fingerprint\n"
         f"\n"

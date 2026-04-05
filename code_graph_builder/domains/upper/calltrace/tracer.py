@@ -34,15 +34,29 @@ class NodeInfo:
 
 
 @dataclass
+class EdgeInfo:
+    """Metadata about a single edge in a call path."""
+
+    indirect: bool = False
+    via_field: str | None = None
+
+
+@dataclass
 class CallPath:
     """An ordered path from an entry point down to the target function."""
 
     nodes: list[NodeInfo]  # entry_point -> ... -> target, ordered
+    edges: list[EdgeInfo] = field(default_factory=list)  # len = len(nodes) - 1
 
     @property
     def depth(self) -> int:
         """Number of edges (hops) in this path."""
         return len(self.nodes) - 1
+
+    @property
+    def has_indirect(self) -> bool:
+        """Whether any edge in this path is an indirect (function pointer) call."""
+        return any(e.indirect for e in self.edges)
 
 
 @dataclass
@@ -159,6 +173,8 @@ def _trace_single_target(
     visited: set[str] = {target_qn}
     parent_map: dict[str, list[str]] = {}  # child_qn -> [parent_qns]
     node_map: dict[str, NodeInfo] = {target_qn: target_info}
+    # Edge properties: (parent_qn, child_qn) -> EdgeInfo
+    edge_props: dict[tuple[str, str], EdgeInfo] = {}
 
     direct_callers: list[str] = []
     entry_points: list[str] = []
@@ -176,22 +192,30 @@ def _trace_single_target(
             max_depth_reached = True
             continue
 
-        callers = query_service.fetch_callers(current_qn)
-        caller_qns_at_this_level: list[str] = []
+        # Use rel-props-aware query to capture indirect call metadata.
+        callers_with_props = query_service.fetch_callers_with_rel_props(current_qn)
 
-        for caller_node in callers:
+        for caller_node, rel_props in callers_with_props:
             caller_qn = caller_node.qualified_name
 
             # Record the parent relationship (even if already visited,
             # to capture all edges for path reconstruction).
             parent_map.setdefault(current_qn, []).append(caller_qn)
 
+            # Store edge properties (caller -> current direction in call graph,
+            # but in our parent_map it's child -> parent).
+            edge_key = (caller_qn, current_qn)
+            if edge_key not in edge_props:
+                edge_props[edge_key] = EdgeInfo(
+                    indirect=bool(rel_props.get("indirect")),
+                    via_field=rel_props.get("via_field"),
+                )
+
             if caller_qn in visited:
                 continue
 
             visited.add(caller_qn)
             node_map[caller_qn] = _graph_node_to_info(caller_node)
-            caller_qns_at_this_level.append(caller_qn)
 
             if depth == 0:
                 direct_callers.append(caller_qn)
@@ -200,7 +224,7 @@ def _trace_single_target(
 
         # If no callers were found for this node (and it's not the target
         # itself), it is an entry point.
-        if not callers and current_qn != target_qn:
+        if not callers_with_props and current_qn != target_qn:
             entry_points.append(current_qn)
 
     # Deduplicate entry points while preserving order.
@@ -231,6 +255,7 @@ def _trace_single_target(
         paths_from_ep = _dfs_paths(
             children_map,
             node_map,
+            edge_props,
             start=ep_qn,
             target=target_qn,
             limit=paths_per_entry_point,
@@ -255,6 +280,7 @@ def _trace_single_target(
 def _dfs_paths(
     children_map: dict[str, list[str]],
     node_map: dict[str, NodeInfo],
+    edge_props: dict[tuple[str, str], EdgeInfo],
     *,
     start: str,
     target: str,
@@ -262,7 +288,7 @@ def _dfs_paths(
 ) -> list[CallPath]:
     """Enumerate paths from *start* to *target* via DFS.
 
-    Returns at most *limit* paths.
+    Returns at most *limit* paths, each with corresponding edge metadata.
     """
 
     results: list[CallPath] = []
@@ -273,7 +299,13 @@ def _dfs_paths(
         current, path = stack.pop()
 
         if current == target:
-            results.append(CallPath(nodes=[node_map[qn] for qn in path]))
+            nodes = [node_map[qn] for qn in path]
+            # Build edge info for each hop in the path.
+            edges: list[EdgeInfo] = []
+            for i in range(len(path) - 1):
+                key = (path[i], path[i + 1])
+                edges.append(edge_props.get(key, EdgeInfo()))
+            results.append(CallPath(nodes=nodes, edges=edges))
             continue
 
         for child_qn in children_map.get(current, []):

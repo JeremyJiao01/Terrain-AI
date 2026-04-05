@@ -56,6 +56,10 @@ def _mock_query_service(
     svc = MagicMock()
     svc.fetch_functions_by_name.return_value = targets
     svc.fetch_callers.side_effect = lambda qn: callers_map.get(qn, [])
+    # fetch_callers_with_rel_props wraps each node with empty rel_props
+    svc.fetch_callers_with_rel_props.side_effect = lambda qn: [
+        (node, {}) for node in callers_map.get(qn, [])
+    ]
     return svc
 
 
