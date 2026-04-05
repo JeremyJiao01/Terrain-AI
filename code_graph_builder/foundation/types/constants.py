@@ -424,6 +424,7 @@ QUERY_CONFIG = "config"
 QUERY_LANGUAGE = "language"
 QUERY_TYPEDEFS = "typedefs"
 QUERY_MACROS = "macros"
+QUERY_FUNC_PTR_ASSIGN = "func_ptr_assign"
 
 # Query capture names
 CAPTURE_FUNCTION = "function"
@@ -433,6 +434,10 @@ CAPTURE_IMPORT = "import"
 CAPTURE_IMPORT_FROM = "import_from"
 CAPTURE_TYPEDEF = "typedef"
 CAPTURE_MACRO = "macro"
+CAPTURE_ASSIGN = "assign"
+CAPTURE_LHS = "lhs"
+CAPTURE_FIELD = "field"
+CAPTURE_RHS = "rhs"
 
 # Locals query patterns for JS/TS
 JS_LOCALS_PATTERN = """
