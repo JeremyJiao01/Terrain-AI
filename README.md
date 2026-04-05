@@ -1,5 +1,7 @@
 # Code Graph Builder
 
+English | [中文](README_CN.md)
+
 Build a knowledge graph from any codebase, generate API documentation, and search code semantically — all accessible as an MCP server for AI coding assistants.
 
 ## What It Does

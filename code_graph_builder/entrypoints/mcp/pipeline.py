@@ -1101,19 +1101,19 @@ def build_vector_index(
         batch_embeddings = embedder.embed_batch(batch_texts)
 
         if batch_embeddings is None:
-            logger.warning(
-                "embed_batch returned None for batch at offset {}. "
-                "Skipping {} texts.",
-                batch_start, len(batch_texts),
-            )
+            # logger.warning(
+            #     "embed_batch returned None for batch at offset {}. "
+            #     "Skipping {} texts.",
+            #     batch_start, len(batch_texts),
+            # )
             continue
 
         if len(batch_embeddings) != len(batch):
-            logger.warning(
-                "embed_batch returned {} embeddings for {} inputs at offset {}. "
-                "Skipping mismatched batch.",
-                len(batch_embeddings), len(batch), batch_start,
-            )
+            # logger.warning(
+            #     "embed_batch returned {} embeddings for {} inputs at offset {}. "
+            #     "Skipping mismatched batch.",
+            #     len(batch_embeddings), len(batch), batch_start,
+            # )
             continue
 
         for (node_id, func, _), embedding in zip(batch, batch_embeddings):

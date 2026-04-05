@@ -104,6 +104,12 @@ class SemanticSearchService:
     ) -> list[SemanticSearchResult]:
         """Search for code semantically similar to the query.
 
+        Uses a hybrid approach: vector similarity provides the base score,
+        then keyword matching boosts results whose names, signatures, or
+        qualified names contain the query terms.  This mitigates the
+        sensitivity of pure embedding search to minor query variations
+        (e.g. "pv 拉短" vs "拉短").
+
         Args:
             query: Natural language query describing what to find
             top_k: Number of results to return
@@ -116,17 +122,23 @@ class SemanticSearchService:
             # Generate query embedding
             query_embedding = self.embedder.embed_query(query)
 
-            # Search vector store
+            # Search vector store — fetch a larger candidate set so keyword
+            # boosting can promote relevant results that ranked lower.
+            candidate_k = max(top_k * 4, 20)
+
             filter_metadata = None
             if entity_types:
                 filter_metadata = {"type": entity_types[0]} if len(entity_types) == 1 else None
 
             vector_results = self.vector_store.search_similar(
-                query_embedding, top_k=top_k, filter_metadata=filter_metadata
+                query_embedding, top_k=candidate_k, filter_metadata=filter_metadata
             )
 
             if not vector_results:
                 return []
+
+            # --- Keyword boost re-ranking ---
+            vector_results = self._keyword_boost(query, vector_results, top_k)
 
             # Enrich with graph data if available
             if self.graph_service:
@@ -137,6 +149,73 @@ class SemanticSearchService:
         except Exception as e:
             logger.error(f"Semantic search failed: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # Keyword boost helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tokenize_query(query: str) -> list[str]:
+        """Split query into searchable tokens.
+
+        Handles mixed Chinese/English text by splitting on whitespace and
+        punctuation, then keeping non-empty tokens of length >= 2.
+        """
+        import re
+        # Split on whitespace and common punctuation
+        raw = re.split(r'[\s,，。、；;:：!！?？()\[\]{}]+', query.lower())
+        return [t for t in raw if len(t) >= 2]
+
+    def _keyword_boost(
+        self,
+        query: str,
+        results: list[SearchResult],
+        top_k: int,
+    ) -> list[SearchResult]:
+        """Re-rank results by blending vector score with keyword matches.
+
+        For each result, check whether any query token appears in the
+        record's ``qualified_name`` or metadata fields (``name``,
+        ``signature``, ``module``).  Matching tokens contribute a small
+        additive bonus so that keyword-relevant results float up without
+        completely overriding semantic similarity.
+        """
+        tokens = self._tokenize_query(query)
+        if not tokens:
+            return results[:top_k]
+
+        _KEYWORD_WEIGHT = 0.05  # bonus per matched token (additive)
+
+        boosted: list[tuple[float, SearchResult]] = []
+        for r in results:
+            bonus = 0.0
+            # Gather text fields to match against
+            _get = getattr(self.vector_store, "get_embedding", None)
+            record = _get(r.node_id) if _get else None
+            searchable = r.qualified_name.lower()
+            if record and record.metadata:
+                for field in ("name", "signature", "module"):
+                    val = record.metadata.get(field)
+                    if isinstance(val, str):
+                        searchable += " " + val.lower()
+
+            for token in tokens:
+                if token in searchable:
+                    bonus += _KEYWORD_WEIGHT
+
+            boosted.append((r.score + bonus, r))
+
+        boosted.sort(key=lambda x: x[0], reverse=True)
+
+        # Rebuild SearchResult list with adjusted scores
+        return [
+            SearchResult(
+                node_id=sr.node_id,
+                score=round(adjusted, 4),
+                qualified_name=sr.qualified_name,
+            )
+            for adjusted, sr in boosted[:top_k]
+        ]
 
     def _convert_results(self, vector_results: list[SearchResult]) -> list[SemanticSearchResult]:
         """Convert vector search results to semantic search results."""

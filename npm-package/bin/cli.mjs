@@ -349,11 +349,16 @@ async function runSetup() {
   let llmBaseUrl = existing.LLM_BASE_URL || "";
   let llmModel = existing.LLM_MODEL || "";
   let llmProviderName = "skipped";
-  let embedKey = "";
-  let embedUrl = "";
-  let embedModel = "";
-  let embedKeyEnv = "DASHSCOPE_API_KEY";
-  let embedUrlEnv = "DASHSCOPE_BASE_URL";
+  // Detect which embedding env var names were previously used
+  let embedKeyEnv = existing.EMBED_API_KEY ? "EMBED_API_KEY"
+    : existing.DASHSCOPE_API_KEY ? "DASHSCOPE_API_KEY"
+    : "DASHSCOPE_API_KEY";
+  let embedUrlEnv = existing.EMBED_BASE_URL ? "EMBED_BASE_URL"
+    : existing.DASHSCOPE_BASE_URL ? "DASHSCOPE_BASE_URL"
+    : "DASHSCOPE_BASE_URL";
+  let embedKey = existing[embedKeyEnv] || "";
+  let embedUrl = existing[embedUrlEnv] || "";
+  let embedModel = existing.EMBED_MODEL || "";
   let embedProviderName = "skipped";
 
   const llmOptions = [
@@ -490,14 +495,14 @@ async function runSetup() {
       if (embedChoice === -2) { log(); step = 2; continue; }
       if (embedChoice === -1) { rl.close(); return; }
 
-      embedKey = "";
-      embedUrl = "";
-      embedModel = "";
-      embedKeyEnv = "DASHSCOPE_API_KEY";
-      embedUrlEnv = "DASHSCOPE_BASE_URL";
-      embedProviderName = "skipped";
-
       if (embedChoice >= 0 && embedChoice < 2) {
+        // Reset before configuring a new provider
+        embedKey = "";
+        embedUrl = "";
+        embedModel = "";
+        embedKeyEnv = "DASHSCOPE_API_KEY";
+        embedUrlEnv = "DASHSCOPE_BASE_URL";
+        embedProviderName = "skipped";
         const ep = embedProvidersList[embedChoice];
         embedUrl = ep.url;
         embedModel = ep.model;

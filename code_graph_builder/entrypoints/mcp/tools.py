@@ -478,6 +478,32 @@ class MCPToolsRegistry:
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
             # -----------------------------------------------------------------
+            # Call graph queries
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="find_callers",
+                description=(
+                    "Find all functions that call a specific function (i.e. its "
+                    "callers / references). Accepts a qualified name like "
+                    "'module.Class.method' or a simple name like 'parse_btype'. "
+                    "Returns caller qualified names, file paths, and line numbers. "
+                    "Does NOT require an LLM — queries the graph directly."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "function_name": {
+                            "type": "string",
+                            "description": (
+                                "Function name or qualified name to search for. "
+                                "Examples: 'parse_btype', 'tinycc.tccgen.parse_btype'"
+                            ),
+                        },
+                    },
+                    "required": ["function_name"],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Call chain trace
             # -----------------------------------------------------------------
             ToolDefinition(
@@ -522,12 +548,38 @@ class MCPToolsRegistry:
                 },
             ),
             # -----------------------------------------------------------------
+            # Embedding
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="rebuild_embeddings",
+                description=(
+                    "Build or rebuild vector embeddings for the active repository. "
+                    "Requires a previously initialized repository with API docs. "
+                    "After completion, semantic_search and find_api will use the "
+                    "new embeddings. Set rebuild=true to force regeneration even "
+                    "if cached embeddings exist."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "rebuild": {
+                            "type": "boolean",
+                            "description": (
+                                "Force rebuild embeddings even if cached. "
+                                "Default: false (reuse cache if available)."
+                            ),
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Hidden tools — handlers preserved, not exposed to MCP clients.
             # Superseded by API-doc-based workflows above.
             #   query_code_graph, get_code_snippet, semantic_search,
             #   locate_function, list_api_interfaces,
             #   list_wiki_pages, get_wiki_page, generate_wiki,
-            #   rebuild_embeddings, build_graph, prepare_guidance
+            #   build_graph, prepare_guidance
             # -----------------------------------------------------------------
         ]
 
@@ -555,6 +607,7 @@ class MCPToolsRegistry:
             "build_graph": self._handle_build_graph,
             "generate_api_docs": self._handle_generate_api_docs,
             "prepare_guidance": self._handle_prepare_guidance,
+            "find_callers": self._handle_find_callers,
             "get_config": self._handle_get_config,
             "trace_call_chain": self._handle_trace_call_chain,
         }
@@ -574,6 +627,14 @@ class MCPToolsRegistry:
         skip_embed: bool = False,
         _progress_cb: ProgressCb = None,
     ) -> dict[str, Any]:
+        # Hot-reload config from .env / settings.json before running the
+        # pipeline, so any changes made via --setup or manual edits take
+        # effect without restarting the MCP server.
+        from ..settings import reload_env
+        changes = reload_env(workspace=self._workspace)
+        # if changes.get("updated") or changes.get("removed"):
+        #     logger.info(f"Config hot-reloaded before initialize: {changes}")
+
         repo = Path(repo_path).resolve()
         if not repo.exists():
             raise ToolError(f"Repository path does not exist: {repo}")
@@ -1830,6 +1891,67 @@ class MCPToolsRegistry:
             raise ToolError({"error": str(exc), "status": "error"}) from exc
 
         return {"guidance": guidance}
+
+    # -------------------------------------------------------------------------
+    # find_callers — find all functions that call a specific function
+    # -------------------------------------------------------------------------
+
+    async def _handle_find_callers(self, function_name: str) -> dict[str, Any]:
+        """Find all functions that call the given function via the CALLS graph."""
+        self._require_active()
+
+        # Query both Function and Method nodes as callers/callees
+        cypher = """
+            MATCH (caller)-[:CALLS]->(callee)
+            WHERE callee.qualified_name = $name
+               OR callee.name = $name
+            RETURN DISTINCT
+                   caller.qualified_name AS caller_qn,
+                   caller.name           AS caller_name,
+                   caller.path           AS caller_path,
+                   caller.start_line     AS caller_start,
+                   caller.end_line       AS caller_end,
+                   callee.qualified_name AS callee_qn
+        """
+
+        with self._temporary_ingestor() as ingestor:
+            rows = ingestor.query(cypher, {"name": function_name})
+
+        if not rows:
+            return {
+                "function": function_name,
+                "caller_count": 0,
+                "callers": [],
+                "message": f"No callers found for '{function_name}'.",
+            }
+
+        callers = []
+        for r in rows:
+            callers.append({
+                "qualified_name": r.get("caller_qn", ""),
+                "name": r.get("caller_name", ""),
+                "path": r.get("caller_path", ""),
+                "start_line": r.get("caller_start"),
+                "end_line": r.get("caller_end"),
+            })
+
+        # Deduplicate (same caller may appear via qualified_name + name match)
+        seen = set()
+        unique: list[dict] = []
+        for c in callers:
+            key = c["qualified_name"]
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(c)
+
+        # Use the matched callee qualified_name for clarity
+        matched_qn = rows[0].get("callee_qn", function_name)
+
+        return {
+            "function": matched_qn,
+            "caller_count": len(unique),
+            "callers": unique,
+        }
 
     # -------------------------------------------------------------------------
     # get_config — show current server configuration
