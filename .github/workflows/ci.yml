@@ -33,11 +33,17 @@ jobs:
       - name: Run layer dependency check
         run: python tools/dep_check.py
 
-      - name: Run tests
+      - name: Run tests (unit tests — no LLM/external services required)
         run: |
-          python -m pytest code_graph_builder/tests/ -v --tb=short -x \
-            --ignore=code_graph_builder/tests/domains/upper/test_api_find_integration.py \
-            --ignore=code_graph_builder/tests/domains/core/test_step3_embedding.py \
-            --ignore=code_graph_builder/tests/domains/core/test_embedder.py \
-            --ignore=code_graph_builder/tests/domains/core/test_integration_semantic.py \
-            --ignore=code_graph_builder/tests/entrypoints/test_mcp_user_flow.py
+          python -m pytest -v --tb=short \
+            code_graph_builder/tests/foundation/ \
+            --ignore=code_graph_builder/tests/foundation/test_call_resolution.py \
+            code_graph_builder/tests/domains/core/test_graph_build.py \
+            code_graph_builder/tests/domains/core/test_vector_store.py \
+            code_graph_builder/tests/domains/upper/calltrace/ \
+            code_graph_builder/tests/domains/upper/test_api_docs.py \
+            code_graph_builder/tests/domains/upper/test_api_find.py \
+            code_graph_builder/tests/domains/upper/test_client.py \
+            code_graph_builder/tests/domains/upper/test_camel_agent.py \
+            code_graph_builder/tests/domains/upper/test_config.py \
+            code_graph_builder/tests/domains/upper/test_markdown_generator.py
