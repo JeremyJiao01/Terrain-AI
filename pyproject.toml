@@ -42,8 +42,8 @@ semantic = []
 rag = []
 
 [project.scripts]
-code-graph-builder = "code_graph_builder.cli:main"
-cgb-mcp = "code_graph_builder.mcp:main"
+code-graph-builder = "code_graph_builder.entrypoints.cli.cli:main"
+cgb-mcp = "code_graph_builder.entrypoints.mcp:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["code_graph_builder"]

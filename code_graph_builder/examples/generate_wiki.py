@@ -298,8 +298,8 @@ def fix_mermaid_errors(content: str, errors: list[dict], agent) -> tuple[str, li
 
 def build_vector_index(builder, repo_path: Path, vectors_path: Path, rebuild: bool):
     """对所有函数源码做 embedding，写入内存向量存储。"""
-    from code_graph_builder.embeddings.qwen3_embedder import create_embedder
-    from code_graph_builder.embeddings.vector_store import MemoryVectorStore, VectorRecord
+    from code_graph_builder.domains.core.embedding.qwen3_embedder import create_embedder
+    from code_graph_builder.domains.core.embedding.vector_store import MemoryVectorStore, VectorRecord
 
     embedder = create_embedder(batch_size=EMBED_BATCH_SIZE)
 
@@ -667,8 +667,8 @@ def generate_wiki(
     comprehensive: bool = True,
     only_pages: list[str] | None = None,
 ) -> tuple[Path, int]:
-    from code_graph_builder.rag.camel_agent import CamelAgent
-    from code_graph_builder.rag.client import create_llm_client
+    from code_graph_builder.domains.upper.rag.camel_agent import CamelAgent
+    from code_graph_builder.domains.upper.rag.client import create_llm_client
 
     project_name = repo_path.name
 

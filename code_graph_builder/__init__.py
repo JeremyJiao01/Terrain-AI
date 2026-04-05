@@ -20,8 +20,8 @@ Example:
     >>> data = builder.export_graph()
 """
 
-from .builder import CodeGraphBuilder
-from .config import (
+from .domains.core.graph.builder import CodeGraphBuilder
+from .foundation.types.config import (
     ConfigValidator,
     EmbeddingConfig,
     KuzuConfig,
@@ -30,7 +30,7 @@ from .config import (
     OutputConfig,
     ScanConfig,
 )
-from .embeddings import (
+from .domains.core.embedding import (
     BaseEmbedder,
     DummyEmbedder,
     MemoryVectorStore,
@@ -44,9 +44,9 @@ from .embeddings import (
     create_vector_store,
     last_token_pool,
 )
-from .services.kuzu_service import KuzuIngestor
-from .services.memory_service import MemoryIngestor
-from .types import BuildResult, GraphData, GraphSummary
+from .foundation.services.kuzu_service import KuzuIngestor
+from .foundation.services.memory_service import MemoryIngestor
+from .foundation.types.types import BuildResult, GraphData, GraphSummary
 
 __version__ = "0.1.0"
 __all__ = [

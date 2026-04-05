@@ -210,7 +210,7 @@ class AcceptanceChecker:
         try:
             # 动态导入避免依赖问题
             sys.path.insert(0, str(self.project_root))
-            from code_graph_builder.builder import CodeGraphBuilder
+            from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
 
             builder = CodeGraphBuilder(str(self.tinycc_path))
             result = builder.build_graph(clean=True)
