@@ -395,6 +395,13 @@ class GraphUpdater:
                 file_path, root_node, language, self.queries
             )
 
+        # Second pass: detect C/C++ function pointer assignments
+        for file_path, (root_node, language) in ast_cache_items:
+            if language in (cs.SupportedLanguage.C, cs.SupportedLanguage.CPP):
+                self.factory.call_processor.process_func_ptr_assignments(
+                    file_path, root_node, language, self.queries
+                )
+
     def _generate_semantic_embeddings(self) -> None:
         """Generate semantic embeddings for functions and classes.
 
