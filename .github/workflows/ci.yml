@@ -26,7 +26,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[treesitter-full]"
+        run: |
+          pip install -e ".[treesitter-full]"
+          pip install pytest
 
       - name: Run layer dependency check
         run: python tools/dep_check.py
@@ -34,7 +36,6 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest code_graph_builder/tests/ -v --tb=short -x \
-            --ignore=code_graph_builder/tests/test_api_find_integration.py \
-            --ignore=code_graph_builder/tests/test_step3_embedding.py \
-            --ignore=code_graph_builder/tests/test_mcp_user_flow.py \
-            --ignore=code_graph_builder/tests/test_integration_semantic.py
+            --ignore=code_graph_builder/tests/domains/upper/test_api_find_integration.py \
+            --ignore=code_graph_builder/tests/domains/core/test_step3_embedding.py \
+            --ignore=code_graph_builder/tests/entrypoints/test_mcp_user_flow.py
