@@ -70,6 +70,8 @@ class GraphQueryProtocol(Protocol):
 
     def fetch_node_by_qualified_name(self, qualified_name: str) -> GraphNode | None: ...
 
+    def fetch_functions_by_name(self, name: str) -> list[GraphNode]: ...
+
     def fetch_callers(self, function_name: str) -> list[GraphNode]: ...
 
     def fetch_callees(self, function_name: str) -> list[GraphNode]: ...
@@ -160,6 +162,62 @@ class GraphQueryService:
             logger.error(f"Failed to fetch node {qualified_name}: {e}")
 
         return None
+
+    def fetch_functions_by_name(self, name: str) -> list[GraphNode]:
+        """Find function nodes by name — qualified_name exact match first, then fallback to name match.
+
+        Args:
+            name: Function name (simple or qualified)
+
+        Returns:
+            List of matching GraphNode objects
+        """
+        # Try exact match on qualified_name first
+        query_qualified = """
+            MATCH (n:Function)
+            WHERE n.qualified_name = $name
+            RETURN n,
+                   n.node_id AS node_id,
+                   n.id AS id,
+                   n.qualified_name AS qualified_name,
+                   n.name AS name,
+                   labels(n) AS labels,
+                   n.path AS path,
+                   n.start_line AS start_line,
+                   n.end_line AS end_line,
+                   n.docstring AS docstring
+        """
+
+        try:
+            results = self.graph_service.fetch_all(query_qualified, {"name": name})
+            if results:
+                return [self._row_to_node(row) for row in results]
+        except Exception as e:
+            logger.error(f"Failed to fetch functions by qualified_name '{name}': {e}")
+            return []
+
+        # Fallback to name match
+        query_name = """
+            MATCH (n:Function)
+            WHERE n.name = $name
+            RETURN n,
+                   n.node_id AS node_id,
+                   n.id AS id,
+                   n.qualified_name AS qualified_name,
+                   n.name AS name,
+                   labels(n) AS labels,
+                   n.path AS path,
+                   n.start_line AS start_line,
+                   n.end_line AS end_line,
+                   n.docstring AS docstring
+        """
+
+        try:
+            results = self.graph_service.fetch_all(query_name, {"name": name})
+            return [self._row_to_node(row) for row in results]
+        except Exception as e:
+            logger.error(f"Failed to fetch functions by name '{name}': {e}")
+            return []
 
     def fetch_callers(self, function_name: str) -> list[GraphNode]:
         """Find all functions that call the given function.

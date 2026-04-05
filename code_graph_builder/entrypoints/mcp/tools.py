@@ -478,6 +478,50 @@ class MCPToolsRegistry:
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
             # -----------------------------------------------------------------
+            # Call chain trace
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="trace_call_chain",
+                description=(
+                    "Trace the upward call chain of a target function using BFS. "
+                    "Finds all entry points that can reach the target, reconstructs "
+                    "every call path, and optionally generates a Wiki investigation "
+                    "worksheet. Useful for log-source tracing and impact analysis."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "target_function": {
+                            "type": "string",
+                            "description": (
+                                "Target function name — supports simple name "
+                                "(e.g. 'LogSaveWithSubId') or fully qualified name "
+                                "(e.g. 'pkg.log.LogSaveWithSubId')."
+                            ),
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "Maximum upward traversal depth. Default: 10.",
+                        },
+                        "save_wiki": {
+                            "type": "boolean",
+                            "description": (
+                                "Whether to generate a Wiki investigation worksheet. "
+                                "Default: true."
+                            ),
+                        },
+                        "paths_per_entry_point": {
+                            "type": "integer",
+                            "description": (
+                                "Maximum number of paths to keep per entry point. "
+                                "Default: 20."
+                            ),
+                        },
+                    },
+                    "required": ["target_function"],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Hidden tools — handlers preserved, not exposed to MCP clients.
             # Superseded by API-doc-based workflows above.
             #   query_code_graph, get_code_snippet, semantic_search,
@@ -512,6 +556,7 @@ class MCPToolsRegistry:
             "generate_api_docs": self._handle_generate_api_docs,
             "prepare_guidance": self._handle_prepare_guidance,
             "get_config": self._handle_get_config,
+            "trace_call_chain": self._handle_trace_call_chain,
         }
         return handlers.get(name)
 
@@ -1899,3 +1944,76 @@ class MCPToolsRegistry:
             "services": services,
             "environment_variables": env_status,
         }
+
+    # -------------------------------------------------------------------------
+    # trace_call_chain — upward call chain tracing
+    # -------------------------------------------------------------------------
+
+    async def _handle_trace_call_chain(
+        self,
+        target_function: str,
+        max_depth: int = 10,
+        save_wiki: bool = True,
+        paths_per_entry_point: int = 20,
+    ) -> dict[str, Any]:
+        """Trace the upward call chain of a target function."""
+        from code_graph_builder.domains.core.search.graph_query import GraphQueryService
+        from code_graph_builder.domains.upper.calltrace.tracer import trace_call_chain
+        from code_graph_builder.domains.upper.calltrace.formatter import format_trace_result
+
+        if self._ingestor is None:
+            raise ToolError("No repository loaded. Run initialize_repository first.")
+
+        query_service = GraphQueryService(self._ingestor, backend="kuzu")
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: trace_call_chain(
+                query_service=query_service,
+                target_function=target_function,
+                max_depth=max_depth,
+                paths_per_entry_point=paths_per_entry_point,
+            ),
+        )
+
+        wiki_pages: list[str] = []
+        if save_wiki and self._active_artifact_dir is not None:
+            from code_graph_builder.domains.upper.calltrace.wiki_writer import write_wiki_pages
+
+            repo_name = self._active_repo_path.name if self._active_repo_path else "unknown"
+            repo_root = self._active_repo_path or Path(".")
+            written = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: write_wiki_pages(
+                    result=result,
+                    artifact_dir=self._active_artifact_dir,
+                    repo_root=repo_root,
+                    repo_name=repo_name,
+                ),
+            )
+            wiki_pages = [str(p) for p in written]
+
+        output: dict[str, Any] = {
+            "query": result.query_name,
+            "matches": len(result.results),
+            "results": [],
+        }
+
+        for sr in result.results:
+            entry: dict[str, Any] = {
+                "target": sr.target.qualified_name,
+                "direct_callers": len(sr.direct_callers),
+                "entry_points": len(sr.entry_points),
+                "total_paths": len(sr.paths),
+                "max_depth_reached": sr.max_depth_reached,
+                "truncated": sr.truncated,
+                "tree": format_trace_result(result) if len(result.results) == 1 else "",
+            }
+            output["results"].append(entry)
+
+        if wiki_pages:
+            for i, wp in enumerate(wiki_pages):
+                if i < len(output["results"]):
+                    output["results"][i]["wiki_page"] = wp
+
+        return output
