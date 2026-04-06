@@ -80,8 +80,18 @@ When your change touches files covered by specific test suites, you **must** run
 | `domains/upper/calltrace/` | calltrace | `python -m pytest code_graph_builder/tests/domains/upper/calltrace/ -v` |
 | `domains/core/graph/graph_updater.py` | func ptr + graph build | `python -m pytest code_graph_builder/tests/foundation/parsers/test_func_ptr_detection.py -v` |
 | `entrypoints/mcp/tools.py` | MCP protocol | `python -m pytest code_graph_builder/tests/entrypoints/ -v` |
+| `entrypoints/mcp/pipeline.py` | MCP protocol + CLI entrypoints | `python -m pytest code_graph_builder/tests/entrypoints/ -v` |
 
 **Rule:** When adding new test files, add a row to this table mapping source files to the new tests. This keeps the impact map current.
+
+## Pipeline Entry Point Consistency
+
+`entrypoints/mcp/pipeline.py` is shared by both the MCP server and the CLI (`cgb index`, `cgb rebuild`). When modifying pipeline behavior, **both entry points must be validated**:
+
+1. **MCP path** — run `python -m pytest code_graph_builder/tests/entrypoints/ -v`
+2. **CLI path** — manually verify `cgb index <path>` and `cgb rebuild` complete without error
+
+A change that only passes MCP tests may silently break the CLI, and vice versa. Both must be checked before merge.
 
 ## Before Submitting Checklist
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-graph-builder"
-version = "0.28.0"
+version = "0.29.0"
 description = "Code knowledge graph builder with MCP server for AI-assisted code navigation"
 readme = "README.md"
 license = {text = "MIT"}
@@ -43,6 +43,7 @@ rag = []
 
 [project.scripts]
 code-graph-builder = "code_graph_builder.entrypoints.cli.cli:main"
+cgb = "code_graph_builder.entrypoints.cli.cli:main"
 cgb-mcp = "code_graph_builder.entrypoints.mcp:main"
 
 [tool.hatch.build.targets.wheel]
