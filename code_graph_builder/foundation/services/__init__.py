@@ -35,5 +35,6 @@ class QueryProtocol(Protocol):
 
 # Import implementation
 from .graph_service import MemgraphIngestor
+from .git_service import GitChangeDetector
 
-__all__ = ["IngestorProtocol", "QueryProtocol", "MemgraphIngestor"]
+__all__ = ["IngestorProtocol", "QueryProtocol", "MemgraphIngestor", "GitChangeDetector"]

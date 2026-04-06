@@ -14,9 +14,10 @@ def detector():
     return GitChangeDetector()
 
 
-def _mock_run(stdout: str, returncode: int = 0):
+def _mock_run(stdout: str, returncode: int = 0, stderr: str = ""):
     result = MagicMock()
     result.stdout = stdout
+    result.stderr = stderr
     result.returncode = returncode
     return result
 
@@ -103,3 +104,15 @@ class TestGetChangedFiles:
             files, head = detector.get_changed_files(tmp_path, last_commit="abc")
         assert files == []
         assert head is None
+
+    def test_returns_none_when_diff_times_out(self, detector, tmp_path):
+        def fake_run(cmd, **kwargs):
+            if "rev-parse" in cmd:
+                return _mock_run("newhead\n")
+            raise subprocess.TimeoutExpired(cmd, 10)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            files, head = detector.get_changed_files(tmp_path, last_commit="oldhead")
+
+        assert files is None  # timeout => full rebuild needed
+        assert head == "newhead"

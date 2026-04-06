@@ -73,6 +73,9 @@ class GitChangeDetector:
 
             return changed, current_head
 
+        except subprocess.TimeoutExpired as e:
+            logger.warning("git diff timed out: {}", e)
+            return None, current_head
         except (subprocess.SubprocessError, OSError) as e:
             logger.warning("git diff failed: {}", e)
-            return [], current_head
+            return None, current_head
