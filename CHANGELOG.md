@@ -2,6 +2,19 @@
 
 ---
 
+## [0.30.0] — 2026-04-06
+
+### Added
+- `/code-gen` skill — 4-stage MCP workflow for implementation planning from design documents
+  - Phase 1: Concept extraction from design doc
+  - Phase 2: Broad search via `find_api`
+  - Phase 3: Deep research via `get_api_doc`, `find_callers`, `trace_call_chain`, `list_api_docs`
+  - Phase 3.5: Gap check with one-round backfill
+  - Phase 4: Structured implementation plan output (stop and wait for user confirmation)
+- `.claude/commands/` directory tracked in git for project-scoped custom commands
+
+---
+
 ## [0.29.0] — 2026-04-04 ~ 2026-04-06
 
 ### Added
