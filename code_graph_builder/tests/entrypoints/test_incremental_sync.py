@@ -7,6 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reset_cached_head():
+    from code_graph_builder.entrypoints.mcp import server as srv
+    yield
+    srv._cached_head = None
+
+
 class TestMaybeIncrementalSync:
     """Unit tests for _maybe_incremental_sync using mocked dependencies."""
 

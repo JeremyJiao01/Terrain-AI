@@ -140,24 +140,56 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
     from code_graph_builder.domains.core.graph.incremental_updater import IncrementalUpdater
 
     try:
-        result = IncrementalUpdater().run(
-            changed_files=changed_files,
-            repo_path=repo_path,
-            db_path=db_path,
-            artifact_dir=artifact_dir,
-            vectors_path=vectors_path,
+        result = await asyncio.to_thread(
+            IncrementalUpdater().run,
+            changed_files,
+            repo_path,
+            db_path,
         )
         logger.info(
             "Incremental sync: {} files, {} callers in {:.0f}ms",
             result.files_reindexed, result.callers_reindexed, result.duration_ms,
         )
 
-        # Persist new last_indexed_commit
-        if new_head and meta_file.exists():
+        # Cascade: regenerate API docs and vector index
+        from code_graph_builder.entrypoints.mcp.pipeline import (
+            generate_api_docs_step,
+            build_vector_index,
+        )
+        from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
+        cascade_builder = CodeGraphBuilder(
+            repo_path=str(repo_path),
+            backend="kuzu",
+            backend_config={"db_path": str(db_path), "batch_size": 1000},
+        )
+        if (artifact_dir / "api_docs").exists():
             try:
-                existing = _json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
-                existing["last_indexed_commit"] = new_head
-                meta_file.write_text(_json.dumps(existing, ensure_ascii=False, indent=2))
+                await asyncio.to_thread(
+                    generate_api_docs_step, cascade_builder, artifact_dir,
+                    rebuild=True, repo_path=repo_path
+                )
+            except Exception as e:
+                logger.warning("API docs update failed: {}", e)
+        if vectors_path.exists():
+            try:
+                await asyncio.to_thread(
+                    build_vector_index, cascade_builder, repo_path, vectors_path,
+                    rebuild=True
+                )
+            except Exception as e:
+                logger.warning("Vector index rebuild failed: {}", e)
+
+        # Persist new last_indexed_commit
+        if new_head:
+            try:
+                import json as _json2
+                existing_meta = {}
+                if meta_file.exists():
+                    existing_meta = _json2.loads(
+                        meta_file.read_text(encoding="utf-8", errors="replace")
+                    )
+                existing_meta["last_indexed_commit"] = new_head
+                meta_file.write_text(_json2.dumps(existing_meta, ensure_ascii=False, indent=2))
             except Exception as e:
                 logger.debug("Failed to update last_indexed_commit in meta.json: {}", e)
 
