@@ -31,6 +31,10 @@ See `contributing/architecture.md` for full rules.
 - `cgb-mcp` MCP server: `entrypoints/mcp/server.py`
 - Main API: `domains/core/graph/builder.py` -> `CodeGraphBuilder`
 
+## Custom Commands
+
+- `/code-gen <design-doc>`: Generate implementation plan from design document using MCP tools
+
 ## Build & Test
 
 ```bash
