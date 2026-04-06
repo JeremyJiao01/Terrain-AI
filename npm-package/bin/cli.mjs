@@ -17,7 +17,7 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 
 const PYTHON_PACKAGE = "code-graph-builder";
-const MODULE_PATH = "code_graph_builder.mcp.server";
+const MODULE_PATH = "code_graph_builder.entrypoints.mcp.server";
 const WORKSPACE_DIR = join(homedir(), ".code-graph-builder");
 const ENV_FILE = join(WORKSPACE_DIR, ".env");
 const IS_WIN = platform() === "win32";
