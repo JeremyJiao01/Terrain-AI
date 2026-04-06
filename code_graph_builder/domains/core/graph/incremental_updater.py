@@ -56,7 +56,7 @@ def _delete_nodes_for_files(ingestor: Any, rel_paths: list[str]) -> None:
                 {"paths": rel_paths},
             )
         except Exception as e:
-            logger.debug("delete {} nodes: {}", label, e)
+            logger.warning("delete {} nodes: {}", label, e)
 
 
 def _delete_calls_from(ingestor: Any, caller_rel_paths: list[str]) -> None:
@@ -71,7 +71,7 @@ def _delete_calls_from(ingestor: Any, caller_rel_paths: list[str]) -> None:
             {"paths": caller_rel_paths},
         )
     except Exception as e:
-        logger.debug("delete CALLS from callers: {}", e)
+        logger.warning("delete CALLS from callers: {}", e)
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +87,10 @@ class IncrementalUpdater:
         3. DELETE only CALLS relations from affected_callers.
         4. Re-run Pass 2 (definitions) for existing changed files.
         5. Re-run Pass 3 (calls) for changed + affected_callers.
-        6. Regenerate API docs (full, fast — just queries DB).
-        7. Rebuild vector index (full, from MD files).
-        8. Flush all pending writes.
+        6. Flush all pending writes.
+
+    Note: API docs and vector index regeneration are NOT performed here (L4 concern).
+    The L4 caller (_maybe_incremental_sync) handles the cascade after run() returns.
     """
 
     def run(
@@ -97,18 +98,16 @@ class IncrementalUpdater:
         changed_files: list[Path],
         repo_path: Path,
         db_path: Path,
-        artifact_dir: Path,
-        vectors_path: Path,
     ) -> IncrementalResult:
-        """Execute incremental update and return statistics."""
+        """Execute incremental graph update and return statistics.
+
+        Note: API docs and vector index regeneration are NOT performed here.
+        The L4 caller is responsible for cascade updates after this returns.
+        """
         t0 = time.monotonic()
 
         from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
         from code_graph_builder.foundation.services.kuzu_service import KuzuIngestor
-        from code_graph_builder.entrypoints.mcp.pipeline import (
-            generate_api_docs_step,
-            build_vector_index,
-        )
 
         # Separate existing files from deleted ones
         existing_files = [f for f in changed_files if f.is_file()]
@@ -126,6 +125,10 @@ class IncrementalUpdater:
             backend="kuzu",
             backend_config={"db_path": str(db_path), "batch_size": 1000},
         )
+
+        # Eagerly load parsers before touching the graph so a parser failure
+        # does not leave the graph in an inconsistent (partially-deleted) state.
+        builder._load_parsers()
 
         with KuzuIngestor(db_path) as ingestor:
             # Step 1: Find files that call into changed files
@@ -158,20 +161,6 @@ class IncrementalUpdater:
             graph_updater._process_function_calls()
 
             ingestor.flush_all()
-
-        # Step 6: Regenerate API docs (re-queries the updated graph)
-        if (artifact_dir / "api_docs").exists():
-            try:
-                generate_api_docs_step(builder, artifact_dir, rebuild=True, repo_path=repo_path)
-            except Exception as e:
-                logger.warning("API docs update failed: {}", e)
-
-        # Step 7: Rebuild vector index (reads from api_docs/funcs/*.md)
-        if vectors_path.exists():
-            try:
-                build_vector_index(builder, repo_path, vectors_path, rebuild=True)
-            except Exception as e:
-                logger.warning("Vector index rebuild failed: {}", e)
 
         duration_ms = (time.monotonic() - t0) * 1000
         result = IncrementalResult(
