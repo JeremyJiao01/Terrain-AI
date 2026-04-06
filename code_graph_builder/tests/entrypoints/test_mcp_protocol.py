@@ -189,13 +189,15 @@ class TestToolErrorHandling:
         with pytest.raises(ToolError):
             _run(registry.get_handler("semantic_search")(query="test"))
 
-    def test_find_api_without_embeddings_raises(self, indexed_registry):
-        """find_api without embeddings should raise ToolError."""
-        from code_graph_builder.entrypoints.mcp.tools import ToolError
-
+    def test_find_api_without_embeddings_uses_keyword_fallback(self, indexed_registry):
+        """find_api without embeddings should fall back to keyword search, not raise."""
         # indexed_registry was created with skip_embed=True
-        with pytest.raises(ToolError):
-            _run(indexed_registry._handle_find_api(query="test"))
+        result = _run(indexed_registry._handle_find_api(query="compile source"))
+        assert isinstance(result, dict)
+        # Must return keyword_fallback mode, not raise
+        assert result.get("search_mode") == "keyword_fallback", (
+            f"Expected keyword_fallback mode, got: {result}"
+        )
 
     def test_switch_nonexistent_repo_raises(self, registry):
         from code_graph_builder.entrypoints.mcp.tools import ToolError
