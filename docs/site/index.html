@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeGraphWiki — Your AI assistant finally understands your codebase.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+    <div class="dynamic-bg">
+        <div class="dynamic-bg-glow"></div>
+        <div class="dynamic-bg-grain"></div>
+    </div>
+    <div class="scroll-progress" id="scrollProgress"></div>
+
+    <!-- Language Toggle (hidden for now) -->
+    <button id="langToggle" onclick="toggleLang()" style="display: none; position: fixed; top: 20px; right: 20px; z-index: 100; background: var(--color-bg-white); border: 1px solid var(--color-material-2); border-radius: 20px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--color-text-primary); box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: background 0.2s;" onmouseover="this.style.background='var(--color-material-1)'" onmouseout="this.style.background='var(--color-bg-white)'">EN / 中文</button>
+
+    <div class="container stack">
+        <!-- Hero Section -->
+        <section class="hero">
+            <div style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: var(--space-xxl); align-items: center;">
+                <div class="hero-content">
+                    <h1 class="hero-fade-in" style="animation-delay: 0.2s;" data-i18n-html="hero_title">Your AI <i>finally</i> understands your codebase.</h1>
+                    <p class="subtitle hero-fade-in" style="animation-delay: 0.6s;" data-i18n="hero_sub">A MCP turns your codebase into a knowledge graph, giving AI tools instant access to functions, call chains, and context.</p>
+                    <div class="hero-fade-in" style="margin-top: var(--space-xl); display: flex; gap: var(--space-md); align-items: center; flex-wrap: wrap; animation-delay: 1.0s;">
+                        <div style="display: inline-flex; align-items: center; padding: 10px 14px; background: var(--color-bg-white); color: var(--color-text-primary); border: 1px solid var(--color-material-2); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.02);">
+                            npx code-graph-builder@latest --setup
+                            <button class="copy-btn" style="position: static; margin-left: 16px; background: transparent; color: var(--color-text-secondary); padding: 6px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='var(--color-material-2)'" onmouseout="this.style.background='transparent'" onclick="copyToClipboard('npx code-graph-builder@latest --setup')" title="Copy command">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            </button>
+                        </div>
+                        <a href="https://github.com/JeremyJiao01/CodeGraphWiki" style="color: var(--color-text-primary); display: flex; align-items: center; padding: 8px; border-radius: 50%; transition: background 0.2s;" onmouseover="this.style.background='var(--color-material-2)'" onmouseout="this.style.background='transparent'" title="View on GitHub">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                        </a>
+                    </div>
+                </div>
+
+                <div class="hero-visual hero-fade-in" style="animation-delay: 1.4s; position: relative; height: 300px; display: flex; flex-direction: column; justify-content: center; padding-left: var(--space-xl);">
+                    <!-- Point cloud canvas -->
+                    <canvas id="sphereCanvas" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 400px; height: 400px; z-index: 1; opacity: 0; transition: opacity 2s ease-in-out; pointer-events: none;"></canvas>
+                    
+                    <!-- Borderless CLI lines container -->
+                    <div id="heroCli" style="position: relative; z-index: 2; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 16px; font-weight: 500; line-height: 2.2; color: var(--color-text-primary); transition: opacity 1s ease;">
+                        <!-- Animation injected here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pain Points -->
+        <section class="pain-points reveal">
+            <p>
+<span data-i18n="pain_text">"Most agents re-read your entire codebase every time they start a task — the same files, the same functions, the same slow discovery loop. Code Graph Builder indexes it once into a knowledge graph, and every session after that already knows where everything is."</span>
+            </p>
+        </section>
+
+        <!-- Features Stack -->
+        <section id="features" class="reveal" style="padding-top: 40px; padding-bottom: 40px;">
+            <div style="text-align: center; margin-bottom: var(--space-lg); color: var(--color-text-tertiary); font-size: 13px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;">
+<span style="display: inline-block; transform: translateX(-5px);">←</span> <span data-i18n="swipe_hint">Swipe left to discard card and explore next</span> <span style="display: inline-block; transform: translateX(5px);">→</span>
+            </div>
+            
+            <div class="card-stack-container" id="featuresStack">
+                <!-- Interactive 1: Pipeline Animation -->
+                <div class="stack-card">
+                    <div style="margin-bottom: var(--space-xl); display: flex; justify-content: space-between; align-items: flex-end;">
+                        <div>
+                            <h2 style="margin-bottom: 0;" data-i18n-html="card1_title">One quiet read,<br>and nothing is forgotten.</h2>
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm);">
+                            <button class="btn btn-secondary" onclick="togglePlayPipeline()" style="padding: 10px; border-radius: 50%;" id="btnPlayStep" title="Play/Pause">
+                                <svg id="iconPlay" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                <svg id="iconPause" style="display: none;" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="resetPipeline()" style="padding: 10px; border-radius: 50%;" title="Reset">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="prevPipelineStep()" style="padding: 10px; border-radius: 50%;" id="btnPrevStep" disabled>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                            </button>
+                            <button class="btn btn-primary" onclick="nextPipelineStep()" style="padding: 10px; border-radius: 50%;" id="btnNextStep">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: var(--space-xxl); flex-grow: 1; min-height: 300px;">
+                        <div class="pipeline-container" id="pipelineContainer" style="display: flex; flex-direction: column; justify-content: center; background: transparent; border: none; box-shadow: none; padding: 0;">
+                            <div class="pipeline-step" id="step-0" style="opacity: 1;">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                    <span class="step-label">Step 1: graph-build</span>
+                                    <span class="step-status">Waiting to start...</span>
+                                </div>
+                                <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                            </div>
+                            <div class="pipeline-step" id="step-1">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                    <span class="step-label">Step 2: api-doc-gen</span>
+                                    <span class="step-status">Waiting to start...</span>
+                                </div>
+                                <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                            </div>
+                            <div class="pipeline-step" id="step-2">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                    <span class="step-label">Step 3: embed-gen</span>
+                                    <span class="step-status">Waiting to start...</span>
+                                </div>
+                                <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                            </div>
+                        </div>
+
+                        <!-- Right Visualizations -->
+                        <div style="position: relative; background: var(--color-bg-neutral); border: 1px solid var(--color-material-2); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                            <!-- Vis 1: Progressive Graph Build -->
+                            <div id="vis-step-0" style="position: absolute; opacity: 1; transition: opacity 0.5s; width: 100%; height: 100%; padding: var(--space-md);">
+                                <svg id="vis-graph-svg" style="width: 100%; height: 100%;"></svg>
+                            </div>
+
+                            <!-- Vis 2: Markdown-style API Doc with tree -->
+                            <div id="vis-step-1" style="position: absolute; opacity: 0; pointer-events: none; transition: opacity 0.5s; width: 100%; height: 100%; display: flex; flex-direction: column; padding: var(--space-md); overflow: hidden;">
+                                <div id="vis-doc-card" style="background: var(--color-bg-white); border: 1px solid var(--color-material-2); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow: hidden; transform: scale(0.9); opacity: 0; transition: all 0.8s ease;">
+                                    <div id="vis-doc-lines" style="padding: 12px 16px; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.8; color: var(--color-text-secondary);"></div>
+                                </div>
+                            </div>
+
+                            <!-- Vis 3: Embeddings → Semantic Search -->
+                            <div id="vis-step-2" style="position: absolute; opacity: 0; pointer-events: none; transition: opacity 0.5s; width: 100%; height: 100%; display: flex; flex-direction: column; padding: var(--space-md); gap: var(--space-sm);">
+                                <div id="vis-search-bar" style="display: flex; align-items: center; gap: 8px; background: var(--color-bg-white); border: 1px solid var(--color-material-2); border-radius: 6px; padding: 8px 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                                    <span id="vis-search-text" style="font-size: 12px; color: var(--color-text-primary); font-family: ui-monospace, monospace;"></span>
+                                    <span id="vis-search-cursor" style="display: inline-block; width: 1px; height: 14px; background: var(--color-accent-blue); animation: blink 1s step-end infinite;"></span>
+                                </div>
+                                <div id="vis-search-results" style="display: flex; flex-direction: column; gap: 6px; flex: 1;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive 2: Trace Call Investigation -->
+                <div class="stack-card">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: var(--space-md);">
+                        <div>
+                            <h2 style="margin-bottom: 0;" data-i18n-html="card2_title">An error is a whisper —<br>here, it becomes a sentence.</h2>
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm);">
+                            <button class="btn btn-secondary" onclick="togglePlayInv()" style="padding: 10px; border-radius: 50%;" title="Play/Pause">
+                                <svg id="iconInvPlay" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                <svg id="iconInvPause" style="display: none;" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="resetInvestigation()" style="padding: 10px; border-radius: 50%;" title="Reset">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="prevInvStep()" style="padding: 10px; border-radius: 50%;" id="btnInvPrev" disabled>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                            </button>
+                            <button class="btn btn-primary" onclick="nextInvStep()" style="padding: 10px; border-radius: 50%;" id="btnInvNext">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="investigation-container" style="flex: 1; overflow: hidden;">
+                        <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: var(--space-xl); height: 100%;">
+                            <!-- Left: Log + Process Steps -->
+                            <div style="display: flex; flex-direction: column; gap: var(--space-lg); justify-content: center;">
+                                <div class="log-viewer" id="invLogViewer">
+                                    <div style="opacity: 0.5;">[14:22:01] INFO  Scanning codebase...</div>
+                                    <div id="invErrorLine" class="log-error" style="opacity: 0.4; transition: opacity 0.4s, background 0.4s;">[14:22:02] ERROR GraphUpdater.run():89</div>
+                                    <div style="opacity: 0.5;">[14:22:02] WARN  Process terminated</div>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+                                    <div class="inv-step" id="inv-step-0">
+                                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                            <span class="step-label">Trace call chain</span>
+                                            <span class="inv-step-status">Waiting...</span>
+                                        </div>
+                                        <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                    </div>
+                                    <div class="inv-step" id="inv-step-1">
+                                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                            <span class="step-label">Build worksheet</span>
+                                            <span class="inv-step-status">Waiting...</span>
+                                        </div>
+                                        <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right: Visualization panel -->
+                            <div style="position: relative; background: var(--color-bg-neutral); border: 1px solid var(--color-material-2); border-radius: 8px; overflow: hidden;">
+                                <!-- Idle placeholder -->
+                                <div id="inv-vis-idle" class="inv-vis inv-vis-active" style="display: flex; align-items: center; justify-content: center;">
+                                    <div style="text-align: center; color: var(--color-text-tertiary); font-size: 13px;">
+                                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.3; margin-bottom: 8px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                                        <div data-i18n="inv_idle">Click play to trace</div>
+                                    </div>
+                                </div>
+                                <!-- Call chain -->
+                                <div id="inv-vis-chain" class="inv-vis" style="display: flex; flex-direction: column; justify-content: center; padding: var(--space-lg);">
+                                    <div id="chainDisplay"></div>
+                                </div>
+                                <!-- Worksheet -->
+                                <div id="inv-vis-wiki" class="inv-vis" style="overflow-y: auto; padding: var(--space-md);">
+                                    <div class="wiki-card" style="border: 1px solid var(--color-material-2); border-radius: 8px; overflow: hidden;">
+                                        <div class="wiki-header" id="wikiHeaderTitle"></div>
+                                        <div id="wikiSections"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive 3: /code-gen Workflow -->
+                <div class="stack-card">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: var(--space-md);">
+                        <div>
+                            <h2 style="margin-bottom: 0;" data-i18n-html="card3_title">Describe what to build,<br>it knows where to begin.</h2>
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm);">
+                            <button class="btn btn-secondary" onclick="togglePlayCg()" style="padding: 10px; border-radius: 50%;" title="Play/Pause">
+                                <svg id="iconCgPlay" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                <svg id="iconCgPause" style="display: none;" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="resetCodeGen()" style="padding: 10px; border-radius: 50%;" title="Reset">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                            </button>
+                            <button class="btn btn-secondary" onclick="prevCgStep()" style="padding: 10px; border-radius: 50%;" id="btnCgPrev" disabled>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                            </button>
+                            <button class="btn btn-primary" onclick="nextCgStep()" style="padding: 10px; border-radius: 50%;" id="btnCgNext">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div style="flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 1fr 1.2fr; gap: var(--space-xl);">
+                        <!-- Left: Input + Phase Steps -->
+                        <div style="display: flex; flex-direction: column; gap: var(--space-md); justify-content: center; min-height: 0; overflow: hidden;">
+                            <div class="log-viewer" style="font-size: 11px; line-height: 1.5; padding: 8px 12px;">
+                                <div style="color: var(--color-accent-blue);" data-i18n="cg_cmd">$ /code-gen design.md</div>
+                                <div style="opacity: 0.5; margin-top: 2px;" data-i18n-html="cg_desc">"Add incremental indexing —<br>only re-parse changed files."</div>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <div class="inv-step" id="cg-step-0">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <span class="step-label">Concept Extraction</span>
+                                        <span class="inv-step-status">Waiting...</span>
+                                    </div>
+                                    <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                </div>
+                                <div class="inv-step" id="cg-step-1">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <span class="step-label">Broad Search</span>
+                                        <span class="inv-step-status">Waiting...</span>
+                                    </div>
+                                    <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                </div>
+                                <div class="inv-step" id="cg-step-2">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <span class="step-label">Deep Research</span>
+                                        <span class="inv-step-status">Waiting...</span>
+                                    </div>
+                                    <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                </div>
+                                <div class="inv-step" id="cg-step-3">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <span class="step-label">Implementation Plan</span>
+                                        <span class="inv-step-status">Waiting...</span>
+                                    </div>
+                                    <div class="progress-bar-bg"><div class="progress-bar-fill"></div></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right: Visualization panel -->
+                        <div style="position: relative; background: var(--color-bg-neutral); border: 1px solid var(--color-material-2); border-radius: 8px; overflow: hidden;">
+                            <div id="cg-vis-idle" class="inv-vis inv-vis-active" style="display: flex; align-items: center; justify-content: center;">
+                                <div style="text-align: center; color: var(--color-text-tertiary); font-size: 13px;">
+                                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.3; margin-bottom: 8px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                                    <div data-i18n="cg_idle">Click play to generate</div>
+                                </div>
+                            </div>
+                            <div id="cg-vis-concepts" class="inv-vis" style="padding: var(--space-md); display: flex; flex-direction: column; justify-content: center;">
+                                <div id="cgConceptsDisplay"></div>
+                            </div>
+                            <div id="cg-vis-search" class="inv-vis" style="padding: var(--space-md); display: flex; flex-direction: column; gap: 6px; justify-content: center;">
+                                <div id="cgSearchDisplay"></div>
+                            </div>
+                            <div id="cg-vis-plan" class="inv-vis" style="padding: var(--space-md); overflow-y: auto;">
+                                <div id="cgPlanDisplay"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Start -->
+        <section class="quick-start reveal">
+            <h2 data-i18n="qs_title">Quick Start</h2>
+            <p style="margin-bottom: var(--space-xl);" data-i18n="qs_sub">Two steps to supercharge your AI assistant.</p>
+
+            <h3 style="color: var(--color-bg-white);" data-i18n="qs_step1">Step 1: Install & Init</h3>
+            <div class="code-block">
+                <button class="copy-btn" onclick="copyToClipboard('npx code-graph-builder@latest --setup')">Copy</button>
+                <code style="background: transparent; color: #9CDCFE; border: none; padding: 0;">npx code-graph-builder@latest --setup</code>
+            </div>
+
+            <h3 style="color: var(--color-bg-white); margin-top: var(--space-xl);" data-i18n="qs_step2">Step 2: Configure MCP</h3>
+            <p style="font-size: 15px; margin-bottom: var(--space-md);" data-i18n="qs_step2_desc">Add to your Claude Code / Cursor / Windsurf settings:</p>
+            <div class="code-block">
+                <button class="copy-btn" onclick="copyToClipboard(document.getElementById('mcpJson').innerText)">Copy</button>
+                <pre id="mcpJson" style="color: #CE9178; font-size: 14px; margin: 0;">{
+  "mcpServers": {
+    "code-graph-builder": {
+      "command": "npx",
+      "args": ["-y", "code-graph-builder@latest", "--server"]
+    }
+  }
+}</pre>
+            </div>
+            
+            <div style="margin-top: var(--space-xxxl); border-top: 1px solid rgba(255,255,255,0.1); padding-top: var(--space-xl);">
+                <h3 style="color: var(--color-bg-white);" data-i18n="qs_langs">Supported Languages</h3>
+                <div style="display: flex; flex-wrap: wrap; gap: var(--space-lg); margin-top: var(--space-md); color: var(--color-material-3);">
+                    <span>Python</span> • <span>C / C++</span> • <span>JS / TS</span> • <span>Rust</span> • <span>Go</span> • <span>Java</span> • <span>C#</span>
+                </div>
+            </div>
+        </section>
+
+        <footer style="padding-bottom: var(--space-xxxl); text-align: center; color: var(--color-text-tertiary); font-size: 14px;">
+<span data-i18n="footer">Open Source • MIT License</span>
+        </footer>
+    </div>
+
+    <script src="demo-data.js"></script>
+    <script>
+        // --- Utilities ---
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            const toast = document.createElement('div');
+            toast.innerText = 'Copied to clipboard!';
+            toast.style.cssText = 'position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:var(--color-text-primary);color:white;padding:12px 24px;border-radius:30px;z-index:9999;transition:opacity 0.3s;box-shadow:0 8px 24px rgba(0,0,0,0.1);font-weight:500;';
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2000);
+        }
+
+        // --- Scroll Reveal & Progress Animation ---
+        function reveal() {
+            var reveals = document.querySelectorAll(".reveal");
+            for (var i = 0; i < reveals.length; i++) {
+                var windowHeight = window.innerHeight;
+                var elementTop = reveals[i].getBoundingClientRect().top;
+                var elementVisible = 100;
+                if (elementTop < windowHeight - elementVisible) {
+                    reveals[i].classList.add("active");
+                }
+            }
+        }
+        
+        window.addEventListener("scroll", () => {
+            reveal();
+            // Scroll Progress Indicator (horizontal top bar)
+            let winScroll = document.body.scrollTop || document.documentElement.scrollTop;
+            let height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+            let scrolled = (winScroll / height) * 100;
+            document.getElementById("scrollProgress").style.width = scrolled + "%";
+        });
+        reveal();
+
+        // --- Pipeline Animation (Stepped) ---
+        let currentPipelineStep = -1;
+        
+        async function runStepAnimation(stepIndex) {
+            const stepsData = window.demoData.pipeline;
+            const el = document.getElementById(`step-${stepIndex}`);
+            el.classList.add('active');
+            const fill = el.querySelector('.progress-bar-fill');
+            const status = el.querySelector('.step-status');
+            
+            // UI button state
+            document.getElementById('btnPrevStep').disabled = (stepIndex <= 0);
+            document.getElementById('btnNextStep').disabled = (stepIndex >= 2);
+
+            // Hide all visualizations
+            for(let i=0; i<3; i++) {
+                const vis = document.getElementById(`vis-step-${i}`);
+                if(vis) {
+                    vis.style.opacity = '0';
+                    vis.style.pointerEvents = 'none';
+                }
+            }
+            
+            // Show current visualization container
+            const currentVis = document.getElementById(`vis-step-${stepIndex}`);
+            if(currentVis) {
+                currentVis.style.opacity = '1';
+                currentVis.style.pointerEvents = 'auto';
+            }
+
+            // Trigger specific animations based on step
+            if (stepIndex === 0) {
+                // Step 1: Progressive graph build — nodes and edges appear one by one
+                status.innerText = "Proceed...";
+                fill.style.width = "10%";
+
+                const svg = document.getElementById('vis-graph-svg');
+                const W = svg.clientWidth || 320;
+                const H = svg.clientHeight || 280;
+                svg.innerHTML = '';
+                svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+                // Graph data: real functions from the repo
+                const nodes = [
+                    { id: 'main',           x: W*0.50, y: H*0.08, label: 'main' },
+                    { id: 'cmd_graph',      x: W*0.22, y: H*0.30, label: 'cmd_graph_build' },
+                    { id: 'cmd_api',        x: W*0.78, y: H*0.30, label: 'cmd_api_doc_gen' },
+                    { id: 'builder',        x: W*0.15, y: H*0.55, label: 'build_graph' },
+                    { id: 'api_gen',        x: W*0.85, y: H*0.55, label: 'ApiDocGenerator' },
+                    { id: 'updater',        x: W*0.35, y: H*0.78, label: 'GraphUpdater.run' },
+                    { id: 'parsers',        x: W*0.60, y: H*0.78, label: '_load_parsers' },
+                    { id: 'cmd_embed',      x: W*0.50, y: H*0.95, label: 'cmd_embed_gen' },
+                ];
+                const edges = [
+                    ['main','cmd_graph'], ['main','cmd_api'],
+                    ['cmd_graph','builder'], ['cmd_api','api_gen'],
+                    ['builder','updater'], ['builder','parsers'],
+                    ['main','cmd_embed'],
+                ];
+
+                const nodeMap = {};
+                nodes.forEach(n => { nodeMap[n.id] = n; });
+
+                // Draw edges first (hidden)
+                const edgeEls = edges.map(([from, to]) => {
+                    const a = nodeMap[from], b = nodeMap[to];
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+                    line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+                    line.setAttribute('stroke', 'var(--color-material-2)');
+                    line.setAttribute('stroke-width', '1.5');
+                    line.setAttribute('stroke-dasharray', '4 3');
+                    line.style.opacity = '0';
+                    line.style.transition = 'opacity 0.4s ease, stroke 0.4s ease';
+                    svg.appendChild(line);
+                    return line;
+                });
+
+                // Draw nodes (hidden)
+                const nodeEls = nodes.map(n => {
+                    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    g.style.opacity = '0';
+                    g.style.transition = 'opacity 0.35s ease';
+
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', n.x); circle.setAttribute('cy', n.y);
+                    circle.setAttribute('r', '6');
+                    circle.setAttribute('fill', 'var(--color-accent-blue)');
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', n.x); text.setAttribute('y', n.y + 16);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.setAttribute('font-size', '9');
+                    text.setAttribute('font-family', 'ui-monospace, monospace');
+                    text.setAttribute('fill', 'var(--color-text-secondary)');
+                    text.textContent = n.label;
+
+                    g.appendChild(circle);
+                    g.appendChild(text);
+                    svg.appendChild(g);
+                    return g;
+                });
+
+                await new Promise(r => setTimeout(r, 400));
+
+                // Reveal nodes one by one
+                for (let i = 0; i < nodeEls.length; i++) {
+                    nodeEls[i].style.opacity = '1';
+                    fill.style.width = `${10 + Math.round(((i+1) / (nodeEls.length + edgeEls.length)) * 90)}%`;
+                    await new Promise(r => setTimeout(r, 180));
+                }
+
+                // Reveal edges one by one, change stroke color
+                for (let i = 0; i < edgeEls.length; i++) {
+                    edgeEls[i].style.opacity = '1';
+                    edgeEls[i].setAttribute('stroke', 'var(--color-accent-green)');
+                    fill.style.width = `${10 + Math.round(((nodeEls.length + i + 1) / (nodeEls.length + edgeEls.length)) * 90)}%`;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+
+                fill.style.width = "100%";
+                status.innerHTML = `<span style="color: var(--color-accent-green); font-weight: bold;">✓</span> Finish`;
+
+            } else if (stepIndex === 1) {
+                // Step 2: Markdown-style API doc with text tree
+                status.innerText = "Proceed...";
+                fill.style.width = "10%";
+
+                const docCard = document.getElementById('vis-doc-card');
+                const linesEl = document.getElementById('vis-doc-lines');
+                linesEl.innerHTML = '';
+
+                // Reset card
+                docCard.style.transition = 'none';
+                docCard.style.transform = 'scale(0.9)';
+                docCard.style.opacity = '0';
+                await new Promise(r => setTimeout(r, 50));
+                docCard.style.transition = 'all 0.6s ease';
+                docCard.style.transform = 'scale(1)';
+                docCard.style.opacity = '1';
+
+                await new Promise(r => setTimeout(r, 500));
+
+                const mdLines = [
+                    { html: '<span style="font-size:13px;font-weight:700;color:var(--color-text-primary);"># build_graph</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">builder.py:213 · <span style="color:var(--color-accent-blue);">def</span> build_graph(self, clean=False)</span>' },
+                    { html: '' },
+                    { html: 'Parse source code and persist the call graph.' },
+                    { html: '' },
+                    { html: '<span style="font-weight:600;color:var(--color-text-primary);">## Call Tree</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">cmd_graph_build</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">└─ <span style="color:var(--color-text-primary);">build_graph</span></span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">   ├─ _load_parsers</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">   ├─ _get_ingestor</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">   └─ GraphUpdater.run</span>' },
+                    { html: '<span style="color:var(--color-text-tertiary);">      └─ _process_file</span>' },
+                ];
+
+                for (let i = 0; i < mdLines.length; i++) {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'opacity:0; transform:translateY(4px); transition: opacity 0.25s ease, transform 0.25s ease; min-height: 6px;';
+                    div.innerHTML = mdLines[i].html;
+                    linesEl.appendChild(div);
+
+                    await new Promise(r => setTimeout(r, 30));
+                    div.style.opacity = '1';
+                    div.style.transform = 'translateY(0)';
+
+                    fill.style.width = `${10 + Math.round(((i + 1) / mdLines.length) * 90)}%`;
+                    await new Promise(r => setTimeout(r, 150));
+                }
+
+                fill.style.width = "100%";
+                status.innerHTML = `<span style="color: var(--color-accent-green); font-weight: bold;">✓</span> Finish`;
+
+            } else if (stepIndex === 2) {
+                // Step 3: Embeddings → Semantic Search
+                status.innerText = "Proceed...";
+                fill.style.width = "20%";
+
+                const searchText = document.getElementById('vis-search-text');
+                const searchCursor = document.getElementById('vis-search-cursor');
+                const resultsContainer = document.getElementById('vis-search-results');
+                searchText.innerText = '';
+                searchCursor.style.display = 'inline-block';
+                resultsContainer.innerHTML = '';
+
+                const query = 'how is the graph built?';
+                await new Promise(r => setTimeout(r, 300));
+
+                // Type search query
+                for (let i = 0; i < query.length; i++) {
+                    searchText.innerText += query[i];
+                    await new Promise(r => setTimeout(r, 40));
+                }
+                fill.style.width = "40%";
+                searchCursor.style.display = 'none';
+
+                await new Promise(r => setTimeout(r, 400));
+
+                // Show results with scores
+                const results = [
+                    { fn: 'CodeGraphBuilder.build_graph', file: 'builder.py:213', score: '0.96' },
+                    { fn: 'GraphUpdater.run', file: 'graph_updater.py:89', score: '0.83' },
+                    { fn: '_load_parsers', file: 'builder.py:158', score: '0.71' },
+                ];
+
+                for (let i = 0; i < results.length; i++) {
+                    const r = results[i];
+                    const card = document.createElement('div');
+                    card.style.cssText = 'display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--color-bg-white); border:1px solid var(--color-material-2); border-radius:6px; font-size:11px; font-family:ui-monospace,monospace; opacity:0; transform:translateY(8px); transition: opacity 0.3s ease, transform 0.3s ease;';
+                    card.innerHTML = `<span style="color:var(--color-accent-green);font-weight:700;min-width:34px;">${r.score}</span>
+                        <span style="font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.fn}</span>
+                        <span style="color:var(--color-text-tertiary);font-size:10px;white-space:nowrap;">${r.file}</span>`;
+                    resultsContainer.appendChild(card);
+
+                    await new Promise(r => setTimeout(r, 50));
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+
+                    fill.style.width = `${40 + Math.round(((i + 1) / results.length) * 60)}%`;
+                    await new Promise(r => setTimeout(r, 300));
+                }
+
+                fill.style.width = "100%";
+                status.innerHTML = `<span style="color: var(--color-accent-green); font-weight: bold;">✓</span> Finish`;
+            }
+        }
+
+        async function nextPipelineStep() {
+            if (currentPipelineStep < 2) {
+                currentPipelineStep++;
+                await runStepAnimation(currentPipelineStep);
+            }
+        }
+
+        async function prevPipelineStep() {
+            if (currentPipelineStep > 0) {
+                // Reset the current step visually before going back
+                const el = document.getElementById(`step-${currentPipelineStep}`);
+                el.classList.remove('active');
+                el.querySelector('.progress-bar-fill').style.width = '0%';
+                el.querySelector('.step-status').innerText = 'Waiting to start...';
+                
+                currentPipelineStep--;
+                await runStepAnimation(currentPipelineStep);
+            }
+        }
+
+        async function resetPipeline() {
+            // Reset all steps to initial state
+            for(let i=0; i<=2; i++) {
+                const el = document.getElementById(`step-${i}`);
+                el.classList.remove('active');
+                el.querySelector('.progress-bar-fill').style.width = '0%';
+                el.querySelector('.step-status').innerText = 'Waiting to start...';
+            }
+            
+            // Re-trigger the first step animation
+            currentPipelineStep = 0;
+            await runStepAnimation(0);
+        }
+        
+        let isPipelineAutoPlaying = false;
+        let autoPlayTimeout = null;
+
+        async function togglePlayPipeline() {
+            const iconPlay = document.getElementById('iconPlay');
+            const iconPause = document.getElementById('iconPause');
+            
+            if (isPipelineAutoPlaying) {
+                // Pause
+                isPipelineAutoPlaying = false;
+                iconPlay.style.display = 'block';
+                iconPause.style.display = 'none';
+                clearTimeout(autoPlayTimeout);
+            } else {
+                // Play
+                isPipelineAutoPlaying = true;
+                iconPlay.style.display = 'none';
+                iconPause.style.display = 'block';
+                
+                if (currentPipelineStep === 2) {
+                    await resetPipeline();
+                } else if (currentPipelineStep === -1) {
+                    await nextPipelineStep();
+                }
+                
+                const playNext = async () => {
+                    if (!isPipelineAutoPlaying) return;
+                    if (currentPipelineStep < 2) {
+                        await nextPipelineStep();
+                        autoPlayTimeout = setTimeout(playNext, 1000);
+                    } else {
+                        // Finished
+                        isPipelineAutoPlaying = false;
+                        iconPlay.style.display = 'block';
+                        iconPause.style.display = 'none';
+                    }
+                };
+                
+                // Start cycle
+                autoPlayTimeout = setTimeout(playNext, 1000);
+            }
+        }
+
+        // --- Investigation Animation (Stepped) ---
+        let currentInvStep = -1;
+        let isInvAutoPlaying = false;
+        let invAutoTimeout = null;
+
+        function showInvVis(name) {
+            ['idle', 'chain', 'wiki'].forEach(n => {
+                document.getElementById(`inv-vis-${n}`).classList.toggle('inv-vis-active', n === name);
+            });
+        }
+
+        function setInvStep(idx, state, progress) {
+            const el = document.getElementById(`inv-step-${idx}`);
+            const fill = el.querySelector('.progress-bar-fill');
+            const status = el.querySelector('.inv-step-status');
+            if (state === 'active') { el.classList.add('active'); status.innerText = 'Processing...'; fill.style.width = progress + '%'; }
+            else if (state === 'done') { el.classList.add('active'); fill.style.width = '100%'; status.innerHTML = '<span style="color:var(--color-accent-green);font-weight:600;">Done</span>'; }
+            else { el.classList.remove('active'); fill.style.width = '0%'; status.innerText = 'Waiting...'; }
+        }
+
+        function updateInvButtons() {
+            document.getElementById('btnInvPrev').disabled = (currentInvStep <= 0);
+            document.getElementById('btnInvNext').disabled = (currentInvStep >= 1);
+        }
+
+        async function runInvStepAnimation(stepIndex) {
+            const errLine = document.getElementById('invErrorLine');
+            errLine.style.opacity = '1';
+            errLine.style.background = 'rgba(255,95,86,0.1)';
+            updateInvButtons();
+
+            if (stepIndex === 0) {
+                setInvStep(0, 'active', 0);
+                setInvStep(1, 'idle', 0);
+                const chain = window.demoData.investigation.callChain;
+                const display = document.getElementById('chainDisplay');
+                display.innerHTML = '';
+                chain.forEach((c, i) => {
+                    if (i > 0) { const a = document.createElement('div'); a.className = 'chain-arrow'; a.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M4 9l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'; display.appendChild(a); }
+                    const node = document.createElement('div');
+                    node.className = 'chain-node' + (i === chain.length - 1 ? ' error-node' : '');
+                    const badge = i === chain.length - 1 ? '<span style="color:#FF5F56;font-weight:600;font-size:10px;margin-left:auto;">ERROR</span>' : '';
+                    node.innerHTML = `<span style="font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.func}</span><span style="color:var(--color-text-tertiary);font-size:10px;white-space:nowrap;">${c.file.split('/').pop()}:${c.line}</span>${badge}`;
+                    display.appendChild(node);
+                });
+                showInvVis('chain');
+                await new Promise(r => setTimeout(r, 300));
+                const items = display.children;
+                for (let i = 0; i < items.length; i++) {
+                    setInvStep(0, 'active', Math.round(((i+1)/items.length)*100));
+                    items[i].classList.add('visible');
+                    await new Promise(r => setTimeout(r, 150));
+                }
+                setInvStep(0, 'done', 100);
+            } else if (stepIndex === 1) {
+                setInvStep(1, 'active', 30);
+                await new Promise(r => setTimeout(r, 300));
+                setInvStep(1, 'active', 70);
+                const header = document.getElementById('wikiHeaderTitle');
+                const container = document.getElementById('wikiSections');
+                header.innerText = window.demoData.investigation.worksheet.title;
+                container.innerHTML = '';
+                window.demoData.investigation.worksheet.sections.forEach(s => {
+                    const section = document.createElement('div');
+                    section.className = 'wiki-section' + (s.isOpen ? ' open' : '');
+                    section.innerHTML = `<div class="wiki-section-title" onclick="this.parentElement.classList.toggle('open')">${s.title}<span style="color:var(--color-text-tertiary);font-family:ui-monospace,monospace;">${s.isOpen ? '−' : '+'}</span></div><div class="wiki-section-content">${s.content}</div>`;
+                    container.appendChild(section);
+                });
+                await new Promise(r => setTimeout(r, 400));
+                setInvStep(1, 'done', 100);
+                showInvVis('wiki');
+            }
+            updateInvButtons();
+        }
+
+        async function nextInvStep() {
+            if (currentInvStep < 1) { currentInvStep++; await runInvStepAnimation(currentInvStep); }
+        }
+        async function prevInvStep() {
+            if (currentInvStep > 0) {
+                setInvStep(currentInvStep, 'idle', 0);
+                currentInvStep--;
+                await runInvStepAnimation(currentInvStep);
+            }
+        }
+        function resetInvestigation() {
+            isInvAutoPlaying = false; clearTimeout(invAutoTimeout);
+            currentInvStep = -1;
+            document.getElementById('invErrorLine').style.opacity = '0.4';
+            document.getElementById('invErrorLine').style.background = 'transparent';
+            setInvStep(0, 'idle', 0); setInvStep(1, 'idle', 0);
+            showInvVis('idle');
+            document.getElementById('iconInvPlay').style.display = 'block';
+            document.getElementById('iconInvPause').style.display = 'none';
+            document.getElementById('btnInvPrev').disabled = true;
+            document.getElementById('btnInvNext').disabled = false;
+        }
+        async function togglePlayInv() {
+            if (isInvAutoPlaying) {
+                isInvAutoPlaying = false; clearTimeout(invAutoTimeout);
+                document.getElementById('iconInvPlay').style.display = 'block';
+                document.getElementById('iconInvPause').style.display = 'none';
+            } else {
+                isInvAutoPlaying = true;
+                document.getElementById('iconInvPlay').style.display = 'none';
+                document.getElementById('iconInvPause').style.display = 'block';
+                if (currentInvStep >= 1) { await resetInvestigation(); isInvAutoPlaying = true; document.getElementById('iconInvPlay').style.display = 'none'; document.getElementById('iconInvPause').style.display = 'block'; }
+                if (currentInvStep === -1) await nextInvStep();
+                const playNext = async () => {
+                    if (!isInvAutoPlaying) return;
+                    if (currentInvStep < 1) { await nextInvStep(); invAutoTimeout = setTimeout(playNext, 1000); }
+                    else { isInvAutoPlaying = false; document.getElementById('iconInvPlay').style.display = 'block'; document.getElementById('iconInvPause').style.display = 'none'; }
+                };
+                invAutoTimeout = setTimeout(playNext, 1000);
+            }
+        }
+
+        // --- /code-gen Workflow Animation (Stepped) ---
+        let currentCgStep = -1;
+        let isCgAutoPlaying = false;
+        let cgAutoTimeout = null;
+        const CG_MAX = 3; // 4 steps: 0-3
+
+        function showCgVis(name) {
+            ['idle', 'concepts', 'search', 'plan'].forEach(n => {
+                document.getElementById(`cg-vis-${n}`).classList.toggle('inv-vis-active', n === name);
+            });
+        }
+
+        function setCgStep(idx, state, progress) {
+            const el = document.getElementById(`cg-step-${idx}`);
+            const fill = el.querySelector('.progress-bar-fill');
+            const status = el.querySelector('.inv-step-status');
+            if (state === 'active') { el.classList.add('active'); status.innerText = 'Processing...'; fill.style.width = progress + '%'; }
+            else if (state === 'done') { el.classList.add('active'); fill.style.width = '100%'; status.innerHTML = '<span style="color:var(--color-accent-green);font-weight:600;">Done</span>'; }
+            else { el.classList.remove('active'); fill.style.width = '0%'; status.innerText = 'Waiting...'; }
+        }
+
+        function updateCgButtons() {
+            document.getElementById('btnCgPrev').disabled = (currentCgStep <= 0);
+            document.getElementById('btnCgNext').disabled = (currentCgStep >= CG_MAX);
+        }
+
+        async function runCgStepAnimation(stepIndex) {
+            updateCgButtons();
+            // Reset steps after current
+            for (let i = stepIndex + 1; i <= CG_MAX; i++) setCgStep(i, 'idle', 0);
+
+            if (stepIndex === 0) {
+                // Concept Extraction
+                setCgStep(0, 'active', 20);
+                const concepts = ['incremental indexing', 'file change detection', 'graph update', 'parser reload'];
+                const el = document.getElementById('cgConceptsDisplay');
+                el.innerHTML = '<div style="font-size:11px;font-weight:600;color:var(--color-text-primary);margin-bottom:8px;">Extracted concepts:</div>';
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+                el.appendChild(wrap);
+                showCgVis('concepts');
+                await new Promise(r => setTimeout(r, 300));
+                for (let i = 0; i < concepts.length; i++) {
+                    const tag = document.createElement('span');
+                    tag.style.cssText = 'display:inline-block;padding:4px 10px;background:var(--color-accent-blue);color:white;border-radius:4px;font-size:11px;font-family:ui-monospace,monospace;opacity:0;transform:scale(0.8);transition:opacity 0.3s,transform 0.3s;';
+                    tag.textContent = concepts[i];
+                    wrap.appendChild(tag);
+                    await new Promise(r => setTimeout(r, 50));
+                    tag.style.opacity = '1'; tag.style.transform = 'scale(1)';
+                    setCgStep(0, 'active', 20 + Math.round(((i+1)/concepts.length)*80));
+                    await new Promise(r => setTimeout(r, 250));
+                }
+                setCgStep(0, 'done', 100);
+
+            } else if (stepIndex === 1) {
+                // Broad Search
+                setCgStep(1, 'active', 10);
+                const el = document.getElementById('cgSearchDisplay');
+                el.innerHTML = '';
+                const searches = [
+                    { query: 'incremental indexing', result: 'GraphUpdater.run', score: '0.91' },
+                    { query: 'file change detection', result: '_get_changed_files', score: '0.87' },
+                    { query: 'graph update', result: 'build_graph', score: '0.84' },
+                ];
+                showCgVis('search');
+                await new Promise(r => setTimeout(r, 300));
+                for (let i = 0; i < searches.length; i++) {
+                    const s = searches[i];
+                    const row = document.createElement('div');
+                    row.style.cssText = 'padding:8px 10px;background:var(--color-bg-white);border:1px solid var(--color-material-2);border-radius:6px;font-size:11px;font-family:ui-monospace,monospace;opacity:0;transform:translateY(6px);transition:opacity 0.3s,transform 0.3s;margin-bottom:6px;';
+                    row.innerHTML = `<div style="color:var(--color-text-tertiary);font-size:10px;margin-bottom:3px;">find_api("${s.query}")</div><div style="display:flex;align-items:center;gap:6px;"><span style="color:var(--color-accent-green);font-weight:700;">${s.score}</span><span style="font-weight:600;">${s.result}</span></div>`;
+                    el.appendChild(row);
+                    await new Promise(r => setTimeout(r, 50));
+                    row.style.opacity = '1'; row.style.transform = 'translateY(0)';
+                    setCgStep(1, 'active', 10 + Math.round(((i+1)/searches.length)*90));
+                    await new Promise(r => setTimeout(r, 350));
+                }
+                setCgStep(1, 'done', 100);
+
+            } else if (stepIndex === 2) {
+                // Deep Research
+                setCgStep(2, 'active', 30);
+                await new Promise(r => setTimeout(r, 400));
+                setCgStep(2, 'active', 70);
+                await new Promise(r => setTimeout(r, 400));
+                setCgStep(2, 'done', 100);
+
+            } else if (stepIndex === 3) {
+                // Implementation Plan
+                setCgStep(3, 'active', 20);
+                const el = document.getElementById('cgPlanDisplay');
+                el.innerHTML = '';
+                const lines = [
+                    '<span style="font-size:13px;font-weight:700;color:var(--color-text-primary);"># Implementation Plan</span>',
+                    '', '<span style="font-weight:600;color:var(--color-text-primary);">## Reuse</span>',
+                    '<span style="color:var(--color-text-tertiary);">GraphUpdater.run</span> — extend with diff logic',
+                    '<span style="color:var(--color-text-tertiary);">build_graph</span> — add <span style="color:var(--color-accent-blue);">incremental=True</span> param',
+                    '', '<span style="font-weight:600;color:var(--color-text-primary);">## New Functions</span>',
+                    '<span style="color:var(--color-accent-blue);">_get_changed_files()</span> → detect modified .py',
+                    '<span style="color:var(--color-accent-blue);">_diff_graph()</span> → remove stale, add new',
+                    '', '<span style="font-weight:600;color:var(--color-text-primary);">## File Changes</span>',
+                    '<span style="color:var(--color-text-tertiary);">builder.py</span> — incremental flag + diff',
+                    '<span style="color:var(--color-text-tertiary);">graph_updater.py</span> — selective re-parse',
+                ];
+                showCgVis('plan');
+                await new Promise(r => setTimeout(r, 300));
+                for (let i = 0; i < lines.length; i++) {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'font-family:ui-monospace,monospace;font-size:11px;line-height:1.7;color:var(--color-text-secondary);opacity:0;transform:translateY(4px);transition:opacity 0.2s,transform 0.2s;min-height:6px;';
+                    div.innerHTML = lines[i];
+                    el.appendChild(div);
+                    await new Promise(r => setTimeout(r, 30));
+                    div.style.opacity = '1'; div.style.transform = 'translateY(0)';
+                    setCgStep(3, 'active', 20 + Math.round(((i+1)/lines.length)*80));
+                    await new Promise(r => setTimeout(r, 120));
+                }
+                setCgStep(3, 'done', 100);
+            }
+            updateCgButtons();
+        }
+
+        async function nextCgStep() {
+            if (currentCgStep < CG_MAX) { currentCgStep++; await runCgStepAnimation(currentCgStep); }
+        }
+        async function prevCgStep() {
+            if (currentCgStep > 0) {
+                setCgStep(currentCgStep, 'idle', 0);
+                currentCgStep--;
+                await runCgStepAnimation(currentCgStep);
+            }
+        }
+        function resetCodeGen() {
+            isCgAutoPlaying = false; clearTimeout(cgAutoTimeout);
+            currentCgStep = -1;
+            for (let i = 0; i <= CG_MAX; i++) setCgStep(i, 'idle', 0);
+            showCgVis('idle');
+            document.getElementById('iconCgPlay').style.display = 'block';
+            document.getElementById('iconCgPause').style.display = 'none';
+            document.getElementById('btnCgPrev').disabled = true;
+            document.getElementById('btnCgNext').disabled = false;
+        }
+        async function togglePlayCg() {
+            if (isCgAutoPlaying) {
+                isCgAutoPlaying = false; clearTimeout(cgAutoTimeout);
+                document.getElementById('iconCgPlay').style.display = 'block';
+                document.getElementById('iconCgPause').style.display = 'none';
+            } else {
+                isCgAutoPlaying = true;
+                document.getElementById('iconCgPlay').style.display = 'none';
+                document.getElementById('iconCgPause').style.display = 'block';
+                if (currentCgStep >= CG_MAX) { resetCodeGen(); isCgAutoPlaying = true; document.getElementById('iconCgPlay').style.display = 'none'; document.getElementById('iconCgPause').style.display = 'block'; }
+                if (currentCgStep === -1) await nextCgStep();
+                const playNext = async () => {
+                    if (!isCgAutoPlaying) return;
+                    if (currentCgStep < CG_MAX) { await nextCgStep(); cgAutoTimeout = setTimeout(playNext, 800); }
+                    else { isCgAutoPlaying = false; document.getElementById('iconCgPlay').style.display = 'block'; document.getElementById('iconCgPause').style.display = 'none'; }
+                };
+                cgAutoTimeout = setTimeout(playNext, 800);
+            }
+        }
+
+        // --- Hero Visual Animation (CLI -> Sphere) ---
+        async function runHeroAnimation() {
+            const cliContainer = document.getElementById('heroCli');
+            const canvas = document.getElementById('sphereCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Adjust canvas resolution for sharp rendering
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            
+            // 1. Static command prompt
+            const promptEl = document.createElement('div');
+            promptEl.className = 'cli-line-enter';
+            promptEl.style.color = 'var(--color-text-primary)';
+            promptEl.style.fontWeight = '600';
+            promptEl.innerText = '> code-graph-builder build';
+            cliContainer.appendChild(promptEl);
+            
+            await new Promise(r => setTimeout(r, 1200));
+
+            // 2. Output lines with highlighted text
+            const lines = [
+                { text: 'Initializing <span style="color: var(--color-accent-blue); font-weight: 600;">index</span>...', delay: 1000, color: 'var(--color-text-secondary)' },
+                { text: 'Parsing <span style="color: var(--color-text-primary); font-weight: 600;">124</span> files...', delay: 800, color: 'var(--color-text-secondary)' },
+                { text: 'Extracting <span style="color: var(--color-text-primary); font-weight: 600;">48</span> call paths...', delay: 800, color: 'var(--color-text-secondary)' },
+                { text: 'Generating <span style="color: var(--color-accent-orange); font-weight: 600;">embeddings</span>...', delay: 1000, color: 'var(--color-text-secondary)' },
+                { text: '✓ Graph built in <span style="color: var(--color-text-primary); font-weight: 600;">3.2s</span>.', delay: 1200, color: 'var(--color-accent-green)' },
+                { text: '⟳ Rendering <span style="color: var(--color-text-primary); font-weight: 600;">topology</span>...', delay: 1800, color: 'var(--color-accent-blue)', pulse: true }
+            ];
+
+            for (const line of lines) {
+                const lineEl = document.createElement('div');
+                lineEl.className = 'cli-line-enter';
+                lineEl.style.color = line.color;
+                lineEl.innerHTML = line.text; // Use innerHTML to parse span tags
+                if (line.pulse) {
+                    // Inject simple inline animation for the pulse
+                    lineEl.animate([
+                        { opacity: 0.6, textShadow: 'none' },
+                        { opacity: 1, textShadow: '0 0 10px rgba(43, 90, 250, 0.4)' }
+                    ], { duration: 1500, iterations: Infinity, direction: 'alternate' });
+                }
+                
+                cliContainer.appendChild(lineEl);
+                
+                await new Promise(r => setTimeout(r, line.delay));
+            }
+
+            // Fade out CLI and start Sphere faster
+            cliContainer.style.transition = 'opacity 1.2s ease-out';
+            cliContainer.style.opacity = '0';
+            
+            setTimeout(() => {
+                canvas.style.transition = 'opacity 2s ease-in-out';
+                canvas.style.opacity = '1';
+                startSphereAnimation(canvas, ctx);
+            }, 500); // Start sphere while text is fading out
+        }
+
+        function startSphereAnimation(canvas, ctx) {
+            let width = canvas.width;
+            let height = canvas.height;
+            // Handle retina displays
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+            
+            const numPoints = 800;
+            const points = [];
+            const radius = Math.min(width, height) * 0.38;
+            
+            // Fibonacci sphere distribution
+            for (let i = 0; i < numPoints; i++) {
+                const y = 1 - (i / (numPoints - 1)) * 2;
+                const radiusAtY = Math.sqrt(1 - y * y);
+                const theta = 2.399963229728653 * i; // Golden angle
+                
+                const x = Math.cos(theta) * radiusAtY;
+                const z = Math.sin(theta) * radiusAtY;
+                
+                points.push({ x: x * radius, y: y * radius, z: z * radius });
+            }
+
+            let angleX = 0.002;
+            let angleY = 0.004;
+
+            function draw() {
+                ctx.clearRect(0, 0, width, height);
+                
+                const cx = width / 2;
+                const cy = height / 2;
+                
+                for (let i = 0; i < numPoints; i++) {
+                    const p = points[i];
+                    
+                    // Rotate Y
+                    const cosY = Math.cos(angleY);
+                    const sinY = Math.sin(angleY);
+                    let x1 = p.x * cosY - p.z * sinY;
+                    let z1 = p.z * cosY + p.x * sinY;
+                    
+                    // Rotate X
+                    const cosX = Math.cos(angleX);
+                    const sinX = Math.sin(angleX);
+                    let y1 = p.y * cosX - z1 * sinX;
+                    let z2 = z1 * cosX + p.y * sinX;
+                    
+                    // Update points
+                    p.x = x1;
+                    p.y = y1;
+                    p.z = z2;
+                    
+                    // Project 3D to 2D
+                    const scale = 500 / (500 - p.z);
+                    const x2d = cx + p.x * scale;
+                    const y2d = cy + p.y * scale;
+                    
+                    // Opacity based on Z depth (closer = more opaque, back = faded)
+                    const opacity = Math.max(0.05, (p.z + radius) / (radius * 2));
+                    
+                    ctx.beginPath();
+                    // Dot size based on perspective
+                    ctx.arc(x2d, y2d, 1.2 * scale, 0, Math.PI * 2);
+                    // Beautiful blue artistic color
+                    ctx.fillStyle = `rgba(43, 90, 250, ${opacity * 0.9})`; 
+                    ctx.fill();
+                }
+                
+                requestAnimationFrame(draw);
+            }
+            
+            draw();
+        }
+        
+        // Wait for layout to settle and title to appear before starting CLI
+        setTimeout(runHeroAnimation, 1800);
+
+        // --- Card Stack Drag Logic ---
+        const stackContainer = document.getElementById('featuresStack');
+        const cards = Array.from(stackContainer.querySelectorAll('.stack-card'));
+        let activeCards = [...cards];
+
+        function updateStack() {
+            activeCards.forEach((card, index) => {
+                card.className = 'stack-card'; // reset classes
+                card.style.cssText = '';        // clear ALL inline styles
+                card.style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease';
+
+                if (index === 0) {
+                    card.classList.add('card-top');
+                } else if (index === 1) {
+                    card.classList.add('card-mid');
+                } else if (index === 2) {
+                    card.classList.add('card-bottom');
+                } else {
+                    card.classList.add('card-hidden');
+                }
+            });
+        }
+
+        // Initialize stack
+        updateStack();
+
+        let isDragging = false;
+        let isAnimating = false;
+        let startX = 0;
+        let currentX = 0;
+        let dragDirection = 0; // -1 left, 0 undecided, 1 right
+        let prevCard = null;
+        let prevCardReady = false;
+
+        function getX(e) {
+            return e.type.includes('mouse') ? e.clientX : e.touches[0].clientX;
+        }
+
+        // Stage the previous card off-screen left (called once when right-drag is detected)
+        function stagePrevCard() {
+            prevCard = activeCards[activeCards.length - 1];
+            prevCard.style.transition = 'none';
+            prevCard.className = 'stack-card';
+            prevCard.style.zIndex = '4';
+            prevCard.style.pointerEvents = 'none';
+            prevCard.style.transform = 'translateX(-105%) rotate(15deg)';
+            prevCard.style.opacity = '0';
+            prevCardReady = true;
+        }
+
+        function handleDragStart(e) {
+            if (isAnimating) return;
+            if (e.target.closest('button, a, .node-name, .wiki-section-title, .node-toggle')) return;
+
+            const topCard = activeCards[0];
+            if (!topCard.contains(e.target) && e.target !== topCard) return;
+
+            if (e.type === 'mousedown') e.preventDefault();
+
+            isDragging = true;
+            startX = getX(e);
+            currentX = 0;
+            dragDirection = 0;
+            prevCardReady = false;
+
+            topCard.style.transition = 'none';
+            if (activeCards[1]) activeCards[1].style.transition = 'none';
+        }
+
+        function handleDragMove(e) {
+            if (!isDragging) return;
+
+            currentX = getX(e) - startX;
+
+            // Lock direction after 10px
+            if (dragDirection === 0 && Math.abs(currentX) > 10) {
+                dragDirection = currentX < 0 ? -1 : 1;
+                if (dragDirection === 1) stagePrevCard();
+            }
+
+            const topCard = activeCards[0];
+
+            if (dragDirection <= 0) {
+                // --- Dragging LEFT (next card) ---
+                const x = currentX > 0 ? currentX * 0.15 : currentX;
+                const rotate = x * 0.04;
+                topCard.style.transform = `translateX(${x}px) translateY(0) scale(1) rotate(${rotate}deg)`;
+
+                if (activeCards[1] && x < 0) {
+                    const progress = Math.min(Math.abs(x) / 300, 1);
+                    const inv = 1 - progress;
+                    activeCards[1].style.transform = `translate(${30*inv}px, ${15*inv}px) scale(${0.95+0.05*progress}) rotate(${3*inv}deg)`;
+                    activeCards[1].style.opacity = `${0.8 + 0.2 * progress}`;
+                }
+            } else if (prevCardReady) {
+                // --- Dragging RIGHT (previous card slides in from left with arc) ---
+                const topPush = Math.min(currentX * 0.08, 30);
+                topCard.style.transform = `translateX(${topPush}px) translateY(0) scale(1) rotate(0deg)`;
+
+                const progress = Math.min(currentX / 250, 1);
+                const prevX = -105 + 105 * progress;
+                const prevRotate = 15 * (1 - progress);   // 15deg → 0deg (arc curve)
+                const prevOpacity = Math.min(progress * 1.5, 1);
+                prevCard.style.transform = `translateX(${prevX}%) rotate(${prevRotate}deg)`;
+                prevCard.style.opacity = `${prevOpacity}`;
+            }
+        }
+
+        // Fixed animation speed (px/ms) so duration scales with remaining distance
+        const SWIPE_SPEED = 1.6;
+
+        function calcDuration(remainingPx) {
+            return Math.round(Math.max(180, Math.min(remainingPx / SWIPE_SPEED, 450)));
+        }
+
+        function handleDragEnd() {
+            if (!isDragging) return;
+            isDragging = false;
+
+            const topCard = activeCards[0];
+            const cardW = topCard.offsetWidth;
+
+            if (dragDirection <= 0 && currentX < -100) {
+                // --- Commit left swipe ---
+                isAnimating = true;
+                const remaining = cardW * 1.2 - Math.abs(currentX);
+                const ms = calcDuration(remaining);
+
+                topCard.style.transition = `transform ${ms}ms ease-out, opacity ${ms}ms ease-out`;
+                topCard.style.transform = 'translateX(-120%) rotate(-15deg)';
+                topCard.style.opacity = '0';
+
+                setTimeout(() => {
+                    const thrown = activeCards.shift();
+                    activeCards.push(thrown);
+                    updateStack();
+                    isAnimating = false;
+                }, ms);
+
+            } else if (dragDirection === 1 && currentX > 80 && prevCardReady) {
+                // --- Commit right swipe ---
+                isAnimating = true;
+                // prevCard current position: (-105 + 105*progress)% where progress = currentX/250
+                const progress = Math.min(currentX / 250, 1);
+                const remainingPct = 105 * (1 - progress);        // remaining % to travel
+                const remaining = cardW * remainingPct / 100;
+                const ms = calcDuration(remaining);
+
+                prevCard.style.transition = `transform ${ms}ms cubic-bezier(0.16, 1, 0.3, 1), opacity ${Math.round(ms*0.7)}ms ease`;
+                prevCard.style.transform = 'translateX(0) rotate(0deg)';
+                prevCard.style.opacity = '1';
+
+                topCard.style.transition = `transform ${ms}ms cubic-bezier(0.16, 1, 0.3, 1), opacity ${ms}ms ease`;
+                topCard.style.transform = 'translate(30px, 15px) scale(0.95) rotate(3deg)';
+                topCard.style.opacity = '0.8';
+
+                setTimeout(() => {
+                    const last = activeCards.pop();
+                    activeCards.unshift(last);
+                    updateStack();
+                    isAnimating = false;
+                }, ms);
+
+            } else {
+                // --- Snap back ---
+                if (prevCardReady) {
+                    const progress = Math.min(currentX / 250, 1);
+                    const remaining = cardW * 1.05 * progress;
+                    const ms = calcDuration(remaining);
+                    prevCard.style.transition = `transform ${ms}ms ease, opacity ${Math.round(ms*0.7)}ms ease`;
+                    prevCard.style.transform = 'translateX(-105%) rotate(15deg)';
+                    prevCard.style.opacity = '0';
+                    isAnimating = true;
+                    setTimeout(() => { updateStack(); isAnimating = false; }, ms);
+                } else {
+                    updateStack();
+                }
+            }
+            currentX = 0;
+            dragDirection = 0;
+        }
+
+        // Attach events
+        stackContainer.addEventListener('mousedown', handleDragStart);
+        stackContainer.addEventListener('touchstart', handleDragStart, { passive: false });
+        
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('touchmove', handleDragMove, { passive: false });
+        
+        window.addEventListener('mouseup', handleDragEnd);
+        window.addEventListener('touchend', handleDragEnd);
+
+        // --- i18n ---
+        let currentLang = 'en';
+
+        const i18n = {
+            en: {
+                hero_title: 'Your AI <i>finally</i> understands your codebase.',
+                hero_sub: 'A MCP turns your codebase into a knowledge graph, giving AI tools instant access to functions, call chains, and context.',
+                pain_text: '"Most agents re-read your entire codebase every time they start a task — the same files, the same functions, the same slow discovery loop. Code Graph Builder indexes it once into a knowledge graph, and every session after that already knows where everything is."',
+                swipe_hint: 'Swipe left to discard card and explore next',
+                card1_title: 'One quiet read,<br>and nothing is forgotten.',
+                card2_title: 'An error is a whisper —<br>here, it becomes a sentence.',
+                card3_title: 'Describe what to build,<br>it knows where to begin.',
+                inv_idle: 'Click play to trace',
+                cg_idle: 'Click play to generate',
+                cg_cmd: '$ /code-gen design.md',
+                cg_desc: '"Add incremental indexing —<br>only re-parse changed files."',
+                qs_title: 'Quick Start',
+                qs_sub: 'Two steps to supercharge your AI assistant.',
+                qs_step1: 'Step 1: Install & Init',
+                qs_step2: 'Step 2: Configure MCP',
+                qs_step2_desc: 'Add to your Claude Code / Cursor / Windsurf settings:',
+                qs_langs: 'Supported Languages',
+                footer: 'Open Source • MIT License',
+            },
+            zh: {
+                hero_title: '你的 AI，<i>终于</i>读懂了你的代码。',
+                hero_sub: '一个 MCP 将代码库转化为知识图谱，让 AI 工具即时访问函数、调用链和上下文。',
+                pain_text: '"大多数 Agent 每次启动任务都要重新阅读整个代码库——同样的文件、同样的函数、同样缓慢的发现过程。Code Graph Builder 只需索引一次，之后每次会话都已经知道一切在哪里。"',
+                swipe_hint: '左滑切换下一张卡片',
+                card1_title: '安静地读一遍，<br>便不再遗忘。',
+                card2_title: '错误是一声低语——<br>在这里，它成为完整的叙述。',
+                card3_title: '描述你想构建的，<br>它知道从哪里开始。',
+                inv_idle: '点击播放以追踪',
+                cg_idle: '点击播放以生成',
+                cg_cmd: '$ /code-gen design.md',
+                cg_desc: '"添加增量索引——<br>只重新解析变更的文件。"',
+                qs_title: '快速开始',
+                qs_sub: '两步，让你的 AI 助手如虎添翼。',
+                qs_step1: '第一步：安装与初始化',
+                qs_step2: '第二步：配置 MCP',
+                qs_step2_desc: '添加到你的 Claude Code / Cursor / Windsurf 设置中：',
+                qs_langs: '支持的语言',
+                footer: '开源 • MIT 许可证',
+            }
+        };
+
+        function applyLang(lang) {
+            currentLang = lang;
+            const dict = i18n[lang];
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (dict[key] !== undefined) el.textContent = dict[key];
+            });
+            document.querySelectorAll('[data-i18n-html]').forEach(el => {
+                const key = el.getAttribute('data-i18n-html');
+                if (dict[key] !== undefined) el.innerHTML = dict[key];
+            });
+            document.getElementById('langToggle').textContent = lang === 'en' ? 'EN / 中文' : '中文 / EN';
+        }
+
+        function toggleLang() {
+            applyLang(currentLang === 'en' ? 'zh' : 'en');
+        }
+
+    </script>
+</body>
+</html>
