@@ -263,6 +263,22 @@ class CodeGraphBuilder:
                 errors=[],
             )
 
+    def _create_graph_updater(self, ingestor: Any) -> "GraphUpdater":
+        """Create a GraphUpdater pre-configured with this builder's parsers and scan settings.
+
+        Used by IncrementalUpdater to run Pass 2/3 on a file subset
+        without triggering a full rebuild.
+        """
+        self._load_parsers()
+        return GraphUpdater(
+            ingestor=ingestor,
+            repo_path=self.repo_path,
+            parsers=self._parsers,
+            queries=self._queries,
+            unignore_paths=frozenset(self.scan_config.unignore_paths),
+            exclude_paths=frozenset(self.scan_config.exclude_patterns),
+        )
+
     def export_graph(self) -> GraphData:
         """Export the graph data as a dictionary.
 
