@@ -393,14 +393,16 @@ class GraphUpdater:
         Parses definitions and adds nodes/relations to the graph.
         Uses an empty structural_elements dict — module→folder fallback is used
         instead of module→package for modified files (acceptable for incremental MVP).
+
+        Note: process_generic_file() is intentionally skipped here. Non-source files
+        (Markdown, config, etc.) are not re-registered in incremental updates.
+        This is an accepted MVP limitation.
         """
         try:
             from code_graph_builder.foundation.utils.path_utils import should_skip_path
         except ImportError:
             def should_skip_path(filepath, repo_path, exclude_paths=None, unignore_paths=None):  # type: ignore[misc]
                 return False
-
-        from code_graph_builder.foundation.parsers.language_spec import get_language_spec
 
         sorted_files = sorted(
             files,
@@ -447,7 +449,6 @@ class GraphUpdater:
         Used to load ASTs for affected_callers so their CALLS relations can be
         re-inserted in _process_function_calls(), without re-adding their definitions.
         """
-        from code_graph_builder.foundation.parsers.language_spec import get_language_spec
         from code_graph_builder.foundation.utils.encoding import normalize_to_utf8_bytes
 
         for filepath in files:
@@ -456,10 +457,19 @@ class GraphUpdater:
             lang_config = get_language_spec(filepath.suffix)
             if not lang_config or not isinstance(lang_config.language, cs.SupportedLanguage):
                 continue
+            # .h files: prefer C parser (consistent with process_files_subset/_process_files)
+            if (
+                filepath.suffix == cs.EXT_H
+                and cs.SupportedLanguage.C in self.parsers
+            ):
+                from code_graph_builder.foundation.parsers.language_spec import LANGUAGE_SPECS
+                lang_config = LANGUAGE_SPECS.get(cs.SupportedLanguage.C) or lang_config
             language = lang_config.language
             if language not in self.parsers:
                 continue
-            lang_queries = self.queries.get(language, {})
+            lang_queries = self.queries.get(language)
+            if not lang_queries:
+                continue
             parser = lang_queries.get("parser")
             if not parser:
                 continue

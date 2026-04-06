@@ -270,6 +270,7 @@ class CodeGraphBuilder:
         without triggering a full rebuild.
         """
         self._load_parsers()
+        embedder, vector_store = self._get_embedder_and_store()
         return GraphUpdater(
             ingestor=ingestor,
             repo_path=self.repo_path,
@@ -277,6 +278,9 @@ class CodeGraphBuilder:
             queries=self._queries,
             unignore_paths=frozenset(self.scan_config.unignore_paths),
             exclude_paths=frozenset(self.scan_config.exclude_patterns),
+            embedder=embedder,
+            vector_store=vector_store,
+            embedding_config=self.embedding_config.to_dict(),
         )
 
     def export_graph(self) -> GraphData:
