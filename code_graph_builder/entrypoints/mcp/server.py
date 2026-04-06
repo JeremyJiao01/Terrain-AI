@@ -62,6 +62,140 @@ from code_graph_builder.entrypoints.mcp.tools import MCPToolsRegistry, ToolError
 
 SERVER_NAME = "code-graph-builder"
 
+# ---------------------------------------------------------------------------
+# Incremental sync state
+# ---------------------------------------------------------------------------
+_cached_head: str | None = None
+"""Process-level cache of the last-seen HEAD. Avoids subprocess on every call."""
+
+INCREMENTAL_FILE_LIMIT: int = 50
+"""Fall back to full rebuild if more than this many files changed."""
+
+
+async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
+    """Check for committed code changes and run incremental graph update if needed.
+
+    Called before every tool invocation. The fast path (HEAD unchanged) costs ~0ms
+    since it only compares two strings in memory.
+    """
+    global _cached_head
+
+    state = registry.active_state
+    if state is None:
+        return  # No active repo yet
+
+    repo_path, artifact_dir = state
+    db_path = artifact_dir / "graph.db"
+    vectors_path = artifact_dir / "vectors.pkl"
+
+    if not db_path.exists():
+        return  # Graph not built yet
+
+    from code_graph_builder.foundation.services.git_service import GitChangeDetector
+
+    detector = GitChangeDetector()
+    current_head = detector.get_current_head(repo_path)
+
+    if current_head is None:
+        return  # Not a git repo
+
+    if current_head == _cached_head:
+        return  # Fast path: HEAD hasn't changed since last check
+
+    # HEAD changed — read last indexed commit from meta.json
+    import json as _json
+    last_commit: str | None = None
+    meta_file = artifact_dir / "meta.json"
+    if meta_file.exists():
+        try:
+            last_commit = _json.loads(
+                meta_file.read_text(encoding="utf-8", errors="replace")
+            ).get("last_indexed_commit")
+        except Exception:
+            pass
+
+    changed_files, new_head = detector.get_changed_files(repo_path, last_commit)
+
+    if new_head is not None:
+        _cached_head = new_head  # Update cache regardless of outcome below
+
+    if changed_files is None:
+        logger.warning(
+            "last_indexed_commit {} not in git history — incremental sync skipped",
+            (last_commit or "")[:8],
+        )
+        return
+
+    if not changed_files:
+        return  # No changes
+
+    if len(changed_files) > INCREMENTAL_FILE_LIMIT:
+        logger.info(
+            "Too many changed files ({} > {}), skipping incremental sync",
+            len(changed_files), INCREMENTAL_FILE_LIMIT,
+        )
+        return
+
+    # Run incremental update
+    from code_graph_builder.domains.core.graph.incremental_updater import IncrementalUpdater
+
+    try:
+        result = await asyncio.to_thread(
+            IncrementalUpdater().run,
+            changed_files,
+            repo_path,
+            db_path,
+        )
+        logger.info(
+            "Incremental sync: {} files, {} callers in {:.0f}ms",
+            result.files_reindexed, result.callers_reindexed, result.duration_ms,
+        )
+
+        # Cascade: regenerate API docs and vector index
+        from code_graph_builder.entrypoints.mcp.pipeline import (
+            generate_api_docs_step,
+            build_vector_index,
+        )
+        from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
+        cascade_builder = CodeGraphBuilder(
+            repo_path=str(repo_path),
+            backend="kuzu",
+            backend_config={"db_path": str(db_path), "batch_size": 1000},
+        )
+        if (artifact_dir / "api_docs").exists():
+            try:
+                await asyncio.to_thread(
+                    generate_api_docs_step, cascade_builder, artifact_dir,
+                    rebuild=True, repo_path=repo_path
+                )
+            except Exception as e:
+                logger.warning("API docs update failed: {}", e)
+        if vectors_path.exists():
+            try:
+                await asyncio.to_thread(
+                    build_vector_index, cascade_builder, repo_path, vectors_path,
+                    rebuild=True
+                )
+            except Exception as e:
+                logger.warning("Vector index rebuild failed: {}", e)
+
+        # Persist new last_indexed_commit
+        if new_head:
+            try:
+                import json as _json2
+                existing_meta = {}
+                if meta_file.exists():
+                    existing_meta = _json2.loads(
+                        meta_file.read_text(encoding="utf-8", errors="replace")
+                    )
+                existing_meta["last_indexed_commit"] = new_head
+                meta_file.write_text(_json2.dumps(existing_meta, ensure_ascii=False, indent=2))
+            except Exception as e:
+                logger.debug("Failed to update last_indexed_commit in meta.json: {}", e)
+
+    except Exception as e:
+        logger.warning("Incremental sync failed (will retry next call): {}", e)
+
 
 async def main() -> None:
     workspace = Path(
@@ -85,6 +219,8 @@ async def main() -> None:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        # Check for committed code changes and sync incrementally if needed
+        await _maybe_incremental_sync(registry)
         handler = registry.get_handler(name)
         if handler is None:
             raise ValueError(f"Unknown tool: {name}")

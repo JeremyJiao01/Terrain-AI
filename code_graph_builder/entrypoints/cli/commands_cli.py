@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from code_graph_builder.foundation.services.git_service import GitChangeDetector as _GCD  # noqa: E402
 from code_graph_builder.foundation.utils.settings import load_settings  # noqa: E402
 
 load_settings()
@@ -246,7 +247,8 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
             step_progress(3, "Embedding generation skipped (--no-embed).")
             step_progress(4, "Wiki generation skipped (requires embeddings).")
 
-        save_meta(artifact_dir, repo_path, page_count)
+        _head = _GCD().get_current_head(repo_path)
+        save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
         ws.set_active(artifact_dir)
 
         _progress("")
@@ -297,7 +299,8 @@ def cmd_graph_build(args: argparse.Namespace, ws: Workspace) -> None:
         builder = build_graph(repo_path, db_path, rebuild, progress_cb, backend=backend)
 
         stats = builder.get_statistics()
-        save_meta(artifact_dir, repo_path, 0)
+        _head = _GCD().get_current_head(repo_path)
+        save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head)
         ws.set_active(artifact_dir)
 
         _progress("")
@@ -1075,7 +1078,8 @@ def cmd_wiki_gen(args: argparse.Namespace, ws: Workspace) -> None:
             progress_cb=progress_cb,
         )
 
-        save_meta(artifact_dir, repo_path, page_count)
+        _head = _GCD().get_current_head(repo_path)
+        save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
         ingestor.__exit__(None, None, None)
 
         _progress("")
@@ -1133,7 +1137,8 @@ def cmd_embed_gen(args: argparse.Namespace, ws: Workspace) -> None:
             ingestor, repo_path, vectors_path, rebuild, progress_cb
         )
 
-        save_meta(artifact_dir, repo_path, meta.get("wiki_page_count", 0))
+        _head = _GCD().get_current_head(repo_path)
+        save_meta(artifact_dir, repo_path, meta.get("wiki_page_count", 0), last_indexed_commit=_head)
         ingestor.__exit__(None, None, None)
 
         _progress("")

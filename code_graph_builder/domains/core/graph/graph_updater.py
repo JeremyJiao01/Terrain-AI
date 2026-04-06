@@ -387,6 +387,99 @@ class GraphUpdater:
             files_processed, len(self.ast_cache),
         )
 
+    def process_files_subset(self, files: list[Path]) -> None:
+        """Pass 2 for a specific file list only (incremental updates).
+
+        Parses definitions and adds nodes/relations to the graph.
+        Uses an empty structural_elements dict — module→folder fallback is used
+        instead of module→package for modified files (acceptable for incremental MVP).
+
+        Note: process_generic_file() is intentionally skipped here. Non-source files
+        (Markdown, config, etc.) are not re-registered in incremental updates.
+        This is an accepted MVP limitation.
+        """
+        try:
+            from code_graph_builder.foundation.utils.path_utils import should_skip_path
+        except ImportError:
+            def should_skip_path(filepath, repo_path, exclude_paths=None, unignore_paths=None):  # type: ignore[misc]
+                return False
+
+        sorted_files = sorted(
+            files,
+            key=lambda p: (0 if p.suffix == cs.EXT_H else 1, str(p)),
+        )
+        for filepath in sorted_files:
+            if not filepath.is_file():
+                continue
+            if should_skip_path(
+                filepath, self.repo_path,
+                exclude_paths=self.exclude_paths,
+                unignore_paths=self.unignore_paths,
+            ):
+                continue
+            lang_config = get_language_spec(filepath.suffix)
+            if (
+                lang_config
+                and isinstance(lang_config.language, cs.SupportedLanguage)
+                and filepath.suffix == cs.EXT_H
+                and cs.SupportedLanguage.C in self.parsers
+            ):
+                from code_graph_builder.foundation.parsers.language_spec import LANGUAGE_SPECS
+                lang_config = LANGUAGE_SPECS.get(cs.SupportedLanguage.C)
+            if (
+                lang_config
+                and isinstance(lang_config.language, cs.SupportedLanguage)
+                and lang_config.language in self.parsers
+            ):
+                result = self.factory.definition_processor.process_file(
+                    filepath,
+                    lang_config.language,
+                    self.queries,
+                    self.factory.structure_processor.structural_elements,
+                )
+                if result:
+                    root_node, language = result
+                    self.ast_cache[filepath] = (root_node, language)
+            elif self._is_dependency_file(filepath.name, filepath):
+                self.factory.definition_processor.process_dependencies(filepath)
+
+    def load_asts_for_calls(self, files: list[Path]) -> None:
+        """Parse files into AST cache WITHOUT writing to graph (incremental call reprocessing).
+
+        Used to load ASTs for affected_callers so their CALLS relations can be
+        re-inserted in _process_function_calls(), without re-adding their definitions.
+        """
+        from code_graph_builder.foundation.utils.encoding import normalize_to_utf8_bytes
+
+        for filepath in files:
+            if filepath in self.ast_cache or not filepath.is_file():
+                continue
+            lang_config = get_language_spec(filepath.suffix)
+            if not lang_config or not isinstance(lang_config.language, cs.SupportedLanguage):
+                continue
+            # .h files: prefer C parser (consistent with process_files_subset/_process_files)
+            if (
+                filepath.suffix == cs.EXT_H
+                and cs.SupportedLanguage.C in self.parsers
+            ):
+                from code_graph_builder.foundation.parsers.language_spec import LANGUAGE_SPECS
+                lang_config = LANGUAGE_SPECS.get(cs.SupportedLanguage.C) or lang_config
+            language = lang_config.language
+            if language not in self.parsers:
+                continue
+            lang_queries = self.queries.get(language)
+            if not lang_queries:
+                continue
+            parser = lang_queries.get("parser")
+            if not parser:
+                continue
+            try:
+                source_bytes = normalize_to_utf8_bytes(filepath.read_bytes())
+                tree = parser.parse(source_bytes)
+                self.ast_cache[filepath] = (tree.root_node, language)
+            except Exception as e:
+                logger.debug("load_asts_for_calls: failed to parse {}: {}", filepath, e)
+
     def _process_function_calls(self) -> None:
         """Process function calls in all cached ASTs."""
         ast_cache_items = list(self.ast_cache.items())

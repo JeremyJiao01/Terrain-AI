@@ -1,3 +1,6 @@
+# Git worktrees
+.worktrees/
+
 # Environment variables (sensitive - never commit)
 .env
 .env.local

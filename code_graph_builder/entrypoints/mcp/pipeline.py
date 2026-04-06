@@ -1333,7 +1333,12 @@ def run_wiki_generation(
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
-def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None:
+def save_meta(
+    artifact_dir: Path,
+    repo_path: Path,
+    wiki_page_count: int,
+    last_indexed_commit: str | None = None,
+) -> None:
     """Save or update artifact metadata.
 
     Preserves existing fields (like step-completion flags) and updates
@@ -1365,6 +1370,7 @@ def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None
             "embeddings": has_embeddings,
             "wiki": has_wiki,
         },
+        **({} if last_indexed_commit is None else {"last_indexed_commit": last_indexed_commit}),
     }
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
