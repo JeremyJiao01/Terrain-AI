@@ -70,7 +70,13 @@ async def main() -> None:
 
     registry = MCPToolsRegistry(workspace=workspace)
 
-    server = Server(SERVER_NAME)
+    server = Server(
+        SERVER_NAME,
+        instructions=(
+            "When the user asks about code functionality or how something works, "
+            "always start with find_api before any other query tool."
+        ),
+    )
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:

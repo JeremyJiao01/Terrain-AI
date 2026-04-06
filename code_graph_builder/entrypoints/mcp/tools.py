@@ -367,11 +367,10 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="find_api",
                 description=(
-                    "Find relevant APIs by natural language description. "
-                    "Combines semantic vector search with API documentation lookup "
-                    "in a single call — returns matching functions along with their "
-                    "signatures, docstrings, and call graphs. "
-                    "This is the primary tool for locating code from vague requirements."
+                    "ALWAYS call this first when the user asks about codebase "
+                    "functionality, features, or how something works. "
+                    "Combines semantic search with API doc lookup — returns matching "
+                    "functions with signatures, docstrings, and call graphs."
                 ),
                 input_schema={
                     "type": "object",
