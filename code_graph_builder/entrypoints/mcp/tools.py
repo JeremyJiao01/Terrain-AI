@@ -256,6 +256,13 @@ class MCPToolsRegistry:
         if self._active_repo_path is None:
             raise ToolError("No repository path set. Call initialize_repository first.")
 
+    @property
+    def active_state(self) -> tuple[Path, Path] | None:
+        """Return (repo_path, artifact_dir) for the currently active repo, or None."""
+        if self._active_repo_path is not None and self._active_artifact_dir is not None:
+            return self._active_repo_path, self._active_artifact_dir
+        return None
+
     def tools(self) -> list[ToolDefinition]:
         defs: list[ToolDefinition] = [
             ToolDefinition(

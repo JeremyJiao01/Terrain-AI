@@ -8,7 +8,7 @@ import diff_match_patch
 from loguru import logger
 from tree_sitter import Node, Parser
 
-from code_graph_builder import constants as cs
+from code_graph_builder.foundation.types import constants as cs
 from code_graph_builder.foundation.parsers.language_spec import get_language_for_extension, get_language_spec
 from code_graph_builder.foundation.parsers.parser_loader import load_parsers
 from code_graph_builder.foundation.utils.encoding import normalize_to_utf8_bytes
