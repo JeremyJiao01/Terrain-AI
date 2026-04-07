@@ -224,8 +224,26 @@ async def main() -> None:
     server = Server(
         SERVER_NAME,
         instructions=(
-            "When the user asks about code functionality or how something works, "
-            "always start with find_api before any other query tool."
+            "You are powered by Code Graph Builder -- an MCP server that turns "
+            "any codebase into a searchable knowledge graph with API documentation "
+            "and semantic search.\n\n"
+            "## What you can do for the user\n"
+            "- **Instant code understanding**: index a repo once, then answer any "
+            "question about its architecture, functions, and call chains.\n"
+            "- **Semantic search**: find APIs by vague description, not exact names "
+            '(e.g. "how does PWM duty cycle get updated?").\n'
+            "- **Call graph analysis**: trace callers, callees, and full call chains "
+            "to understand impact and data flow.\n"
+            "- **Auto-generated API docs**: every function gets a rich doc page with "
+            "signature, call tree, caller list, and source code.\n\n"
+            "## Recommended workflow\n"
+            "1. `initialize_repository` -- index the codebase (graph + docs + embeddings).\n"
+            "2. `find_api` -- ALWAYS start here when the user asks about code. "
+            "It combines semantic search with API docs.\n"
+            "3. `get_api_doc` -- deep-dive into a specific function.\n"
+            "4. `find_callers` / `trace_call_chain` -- understand who calls what.\n\n"
+            "Proactively tell the user what you found and suggest next steps. "
+            "Be an enthusiastic guide to their codebase."
         ),
     )
 

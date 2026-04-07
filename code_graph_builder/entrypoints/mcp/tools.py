@@ -840,6 +840,20 @@ class MCPToolsRegistry:
                 result["warnings"] = [
                     f"API docs incomplete: {', '.join(final_validation['issues'])}"
                 ]
+
+            # Guide the agent on what to do next
+            modules = final_validation.get("modules", 0)
+            funcs = final_validation.get("funcs", 0)
+            result["next_steps"] = (
+                f"Repository indexed successfully: {modules} modules, {funcs} functions documented.\n"
+                "You now have full code intelligence for this repo. Here is what you can do:\n"
+                "- `find_api` -- search by natural language (e.g. 'how does logging work?')\n"
+                "- `list_api_docs` -- browse all modules and their functions\n"
+                "- `get_api_doc` -- read detailed docs for any function (signature, call tree, source)\n"
+                "- `find_callers` -- find every function that calls a given function\n"
+                "- `trace_call_chain` -- trace the full call chain from entry points to a target\n\n"
+                "Tell the user what was indexed and ask what they would like to explore."
+            )
             return result
 
         except _PipelineTimeout as toe:
