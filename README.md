@@ -56,7 +56,7 @@ The setup wizard:
 ### Install via pip
 
 ```bash
-pip install "code-graph-builder[treesitter-c,semantic]"
+pip install code-graph-builder
 cgb-mcp  # Start MCP server
 ```
 
@@ -96,6 +96,18 @@ On Windows, use:
 }
 ```
 
+## Architecture
+
+The project follows a 5-layer harness architecture:
+
+```
+L4  entrypoints/         MCP server, CLI
+L3  domains/upper/       apidoc, rag, guidance, calltrace
+L2  domains/core/        graph, embedding, search
+L1  foundation/          parsers, services, utils
+L0  foundation/types/    constants, models, type definitions
+```
+
 ## Pipeline
 
 | Step | What | Input | Output |
@@ -125,7 +137,7 @@ generate_wiki          →  Separate (not in main pipeline)
 
 ## MCP Tools
 
-### Primary Tools (10 exposed)
+### Primary Tools (13 exposed)
 
 #### Repository Management
 | Tool | Description |
@@ -139,16 +151,27 @@ generate_wiki          →  Separate (not in main pipeline)
 #### Code Search & Documentation
 | Tool | Description |
 |------|-------------|
-| `find_api` | Semantic search + API doc (primary search tool) |
+| `find_api` | Hybrid semantic + keyword search with API doc (primary search tool) |
 | `list_api_docs` | Browse L1 module index or L2 module details |
 | `get_api_doc` | L3 function detail: signature, call tree, usage examples, source |
 | `generate_api_docs` | Generate/update API docs (full / resume / enhance) |
-| `get_config` | Show server configuration and service availability |
 
-### Hidden Tools (11 available via handler)
+#### Call Graph Analysis
+| Tool | Description |
+|------|-------------|
+| `find_callers` | Find all functions that call a specific function (no LLM required) |
+| `trace_call_chain` | BFS upward call chain trace with entry point discovery |
+
+#### Configuration & Maintenance
+| Tool | Description |
+|------|-------------|
+| `get_config` | Show server configuration and service availability |
+| `rebuild_embeddings` | Build or rebuild vector embeddings |
+
+### Hidden Tools (available via handler)
 
 These tools are superseded by the API-doc-based workflow above but remain accessible:
-`query_code_graph`, `get_code_snippet`, `semantic_search`, `locate_function`, `list_api_interfaces`, `list_wiki_pages`, `get_wiki_page`, `generate_wiki`, `rebuild_embeddings`, `build_graph`, `prepare_guidance`
+`query_code_graph`, `get_code_snippet`, `semantic_search`, `locate_function`, `list_api_interfaces`, `list_wiki_pages`, `get_wiki_page`, `generate_wiki`, `build_graph`, `prepare_guidance`
 
 ## API Documentation Format
 
@@ -207,6 +230,7 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 - Memory ownership inference from signatures
 - Header/implementation file split
 - Cross-file function call resolution via `#include` header mapping
+- Function pointer tracking and indirect call resolution
 - GB2312/GBK encoding support for source files
 
 ## Supported Languages
@@ -262,10 +286,10 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 ### Install from PyPI
 
 ```bash
-# Core only (graph building)
+# Core (includes C/C++, Python, JS/TS grammars)
 pip install code-graph-builder
 
-# With all language grammars
+# With all language grammars (Rust, Go, Java, Scala, Lua)
 pip install "code-graph-builder[treesitter-full]"
 ```
 
@@ -309,10 +333,10 @@ pip install -e ".[treesitter-full]"
 python3 -m pytest code_graph_builder/tests/ -v
 
 # Integration tests (requires tinycc repo at ../tinycc)
-python3 -m pytest code_graph_builder/tests/test_step1_graph_build.py -v   # ~3 min
-python3 -m pytest code_graph_builder/tests/test_step2_api_docs.py -v      # ~3 min
-python3 -m pytest code_graph_builder/tests/test_step3_embedding.py -v     # ~27 min (API calls)
-python3 -m pytest code_graph_builder/tests/test_api_find_integration.py -v # ~47 min (full pipeline)
+python3 -m pytest code_graph_builder/tests/domains/core/test_graph_build.py -v      # ~3 min
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_docs.py -v        # ~3 min
+python3 -m pytest code_graph_builder/tests/domains/core/test_step3_embedding.py -v  # ~27 min (API calls)
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_find_integration.py -v  # ~47 min (full pipeline)
 ```
 
 ## License
