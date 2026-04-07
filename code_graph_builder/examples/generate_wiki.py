@@ -127,8 +127,9 @@ def read_function_source(func: dict, repo_path: Path) -> str | None:
     if file_path is None:
         return None
     try:
-        with open(file_path, encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
+        from code_graph_builder.foundation.utils.encoding import read_source_file
+        content = read_source_file(file_path)
+        lines = content.splitlines(keepends=True)
         source = "".join(lines[start_line - 1 : end_line])
         if len(source) > MAX_SOURCE_CHARS_PER_FUNC:
             source = source[:MAX_SOURCE_CHARS_PER_FUNC] + "\n    /* ... truncated ... */"
