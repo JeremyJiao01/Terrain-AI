@@ -443,7 +443,7 @@ class KuzuIngestor:
                             n.parameters = {self._value_to_cypher(parameters if parameters else [])},
                             n.kind = {self._value_to_cypher(kind)}
                     """
-                    self._conn.execute(cypher)
+                    self._execute_with_retry(cypher)
                 except Exception as e:
                     logger.error(
                         f"Failed to create {label} node "
@@ -483,7 +483,7 @@ class KuzuIngestor:
                           (b:{to_label} {{{to_key}: {self._value_to_cypher(to_val)}}})
                     CREATE (a)-[:{actual_rel}]->(b)
                 """
-                self._conn.execute(cypher)
+                self._execute_with_retry(cypher)
             except Exception as e:
                 logger.warning(
                     f"Failed to create relationship {actual_rel}: "
