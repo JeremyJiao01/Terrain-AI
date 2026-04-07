@@ -142,8 +142,6 @@ class GraphQueryService:
             MATCH (n)
             WHERE n.qualified_name = $qualified_name
             RETURN n,
-                   n.node_id AS node_id,
-                   n.id AS id,
                    n.qualified_name AS qualified_name,
                    n.name AS name,
                    labels(n) AS labels,
@@ -177,8 +175,6 @@ class GraphQueryService:
             MATCH (n:Function)
             WHERE n.qualified_name = $name
             RETURN n,
-                   n.node_id AS node_id,
-                   n.id AS id,
                    n.qualified_name AS qualified_name,
                    n.name AS name,
                    labels(n) AS labels,
@@ -201,8 +197,6 @@ class GraphQueryService:
             MATCH (n:Function)
             WHERE n.name = $name
             RETURN n,
-                   n.node_id AS node_id,
-                   n.id AS id,
                    n.qualified_name AS qualified_name,
                    n.name AS name,
                    labels(n) AS labels,
@@ -234,8 +228,6 @@ class GraphQueryService:
             WHERE callee.qualified_name = $name
                OR callee.name = $name
             RETURN caller,
-                   caller.node_id AS node_id,
-                   caller.id AS id,
                    caller.qualified_name AS qualified_name,
                    caller.name AS name,
                    labels(caller) AS labels,
@@ -260,13 +252,29 @@ class GraphQueryService:
         ``rel_properties`` may contain ``{"indirect": True, "via_field": "..."}``
         for function-pointer-based calls.
         """
-        query = """
+        # Basic query (always works): get callers without rel properties
+        basic_query = """
+            MATCH (caller:Function)-[:CALLS]->(callee)
+            WHERE callee.qualified_name = $name
+               OR callee.name = $name
+            RETURN caller,
+                   caller.qualified_name AS qualified_name,
+                   caller.name AS name,
+                   labels(caller) AS labels,
+                   caller.path AS path,
+                   caller.start_line AS start_line,
+                   caller.end_line AS end_line
+        """
+        basic_results = self.graph_service.fetch_all(basic_query, {"name": function_name})
+
+        # Try enhanced query with rel properties (Memgraph-style graphs with indirect/via_field)
+        # Note: graph_service.fetch_all() swallows exceptions and returns [] on error,
+        # so we compare lengths: if full_results is non-empty, rel props are available.
+        full_query = """
             MATCH (caller:Function)-[r:CALLS]->(callee)
             WHERE callee.qualified_name = $name
                OR callee.name = $name
             RETURN caller,
-                   caller.node_id AS node_id,
-                   caller.id AS id,
                    caller.qualified_name AS qualified_name,
                    caller.name AS name,
                    labels(caller) AS labels,
@@ -276,22 +284,21 @@ class GraphQueryService:
                    r.indirect AS indirect,
                    r.via_field AS via_field
         """
+        full_results = self.graph_service.fetch_all(full_query, {"name": function_name})
 
-        try:
-            results = self.graph_service.fetch_all(query, {"name": function_name})
-            output: list[tuple[GraphNode, dict]] = []
-            for row in results:
-                node = self._row_to_node(row)
-                rel_props: dict = {}
-                if row.get("indirect"):
-                    rel_props["indirect"] = True
-                if row.get("via_field"):
-                    rel_props["via_field"] = str(row["via_field"])
-                output.append((node, rel_props))
-            return output
-        except Exception as e:
-            logger.error(f"Failed to fetch callers with props of {function_name}: {e}")
-            return []
+        # Use full results if they returned data (rel props available), otherwise fall back
+        rows = full_results if full_results else basic_results
+
+        output: list[tuple[GraphNode, dict]] = []
+        for row in rows:
+            node = self._row_to_node(row)
+            rel_props: dict = {}
+            if row.get("indirect"):
+                rel_props["indirect"] = True
+            if row.get("via_field"):
+                rel_props["via_field"] = str(row["via_field"])
+            output.append((node, rel_props))
+        return output
 
     def fetch_callees(self, function_name: str) -> list[GraphNode]:
         """Find all functions called by the given function.
@@ -307,8 +314,6 @@ class GraphQueryService:
             WHERE caller.qualified_name = $name
                OR caller.name = $name
             RETURN callee,
-                   callee.node_id AS node_id,
-                   callee.id AS id,
                    callee.qualified_name AS qualified_name,
                    callee.name AS name,
                    labels(callee) AS labels,
@@ -359,8 +364,6 @@ class GraphQueryService:
                OR id(n) = $node_id
             {rel_filter}
             RETURN related,
-                   related.node_id AS node_id,
-                   related.id AS id,
                    related.qualified_name AS qualified_name,
                    related.name AS name,
                    labels(related) AS labels,
@@ -439,8 +442,6 @@ class GraphQueryService:
                OR n.id IN $node_ids
                OR id(n) IN $node_ids
             RETURN n,
-                   n.node_id AS node_id,
-                   n.id AS id,
                    n.qualified_name AS qualified_name,
                    n.name AS name,
                    labels(n) AS labels,

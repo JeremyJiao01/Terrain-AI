@@ -1,0 +1,40 @@
+<h2>官网形态</h2>
+<p class="subtitle">选择最符合你预期的方向</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>静态展示型</h3>
+      <p>精美的 Landing Page，动态展示调用链图谱、代码搜索效果截图/动画，无后端，部署在 GitHub Pages</p>
+      <div class="pros-cons" style="margin-top:8px;font-size:13px">
+        <div class="pros"><h4>优点</h4><ul><li>零成本托管</li><li>加载极快</li><li>维护简单</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>交互为预设动画</li><li>无真实数据</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>前端交互型（纯客户端）</h3>
+      <p>页面内嵌一个预构建的代码图谱数据集（JSON），访客可以真正搜索函数、点击查看调用链，所有运算在浏览器完成</p>
+      <div class="pros-cons" style="margin-top:8px;font-size:13px">
+        <div class="pros"><h4>优点</h4><ul><li>真实交互体验</li><li>仍然零后端</li><li>可 GitHub Pages 部署</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>需预先生成数据集</li><li>数据量有上限</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>在线 Playground（有后端）</h3>
+      <p>访客可以粘贴一段代码或填入 GitHub 仓库地址，后端实时分析并返回图谱结果</p>
+      <div class="pros-cons" style="margin-top:8px;font-size:13px">
+        <div class="pros"><h4>优点</h4><ul><li>最震撼的 Aha Moment</li><li>真实演示产品能力</li></ul></div>
+        <div class="cons"><h4>限制</h4><ul><li>需要服务器</li><li>运营成本</li><li>开发量大</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -629,7 +629,7 @@ class MCPToolsRegistry:
         # Hot-reload config from .env / settings.json before running the
         # pipeline, so any changes made via --setup or manual edits take
         # effect without restarting the MCP server.
-        from ..settings import reload_env
+        from code_graph_builder.foundation.utils.settings import reload_env
         changes = reload_env(workspace=self._workspace)
         # if changes.get("updated") or changes.get("removed"):
         #     logger.info(f"Config hot-reloaded before initialize: {changes}")

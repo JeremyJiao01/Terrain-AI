@@ -1,0 +1,8 @@
+{"type":"server-started","port":49797,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:49797","screen_dir":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/content","state_dir":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/state"}
+{"type":"screen-added","file":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/content/waiting.html"}
+{"type":"screen-added","file":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/content/site-type.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      静态展示型\n      精美的 Landing Page，动态展示调用链图谱、代码搜索效果截图/动画，无后端，部署在 GitHub Pages\n      \n        优点零成本托管加载极快维护简单\n        限制交互为预设动画无真实数据","choice":"a","id":null,"timestamp":1775391437893}
+{"source":"user-event","type":"click","text":"A\n    \n      静态展示型\n      精美的 Landing Page，动态展示调用链图谱、代码搜索效果截图/动画，无后端，部署在 GitHub Pages\n      \n        优点零成本托管加载极快维护简单\n        限制交互为预设动画无真实数据","choice":"a","id":null,"timestamp":1775391441941}
+{"type":"screen-added","file":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/content/visual-style.html"}
+{"type":"screen-added","file":"/Users/jiaojeremy/CodeFile/CodeGraphWiki-harness/.superpowers/brainstorm/26161-1775390408/content/waiting-2.html"}
+{"type":"server-stopped","reason":"idle timeout"}

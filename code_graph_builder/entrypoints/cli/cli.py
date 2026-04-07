@@ -536,6 +536,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
         print(_c("2", f"here    not indexed   {cwd}   (cgb index to add)"))
 
     print(f"active  {active['name']}   {active['path']}")
+    print(f"version cgb {__version__}")
 
     return 0
 
@@ -969,6 +970,62 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Execute the setup command — add cgb Scripts dir to Windows user PATH."""
+    if platform.system() != "Windows":
+        print("This command is only needed on Windows.")
+        print("On Linux/macOS, cgb is available in PATH automatically after pip install.")
+        return 0
+
+    scripts_dir = Path(sys.executable).parent / "Scripts"
+    if not (scripts_dir / "cgb.exe").exists():
+        # Fallback: same directory as python.exe (e.g. in virtual envs)
+        scripts_dir = Path(sys.executable).parent
+
+    scripts_str = str(scripts_dir)
+
+    try:
+        import winreg  # type: ignore[import]
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            "Environment",
+            0,
+            winreg.KEY_READ | winreg.KEY_WRITE,
+        )
+        try:
+            current_path, _ = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            current_path = ""
+
+        path_parts = [p for p in current_path.split(";") if p]
+        if scripts_str.lower() not in [p.lower() for p in path_parts]:
+            path_parts.append(scripts_str)
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join(path_parts))
+            print(f"Added to user PATH: {scripts_str}")
+            print("Restart your terminal (or log out and back in) for the change to take effect.")
+        else:
+            print(f"Already in PATH: {scripts_str}")
+
+        winreg.CloseKey(key)
+
+        # Notify running processes that the environment changed
+        try:
+            import ctypes
+            ctypes.windll.user32.SendMessageTimeoutW(  # type: ignore[attr-defined]
+                0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None
+            )
+        except Exception:
+            pass
+
+        return 0
+
+    except Exception as exc:
+        print(f"Failed to update PATH: {exc}")
+        print(f"Please manually add the following directory to your PATH:\n  {scripts_str}")
+        return 1
+
+
 def main() -> int:
     """Main entry point for CLI."""
     prog = "cgb"
@@ -997,6 +1054,9 @@ Low-level commands:
   cgb stats --db-path ./graph.db
 
 Run 'cgb <command> --help' for details on any command.
+
+Windows:
+  cgb setup                     add cgb to user PATH (run once after install)
         """,
         add_help=False,
     )
@@ -1307,6 +1367,14 @@ Run 'cgb <command> --help' for details on any command.
         help="Path to the database",
     )
     stats_parser.set_defaults(func=cmd_stats)
+
+    # setup command (Windows PATH helper)
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Add cgb to the system PATH (Windows only)",
+        description="Add the cgb executable directory to the current user's PATH on Windows.",
+    )
+    setup_parser.set_defaults(func=cmd_setup)
 
     args = parser.parse_args()
 

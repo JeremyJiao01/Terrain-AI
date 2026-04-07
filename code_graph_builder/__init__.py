@@ -48,7 +48,11 @@ from .foundation.services.kuzu_service import KuzuIngestor
 from .foundation.services.memory_service import MemoryIngestor
 from .foundation.types.types import BuildResult, GraphData, GraphSummary
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("code-graph-builder")
+except Exception:
+    __version__ = "0.1.0"
 __all__ = [
     # Main API
     "CodeGraphBuilder",

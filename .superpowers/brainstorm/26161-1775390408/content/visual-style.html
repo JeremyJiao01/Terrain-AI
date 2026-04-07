@@ -1,0 +1,53 @@
+<h2>页面视觉风格</h2>
+<p class="subtitle">选择最能代表 CodeGraphWiki 的调性</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0d1117;padding:20px;font-family:monospace;border-radius:6px 6px 0 0">
+      <div style="color:#58a6ff;font-size:13px;margin-bottom:8px">// call graph</div>
+      <div style="color:#e6edf3;font-size:12px;line-height:1.8">
+        parse_btype<br>
+        <span style="color:#3fb950">├──</span> expr_const<br>
+        <span style="color:#3fb950">├──</span> struct_decl<br>
+        <span style="color:#3fb950">│&nbsp;&nbsp; └──</span> <span style="color:#79c0ff">expect</span><br>
+        <span style="color:#3fb950">└──</span> parse_attr
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>深色极客风</h3>
+      <p>黑色背景 + 代码绿/蓝高亮，面向开发者，专业感强，像 GitHub / VS Code 的配色</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:20px;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center">
+      <div style="text-align:center;color:white">
+        <div style="font-size:28px;font-weight:700;letter-spacing:-1px">Code Graph</div>
+        <div style="font-size:13px;opacity:.85;margin-top:6px">Navigate any codebase with AI</div>
+        <div style="margin-top:14px;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 16px;font-size:12px;display:inline-block">→ Try it now</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>渐变科技风</h3>
+      <p>紫蓝渐变背景，现代 SaaS 产品感，像 Linear / Vercel 的首页，视觉冲击力强</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#fafafa;padding:20px;border-radius:6px 6px 0 0;border-bottom:1px solid #e5e7eb">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <div style="width:3px;height:60px;background:#111;border-radius:2px;flex-shrink:0;margin-top:4px"></div>
+        <div>
+          <div style="font-size:15px;font-weight:600;color:#111;line-height:1.4">Understand any codebase<br>in minutes, not days.</div>
+          <div style="font-size:12px;color:#666;margin-top:8px">Code Graph Builder builds a knowledge graph from source, so your AI assistant knows exactly where to look.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>简洁文档风</h3>
+      <p>白色背景 + 黑色排版，类似 Stripe Docs / Tailwind 官网，内容清晰，开发者信任感高</p>
+    </div>
+  </div>
+
+</div>
