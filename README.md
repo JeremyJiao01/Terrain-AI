@@ -1,8 +1,8 @@
 # Code Graph Builder
 
-English | [中文](README_CN.md)
+English | [Chinese / CN](README_CN.md)
 
-Build a knowledge graph from any codebase, generate API documentation, and search code semantically — all accessible as an MCP server for AI coding assistants.
+Build a knowledge graph from any codebase, generate API documentation, and search code semantically -- all accessible as an MCP server for AI coding assistants.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ Build a knowledge graph from any codebase, generate API documentation, and searc
 Your Code Repository
     |
     v
-[Tree-sitter AST Parsing]  ──>  Knowledge Graph (Kuzu)
+[Tree-sitter AST Parsing]  -->  Knowledge Graph (Kuzu)
     |                               |
     |                               v
     |                        API Documentation (Markdown)
@@ -19,7 +19,7 @@ Your Code Repository
     |                        Vector Embeddings
     |                               |
     v                               v
-MCP Server  <──────────────  Semantic Search
+MCP Server  <--------------  Semantic Search
     |
     v
 Claude Code / Cursor / Windsurf / Any MCP Client
@@ -28,7 +28,7 @@ Claude Code / Cursor / Windsurf / Any MCP Client
 **Core workflow for AI agents:**
 
 ```
-initialize_repository  →  find_api  →  get_api_doc
+initialize_repository  ->  find_api  ->  get_api_doc
 ```
 
 1. Index the codebase once
@@ -40,7 +40,7 @@ initialize_repository  →  find_api  →  get_api_doc
 ### Install via npx (recommended)
 
 ```bash
-# First run — interactive setup wizard
+# First run --interactive setup wizard
 npx code-graph-builder@latest --setup
 
 # Start MCP server
@@ -120,11 +120,11 @@ L0  foundation/types/    constants, models, type definitions
 Steps 1-3 run automatically via `initialize_repository`. Wiki generation is available separately via `generate_wiki`.
 
 ```
-initialize_repository  →  Steps 1-3 (full pipeline)
-build_graph            →  Step 1 only
-generate_api_docs      →  Step 2 + 2b (modes: full / resume / enhance)
-rebuild_embeddings     →  Step 3
-generate_wiki          →  Separate (not in main pipeline)
+initialize_repository  ->  Steps 1-3 (full pipeline)
+build_graph            ->  Step 1 only
+generate_api_docs      ->  Step 2 + 2b (modes: full / resume / enhance)
+rebuild_embeddings     ->  Step 3
+generate_wiki          ->  Separate (not in main pipeline)
 ```
 
 ### API Doc Generation Modes
@@ -188,22 +188,22 @@ Generated docs are optimized for both AI agent reading and vector retrieval.
 - Return: `int`
 - Visibility: static | Header: tccgen.h
 - Location: tccgen.c:139-280
-- Module: tinycc.tccgen — C code generator
+- Module: tinycc.tccgen --C code generator
 
 ## Call Tree
 
 parse_btype
-├── expr_const           [static]
-├── parse_btype_qualify   [static]
-├── struct_decl           [static]
-│   ├── expect
-│   └── next
-└── parse_attribute       [static]
+|-- expr_const           [static]
+|-- parse_btype_qualify   [static]
+|-- struct_decl           [static]
+|   |-- expect
+|   `-- next
+`-- parse_attribute       [static]
 
 ## Called by (5)
 
-- type_decl (tinycc.tccgen) → tccgen.c:1200
-- post_type (tinycc.tccgen) → tccgen.c:1350
+- type_decl (tinycc.tccgen) -> tccgen.c:1200
+- post_type (tinycc.tccgen) -> tccgen.c:1350
 
 ## Parameters & Memory
 
@@ -214,11 +214,11 @@ parse_btype
 
 ## Implementation
 
-​```c
+```c
 int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
     // ... source code embedded
 }
-​```
+```
 ```
 
 ### C/C++ Specific Features
