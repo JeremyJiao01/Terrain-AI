@@ -110,13 +110,19 @@ class DefinitionProcessor:
 
             # Ingest C-specific constructs: typedefs and macros
             if language == cs.SupportedLanguage.C:
-                self._ingest_c_typedefs(root_node, module_qn, queries)
-                self._ingest_c_macros(root_node, module_qn, queries)
+                try:
+                    self._ingest_c_typedefs(root_node, module_qn, queries)
+                except Exception as e:
+                    logger.warning(f"C typedef ingestion failed for {relative_path}: {e}")
+                try:
+                    self._ingest_c_macros(root_node, module_qn, queries)
+                except Exception as e:
+                    logger.warning(f"C macro ingestion failed for {relative_path}: {e}")
 
             return (root_node, language)
 
         except Exception as e:
-            logger.error(f"Error processing {file_path}: {e}")
+            logger.error(f"Error processing {file_path}: {e}", exc_info=True)
             return None
 
     def _create_module_node(self, module_qn: str, name: str, path: str) -> None:
@@ -191,6 +197,7 @@ class DefinitionProcessor:
             captures = cursor.captures(root_node)
             func_nodes = captures.get(cs.CAPTURE_FUNCTION, [])
 
+            ingested = 0
             for func_node in func_nodes:
                 if not isinstance(func_node, Node):
                     continue
@@ -203,65 +210,68 @@ class DefinitionProcessor:
                 if not func_name:
                     continue
 
-                func_qn = f"{module_qn}.{func_name}"
+                try:
+                    func_qn = f"{module_qn}.{func_name}"
 
-                # Derive relative file path for this function
-                func_file_path = ""
-                if file_path:
-                    try:
-                        func_file_path = str(file_path.relative_to(self.repo_path))
-                    except ValueError:
-                        func_file_path = str(file_path)
+                    # Derive relative file path for this function
+                    func_file_path = ""
+                    if file_path:
+                        try:
+                            func_file_path = str(file_path.relative_to(self.repo_path))
+                        except ValueError:
+                            func_file_path = str(file_path)
 
-                func_props: PropertyDict = {
-                    cs.KEY_QUALIFIED_NAME: func_qn,
-                    cs.KEY_NAME: func_name,
-                    cs.KEY_PATH: func_file_path,
-                    cs.KEY_START_LINE: func_node.start_point[0] + 1,
-                    cs.KEY_END_LINE: func_node.end_point[0] + 1,
-                }
+                    func_props: PropertyDict = {
+                        cs.KEY_QUALIFIED_NAME: func_qn,
+                        cs.KEY_NAME: func_name,
+                        cs.KEY_PATH: func_file_path,
+                        cs.KEY_START_LINE: func_node.start_point[0] + 1,
+                        cs.KEY_END_LINE: func_node.end_point[0] + 1,
+                    }
 
-                # Extract C/C++ comment as docstring
-                if is_c_lang:
-                    c_docstring = self._extract_c_comment(func_node)
-                    if c_docstring:
-                        func_props[cs.KEY_DOCSTRING] = c_docstring
+                    # Extract C/C++ comment as docstring
+                    if is_c_lang:
+                        c_docstring = self._extract_c_comment(func_node)
+                        if c_docstring:
+                            func_props[cs.KEY_DOCSTRING] = c_docstring
 
-                # Extract API interface properties for C language
-                if is_c_lang:
-                    return_type = self._extract_c_return_type(func_node)
-                    parameters = self._extract_c_parameters(func_node)
-                    visibility = self._extract_c_visibility(func_node, is_header)
-                    signature = self._build_c_signature(
-                        func_name, return_type, parameters
+                    # Extract API interface properties for C language
+                    if is_c_lang:
+                        return_type = self._extract_c_return_type(func_node)
+                        parameters = self._extract_c_parameters(func_node)
+                        visibility = self._extract_c_visibility(func_node, is_header)
+                        signature = self._build_c_signature(
+                            func_name, return_type, parameters
+                        )
+
+                        func_props[cs.KEY_RETURN_TYPE] = return_type
+                        func_props[cs.KEY_PARAMETERS] = parameters
+                        func_props[cs.KEY_SIGNATURE] = signature
+                        func_props[cs.KEY_VISIBILITY] = visibility
+
+                        # Track header declarations for cross-file visibility
+                        if is_header:
+                            self._header_declarations.add(func_name)
+
+                    self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, func_props)
+                    self.function_registry[func_qn] = NodeType.FUNCTION
+                    if func_name not in self.simple_name_lookup:
+                        self.simple_name_lookup[func_name] = set()
+                    self.simple_name_lookup[func_name].add(func_qn)
+
+                    self.ingestor.ensure_relationship_batch(
+                        (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
+                        cs.RelationshipType.DEFINES,
+                        (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, func_qn),
                     )
+                    ingested += 1
+                except Exception as e:
+                    logger.error(f"Failed to ingest function {func_name} in {module_qn}: {e}")
 
-                    func_props[cs.KEY_RETURN_TYPE] = return_type
-                    func_props[cs.KEY_PARAMETERS] = parameters
-                    func_props[cs.KEY_SIGNATURE] = signature
-                    func_props[cs.KEY_VISIBILITY] = visibility
-
-                    # Track header declarations for cross-file visibility
-                    if is_header:
-                        self._header_declarations.add(func_name)
-
-                logger.info(f"  Found function: {func_name}")
-                self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, func_props)
-                self.function_registry[func_qn] = NodeType.FUNCTION
-                if func_name not in self.simple_name_lookup:
-                    self.simple_name_lookup[func_name] = set()
-                self.simple_name_lookup[func_name].add(func_qn)
-
-                self.ingestor.ensure_relationship_batch(
-                    (cs.NodeLabel.MODULE, cs.KEY_QUALIFIED_NAME, module_qn),
-                    cs.RelationshipType.DEFINES,
-                    (cs.NodeLabel.FUNCTION, cs.KEY_QUALIFIED_NAME, func_qn),
-                )
-
-            logger.debug("Module {}: {} function(s) ingested", module_qn, len(func_nodes))
+            logger.debug("Module {}: {}/{} function(s) ingested", module_qn, ingested, len(func_nodes))
 
         except Exception as e:
-            logger.debug(f"Error ingesting functions: {e}")
+            logger.error(f"Error ingesting functions in {module_qn}: {e}", exc_info=True)
 
     def _ingest_classes(
         self,
