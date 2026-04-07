@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import pickle
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -656,13 +658,30 @@ class MCPToolsRegistry:
         # Force rebuild to ensure fresh graph data
         effective_rebuild = True
 
-        result = await loop.run_in_executor(
-            None,
-            lambda: self._run_pipeline(
-                repo, effective_rebuild, wiki_mode, sync_progress,
-                backend=backend, skip_wiki=skip_wiki, skip_embed=skip_embed,
-            ),
-        )
+        from code_graph_builder.foundation.types.config import TimeoutConfig
+        tc = TimeoutConfig.from_env()
+
+        cancel = threading.Event()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self._run_pipeline(
+                        repo, effective_rebuild, wiki_mode, sync_progress,
+                        backend=backend, skip_wiki=skip_wiki, skip_embed=skip_embed,
+                        cancel_event=cancel, timeout_cfg=tc,
+                    ),
+                ),
+                timeout=tc.pipeline_total if tc.pipeline_total > 0 else None,
+            )
+        except asyncio.TimeoutError:
+            cancel.set()
+            raise ToolError({
+                "error": f"Pipeline timed out after {tc.pipeline_total:.0f}s",
+                "error_code": "PIPELINE_TIMEOUT",
+                "status": "timeout",
+                "timeout_seconds": tc.pipeline_total,
+            })
         return result
 
     def _run_pipeline(
@@ -674,12 +693,36 @@ class MCPToolsRegistry:
         backend: str = "kuzu",
         skip_wiki: bool = False,
         skip_embed: bool = False,
+        cancel_event: threading.Event | None = None,
+        timeout_cfg: "TimeoutConfig | None" = None,
     ) -> dict[str, Any]:
-        """Synchronous pipeline orchestrator: graph → api_docs → embeddings.
+        """Synchronous pipeline orchestrator: graph -> api_docs -> embeddings.
 
-        Wiki generation is not part of the main pipeline — use the
+        Wiki generation is not part of the main pipeline -- use the
         ``generate_wiki`` tool separately if needed.
         """
+        from code_graph_builder.foundation.types.config import TimeoutConfig
+        tc = timeout_cfg or TimeoutConfig()
+        cancel = cancel_event or threading.Event()
+
+        def _check_cancel(step_name: str) -> None:
+            """Raise if the pipeline has been cancelled (overall timeout)."""
+            if cancel.is_set():
+                raise _PipelineTimeout(step_name, 0)
+
+        def _step_with_timeout(
+            step_name: str, timeout: float, fn, *args, **kwargs,
+        ):
+            """Run *fn* and raise ``_PipelineTimeout`` if it exceeds *timeout*."""
+            _check_cancel(step_name)
+            t0 = time.monotonic()
+            result = fn(*args, **kwargs)
+            elapsed = time.monotonic() - t0
+            if timeout > 0 and elapsed > timeout:
+                raise _PipelineTimeout(step_name, elapsed)
+            _check_cancel(step_name)
+            return result
+
         artifact_dir = artifact_dir_for(self._workspace, repo_path)
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -698,8 +741,11 @@ class MCPToolsRegistry:
             self.close()
 
             # Step 1: build graph (read-write)
-            builder = build_graph(
-                repo_path, db_path, rebuild, progress_cb=lambda msg, pct: _step_progress(1, total_steps, msg, pct),
+            builder = _step_with_timeout(
+                "graph_build", tc.graph_build,
+                build_graph,
+                repo_path, db_path, rebuild,
+                progress_cb=lambda msg, pct: _step_progress(1, total_steps, msg, pct),
                 backend=backend,
             )
             # IMPORTANT: On Windows, Kuzu holds mandatory file locks via
@@ -714,13 +760,15 @@ class MCPToolsRegistry:
             # Step 2: generate API docs (needs read-only Kuzu access)
             ro_ingestor = KuzuIngestor(db_path, read_only=True)
             with ro_ingestor:
-                generate_api_docs_step(
+                _step_with_timeout(
+                    "api_docs", tc.api_docs,
+                    generate_api_docs_step,
                     ro_ingestor, artifact_dir, rebuild,
                     progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
                     repo_path=repo_path,
                 )
 
-                # Validate API docs — retry with rebuild if incomplete
+                # Validate API docs -- retry with rebuild if incomplete
                 validation = validate_api_docs(artifact_dir)
                 if not validation["valid"]:
                     logger.warning(
@@ -731,8 +779,10 @@ class MCPToolsRegistry:
                         f"API docs incomplete ({', '.join(validation['issues'])}), retrying...",
                         12.0,
                     )
-                    generate_api_docs_step(
-                        ro_ingestor, artifact_dir, rebuild=True,
+                    _step_with_timeout(
+                        "api_docs_retry", tc.api_docs,
+                        generate_api_docs_step,
+                        ro_ingestor, artifact_dir, True,
                         progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
                         repo_path=repo_path,
                     )
@@ -750,7 +800,9 @@ class MCPToolsRegistry:
             # Kuzu no longer needed after this point
 
             # Step 2b: LLM description generation for undocumented functions
-            generate_descriptions_step(
+            _step_with_timeout(
+                "descriptions", tc.descriptions,
+                generate_descriptions_step,
                 artifact_dir=artifact_dir,
                 repo_path=repo_path,
                 progress_cb=lambda msg, pct: _step_progress(2, total_steps, msg, pct),
@@ -760,7 +812,9 @@ class MCPToolsRegistry:
 
             if not skip_embed:
                 # Step 3: build embeddings from API doc Markdown files (no Kuzu)
-                build_vector_index(
+                _step_with_timeout(
+                    "embeddings", tc.embeddings,
+                    build_vector_index,
                     None, repo_path, vectors_path, rebuild,
                     progress_cb=lambda msg, pct: _step_progress(3, total_steps, msg, pct),
                 )
@@ -788,9 +842,28 @@ class MCPToolsRegistry:
                 ]
             return result
 
+        except _PipelineTimeout as toe:
+            logger.warning(f"Pipeline step timed out: {toe}")
+            raise ToolError({
+                "error": str(toe),
+                "error_code": "STEP_TIMEOUT",
+                "status": "timeout",
+                "step": toe.step_name,
+                "elapsed_seconds": toe.elapsed,
+            }) from toe
+        except ToolError:
+            raise
         except Exception as exc:
             logger.exception("Pipeline failed")
-            raise ToolError({"error": str(exc), "status": "error"}) from exc
+            raise ToolError({"error": str(exc), "error_code": "PIPELINE_ERROR", "status": "error"}) from exc
+
+
+class _PipelineTimeout(Exception):
+    """Raised when a pipeline step exceeds its timeout."""
+    def __init__(self, step_name: str, elapsed: float):
+        self.step_name = step_name
+        self.elapsed = elapsed
+        super().__init__(f"Step '{step_name}' timed out after {elapsed:.0f}s")
 
     # -------------------------------------------------------------------------
     # get_repository_info (merged: active repo metadata + graph statistics)

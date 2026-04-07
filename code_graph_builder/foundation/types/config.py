@@ -265,6 +265,42 @@ class EmbeddingConfig:
         }
 
 
+@dataclass
+class TimeoutConfig:
+    """Timeout settings for the indexing pipeline.
+
+    Each value is in seconds.  ``0`` means "no timeout" for that tier.
+    Values can be overridden via environment variables prefixed with
+    ``CGB_TIMEOUT_`` (e.g. ``CGB_TIMEOUT_PIPELINE=3600``).
+    """
+    pipeline_total: float = 1800.0    # 30 min overall
+    graph_build: float = 600.0        # 10 min
+    api_docs: float = 120.0           # 2 min
+    descriptions: float = 600.0       # 10 min
+    embeddings: float = 300.0         # 5 min
+
+    @classmethod
+    def from_env(cls) -> TimeoutConfig:
+        """Create a config, overriding defaults from environment variables."""
+        import os
+        cfg = cls()
+        _map = {
+            "CGB_TIMEOUT_PIPELINE": "pipeline_total",
+            "CGB_TIMEOUT_GRAPH_BUILD": "graph_build",
+            "CGB_TIMEOUT_API_DOCS": "api_docs",
+            "CGB_TIMEOUT_DESCRIPTIONS": "descriptions",
+            "CGB_TIMEOUT_EMBEDDINGS": "embeddings",
+        }
+        for env_key, attr in _map.items():
+            val = os.environ.get(env_key)
+            if val:
+                try:
+                    setattr(cfg, attr, float(val))
+                except ValueError:
+                    pass
+        return cfg
+
+
 # Type alias for backend configs
 BackendConfig = KuzuConfig | MemgraphConfig | MemoryConfig | dict[str, Any]
 
