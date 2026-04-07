@@ -33,6 +33,7 @@ from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedd
 from code_graph_builder.domains.core.embedding.vector_store import MemoryVectorStore, VectorRecord
 from code_graph_builder.domains.upper.rag.cypher_generator import CypherGenerator
 from code_graph_builder.domains.upper.rag.llm_backend import create_llm_backend
+from code_graph_builder.foundation.services.git_service import GitChangeDetector as _GCD
 from code_graph_builder.foundation.services.kuzu_service import KuzuIngestor
 from code_graph_builder.domains.core.search.semantic_search import SemanticSearchService
 from code_graph_builder.entrypoints.mcp.file_editor import FileEditor
@@ -255,6 +256,13 @@ class MCPToolsRegistry:
         """Raise :class:`ToolError` when no repository path is set."""
         if self._active_repo_path is None:
             raise ToolError("No repository path set. Call initialize_repository first.")
+
+    @property
+    def active_state(self) -> tuple[Path, Path] | None:
+        """Return (repo_path, artifact_dir) for the currently active repo, or None."""
+        if self._active_repo_path is not None and self._active_artifact_dir is not None:
+            return self._active_repo_path, self._active_artifact_dir
+        return None
 
     def tools(self) -> list[ToolDefinition]:
         defs: list[ToolDefinition] = [
@@ -762,7 +770,8 @@ class MCPToolsRegistry:
 
             #
             final_validation = validate_api_docs(artifact_dir)
-            save_meta(artifact_dir, repo_path, 0)
+            _head = _GCD().get_current_head(repo_path)
+            save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head)
             self._set_active(artifact_dir)
             self._load_services(artifact_dir)
 
@@ -1643,7 +1652,8 @@ class MCPToolsRegistry:
                     progress_cb=progress_cb,
                 )
 
-            save_meta(artifact_dir, repo_path, page_count)
+            _head = _GCD().get_current_head(repo_path)
+            save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
 
             return {
                 "status": "success",
@@ -1721,7 +1731,8 @@ class MCPToolsRegistry:
                 meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
                 page_count = meta.get("wiki_page_count", 0)
 
-            save_meta(artifact_dir, repo_path, page_count)
+            _head = _GCD().get_current_head(repo_path)
+            save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
 
             return {
                 "status": "success",
@@ -1795,7 +1806,8 @@ class MCPToolsRegistry:
             with ro_ingestor:
                 stats = ro_ingestor.get_statistics()
 
-            save_meta(artifact_dir, repo_path, 0)
+            _head = _GCD().get_current_head(repo_path)
+            save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head)
             self._set_active(artifact_dir)
             self._load_services(artifact_dir)
 

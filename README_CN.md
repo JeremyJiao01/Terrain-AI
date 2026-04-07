@@ -56,7 +56,7 @@ npx code-graph-builder@latest --server
 ### 通过 pip 安装
 
 ```bash
-pip install "code-graph-builder[treesitter-c,semantic]"
+pip install code-graph-builder
 cgb-mcp  # 启动 MCP 服务器
 ```
 
@@ -96,6 +96,18 @@ Windows 平台使用：
 }
 ```
 
+## 架构
+
+项目采用 5 层 harness 架构：
+
+```
+L4  entrypoints/         MCP 服务器、CLI 命令行
+L3  domains/upper/       API 文档、RAG、引导、调用链追踪
+L2  domains/core/        图谱、向量嵌入、搜索
+L1  foundation/          解析器、服务、工具
+L0  foundation/types/    常量、模型、类型定义
+```
+
 ## 流水线
 
 | 步骤 | 内容 | 输入 | 输出 |
@@ -125,7 +137,7 @@ generate_wiki          →  独立功能（不在主流水线中）
 
 ## MCP 工具
 
-### 主要工具（10 个暴露）
+### 主要工具（13 个暴露）
 
 #### 仓库管理
 | 工具 | 说明 |
@@ -139,16 +151,27 @@ generate_wiki          →  独立功能（不在主流水线中）
 #### 代码搜索与文档
 | 工具 | 说明 |
 |------|------|
-| `find_api` | 语义搜索 + API 文档（主要搜索工具） |
+| `find_api` | 混合语义 + 关键词搜索，附带 API 文档（主要搜索工具） |
 | `list_api_docs` | 浏览 L1 模块索引或 L2 模块详情 |
 | `get_api_doc` | L3 函数详情：签名、调用树、使用示例、源码 |
 | `generate_api_docs` | 生成/更新 API 文档（full / resume / enhance） |
-| `get_config` | 显示服务器配置和服务可用性 |
 
-### 隐藏工具（11 个可通过 handler 访问）
+#### 调用图分析
+| 工具 | 说明 |
+|------|------|
+| `find_callers` | 查找所有调用指定函数的函数（无需 LLM） |
+| `trace_call_chain` | BFS 向上调用链追踪，发现入口点 |
+
+#### 配置与维护
+| 工具 | 说明 |
+|------|------|
+| `get_config` | 显示服务器配置和服务可用性 |
+| `rebuild_embeddings` | 构建或重建向量嵌入 |
+
+### 隐藏工具（可通过 handler 访问）
 
 这些工具已被上述 API 文档工作流取代，但仍可访问：
-`query_code_graph`、`get_code_snippet`、`semantic_search`、`locate_function`、`list_api_interfaces`、`list_wiki_pages`、`get_wiki_page`、`generate_wiki`、`rebuild_embeddings`、`build_graph`、`prepare_guidance`
+`query_code_graph`、`get_code_snippet`、`semantic_search`、`locate_function`、`list_api_interfaces`、`list_wiki_pages`、`get_wiki_page`、`generate_wiki`、`build_graph`、`prepare_guidance`
 
 ## API 文档格式
 
@@ -207,6 +230,7 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 - 从签名推断内存所有权
 - 头文件/实现文件分离
 - 通过 `#include` 头文件映射实现跨文件函数调用解析
+- 函数指针追踪与间接调用解析
 - 支持 GB2312/GBK 编码的源文件
 
 ## 支持的语言
@@ -262,10 +286,10 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 ### 从 PyPI 安装
 
 ```bash
-# 仅核心功能（图谱构建）
+# 核心功能（含 C/C++、Python、JS/TS 语法支持）
 pip install code-graph-builder
 
-# 包含所有语言语法
+# 包含所有语言语法（Rust、Go、Java、Scala、Lua）
 pip install "code-graph-builder[treesitter-full]"
 ```
 
@@ -309,10 +333,10 @@ pip install -e ".[treesitter-full]"
 python3 -m pytest code_graph_builder/tests/ -v
 
 # 集成测试（需要 tinycc 仓库在 ../tinycc）
-python3 -m pytest code_graph_builder/tests/test_step1_graph_build.py -v   # ~3 分钟
-python3 -m pytest code_graph_builder/tests/test_step2_api_docs.py -v      # ~3 分钟
-python3 -m pytest code_graph_builder/tests/test_step3_embedding.py -v     # ~27 分钟（API 调用）
-python3 -m pytest code_graph_builder/tests/test_api_find_integration.py -v # ~47 分钟（完整流水线）
+python3 -m pytest code_graph_builder/tests/domains/core/test_graph_build.py -v      # ~3 分钟
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_docs.py -v        # ~3 分钟
+python3 -m pytest code_graph_builder/tests/domains/core/test_step3_embedding.py -v  # ~27 分钟（API 调用）
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_find_integration.py -v  # ~47 分钟（完整流水线）
 ```
 
 ## 许可证

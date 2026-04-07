@@ -1,8 +1,8 @@
 # Code Graph Builder
 
-English | [中文](README_CN.md)
+English | [Chinese / CN](README_CN.md)
 
-Build a knowledge graph from any codebase, generate API documentation, and search code semantically — all accessible as an MCP server for AI coding assistants.
+Build a knowledge graph from any codebase, generate API documentation, and search code semantically -- all accessible as an MCP server for AI coding assistants.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ Build a knowledge graph from any codebase, generate API documentation, and searc
 Your Code Repository
     |
     v
-[Tree-sitter AST Parsing]  ──>  Knowledge Graph (Kuzu)
+[Tree-sitter AST Parsing]  -->  Knowledge Graph (Kuzu)
     |                               |
     |                               v
     |                        API Documentation (Markdown)
@@ -19,7 +19,7 @@ Your Code Repository
     |                        Vector Embeddings
     |                               |
     v                               v
-MCP Server  <──────────────  Semantic Search
+MCP Server  <--------------  Semantic Search
     |
     v
 Claude Code / Cursor / Windsurf / Any MCP Client
@@ -28,7 +28,7 @@ Claude Code / Cursor / Windsurf / Any MCP Client
 **Core workflow for AI agents:**
 
 ```
-initialize_repository  →  find_api  →  get_api_doc
+initialize_repository  ->  find_api  ->  get_api_doc
 ```
 
 1. Index the codebase once
@@ -40,7 +40,7 @@ initialize_repository  →  find_api  →  get_api_doc
 ### Install via npx (recommended)
 
 ```bash
-# First run — interactive setup wizard
+# First run --interactive setup wizard
 npx code-graph-builder@latest --setup
 
 # Start MCP server
@@ -56,7 +56,7 @@ The setup wizard:
 ### Install via pip
 
 ```bash
-pip install "code-graph-builder[treesitter-c,semantic]"
+pip install code-graph-builder
 cgb-mcp  # Start MCP server
 ```
 
@@ -96,6 +96,18 @@ On Windows, use:
 }
 ```
 
+## Architecture
+
+The project follows a 5-layer harness architecture:
+
+```
+L4  entrypoints/         MCP server, CLI
+L3  domains/upper/       apidoc, rag, guidance, calltrace
+L2  domains/core/        graph, embedding, search
+L1  foundation/          parsers, services, utils
+L0  foundation/types/    constants, models, type definitions
+```
+
 ## Pipeline
 
 | Step | What | Input | Output |
@@ -108,11 +120,11 @@ On Windows, use:
 Steps 1-3 run automatically via `initialize_repository`. Wiki generation is available separately via `generate_wiki`.
 
 ```
-initialize_repository  →  Steps 1-3 (full pipeline)
-build_graph            →  Step 1 only
-generate_api_docs      →  Step 2 + 2b (modes: full / resume / enhance)
-rebuild_embeddings     →  Step 3
-generate_wiki          →  Separate (not in main pipeline)
+initialize_repository  ->  Steps 1-3 (full pipeline)
+build_graph            ->  Step 1 only
+generate_api_docs      ->  Step 2 + 2b (modes: full / resume / enhance)
+rebuild_embeddings     ->  Step 3
+generate_wiki          ->  Separate (not in main pipeline)
 ```
 
 ### API Doc Generation Modes
@@ -125,7 +137,7 @@ generate_wiki          →  Separate (not in main pipeline)
 
 ## MCP Tools
 
-### Primary Tools (10 exposed)
+### Primary Tools (13 exposed)
 
 #### Repository Management
 | Tool | Description |
@@ -139,16 +151,27 @@ generate_wiki          →  Separate (not in main pipeline)
 #### Code Search & Documentation
 | Tool | Description |
 |------|-------------|
-| `find_api` | Semantic search + API doc (primary search tool) |
+| `find_api` | Hybrid semantic + keyword search with API doc (primary search tool) |
 | `list_api_docs` | Browse L1 module index or L2 module details |
 | `get_api_doc` | L3 function detail: signature, call tree, usage examples, source |
 | `generate_api_docs` | Generate/update API docs (full / resume / enhance) |
-| `get_config` | Show server configuration and service availability |
 
-### Hidden Tools (11 available via handler)
+#### Call Graph Analysis
+| Tool | Description |
+|------|-------------|
+| `find_callers` | Find all functions that call a specific function (no LLM required) |
+| `trace_call_chain` | BFS upward call chain trace with entry point discovery |
+
+#### Configuration & Maintenance
+| Tool | Description |
+|------|-------------|
+| `get_config` | Show server configuration and service availability |
+| `rebuild_embeddings` | Build or rebuild vector embeddings |
+
+### Hidden Tools (available via handler)
 
 These tools are superseded by the API-doc-based workflow above but remain accessible:
-`query_code_graph`, `get_code_snippet`, `semantic_search`, `locate_function`, `list_api_interfaces`, `list_wiki_pages`, `get_wiki_page`, `generate_wiki`, `rebuild_embeddings`, `build_graph`, `prepare_guidance`
+`query_code_graph`, `get_code_snippet`, `semantic_search`, `locate_function`, `list_api_interfaces`, `list_wiki_pages`, `get_wiki_page`, `generate_wiki`, `build_graph`, `prepare_guidance`
 
 ## API Documentation Format
 
@@ -165,22 +188,22 @@ Generated docs are optimized for both AI agent reading and vector retrieval.
 - Return: `int`
 - Visibility: static | Header: tccgen.h
 - Location: tccgen.c:139-280
-- Module: tinycc.tccgen — C code generator
+- Module: tinycc.tccgen --C code generator
 
 ## Call Tree
 
 parse_btype
-├── expr_const           [static]
-├── parse_btype_qualify   [static]
-├── struct_decl           [static]
-│   ├── expect
-│   └── next
-└── parse_attribute       [static]
+|-- expr_const           [static]
+|-- parse_btype_qualify   [static]
+|-- struct_decl           [static]
+|   |-- expect
+|   `-- next
+`-- parse_attribute       [static]
 
 ## Called by (5)
 
-- type_decl (tinycc.tccgen) → tccgen.c:1200
-- post_type (tinycc.tccgen) → tccgen.c:1350
+- type_decl (tinycc.tccgen) -> tccgen.c:1200
+- post_type (tinycc.tccgen) -> tccgen.c:1350
 
 ## Parameters & Memory
 
@@ -191,11 +214,11 @@ parse_btype
 
 ## Implementation
 
-​```c
+```c
 int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
     // ... source code embedded
 }
-​```
+```
 ```
 
 ### C/C++ Specific Features
@@ -207,6 +230,7 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 - Memory ownership inference from signatures
 - Header/implementation file split
 - Cross-file function call resolution via `#include` header mapping
+- Function pointer tracking and indirect call resolution
 - GB2312/GBK encoding support for source files
 
 ## Supported Languages
@@ -262,10 +286,10 @@ int parse_btype(CType *type, AttributeDef *ad, int ignore_label) {
 ### Install from PyPI
 
 ```bash
-# Core only (graph building)
+# Core (includes C/C++, Python, JS/TS grammars)
 pip install code-graph-builder
 
-# With all language grammars
+# With all language grammars (Rust, Go, Java, Scala, Lua)
 pip install "code-graph-builder[treesitter-full]"
 ```
 
@@ -309,10 +333,10 @@ pip install -e ".[treesitter-full]"
 python3 -m pytest code_graph_builder/tests/ -v
 
 # Integration tests (requires tinycc repo at ../tinycc)
-python3 -m pytest code_graph_builder/tests/test_step1_graph_build.py -v   # ~3 min
-python3 -m pytest code_graph_builder/tests/test_step2_api_docs.py -v      # ~3 min
-python3 -m pytest code_graph_builder/tests/test_step3_embedding.py -v     # ~27 min (API calls)
-python3 -m pytest code_graph_builder/tests/test_api_find_integration.py -v # ~47 min (full pipeline)
+python3 -m pytest code_graph_builder/tests/domains/core/test_graph_build.py -v      # ~3 min
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_docs.py -v        # ~3 min
+python3 -m pytest code_graph_builder/tests/domains/core/test_step3_embedding.py -v  # ~27 min (API calls)
+python3 -m pytest code_graph_builder/tests/domains/upper/test_api_find_integration.py -v  # ~47 min (full pipeline)
 ```
 
 ## License

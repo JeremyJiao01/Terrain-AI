@@ -1377,7 +1377,12 @@ def run_wiki_generation(
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
-def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None:
+def save_meta(
+    artifact_dir: Path,
+    repo_path: Path,
+    wiki_page_count: int,
+    last_indexed_commit: str | None = None,
+) -> None:
     """Save or update artifact metadata.
 
     Preserves existing fields (like step-completion flags) and updates
@@ -1399,8 +1404,8 @@ def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None
 
     meta = {
         **existing,
-        "repo_path": str(repo_path),
-        "repo_name": repo_path.name,
+        "repo_path": repo_path.as_posix(),
+        "repo_name": repo_path.name or "root",
         "indexed_at": datetime.now().isoformat(),
         "wiki_page_count": wiki_page_count,
         "steps": {
@@ -1409,6 +1414,7 @@ def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None
             "embeddings": has_embeddings,
             "wiki": has_wiki,
         },
+        **({} if last_indexed_commit is None else {"last_indexed_commit": last_indexed_commit}),
     }
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
@@ -1416,5 +1422,9 @@ def save_meta(artifact_dir: Path, repo_path: Path, wiki_page_count: int) -> None
 def artifact_dir_for(workspace: Path, repo_path: Path) -> Path:
     import hashlib
 
-    h = hashlib.md5(str(repo_path).encode()).hexdigest()[:8]
-    return workspace / f"{repo_path.name}_{h}"
+    # Use POSIX path for hashing so the same repo gets the same hash
+    # regardless of OS (Windows backslash vs Unix forward slash).
+    posix_path = repo_path.as_posix()
+    h = hashlib.md5(posix_path.encode()).hexdigest()[:8]
+    name = repo_path.name or repo_path.anchor.replace("\\", "").replace("/", "").replace(":", "") or "root"
+    return workspace / f"{name}_{h}"

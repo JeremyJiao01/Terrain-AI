@@ -445,12 +445,12 @@ class KuzuIngestor:
                     """
                     self._conn.execute(cypher)
                 except Exception as e:
-                    logger.warning(
+                    logger.error(
                         f"Failed to create {label} node "
                         f"(qn={qualified_name!r}, name={name!r}): {e}"
                     )
 
-        logger.debug(f"Flushed {len(self.node_buffer)} nodes")
+        logger.info(f"Flushed {len(self.node_buffer)} nodes")
         self.node_buffer = []
 
     def flush_relationships(self) -> None:
