@@ -265,6 +265,10 @@ def create_llm_client(
     """
     import os
 
+    # Refresh env from .env files so config changes take effect immediately
+    from code_graph_builder.foundation.utils.settings import refresh_env
+    refresh_env()
+
     # Provider detection order: (key_env, url_env, model_env, default_url, default_model)
     _providers = [
         ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "https://api.openai.com/v1", "gpt-4o"),

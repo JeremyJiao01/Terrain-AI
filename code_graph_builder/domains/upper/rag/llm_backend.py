@@ -186,6 +186,10 @@ def create_llm_backend(**kwargs: Any) -> LLMBackend:
     Any of these can be overridden by passing explicit keyword arguments
     (``api_key``, ``base_url``, ``model``).
     """
+    # Refresh env from .env files so config changes take effect immediately
+    from code_graph_builder.foundation.utils.settings import refresh_env
+    refresh_env()
+
     explicit_key = kwargs.pop("api_key", None)
     explicit_url = kwargs.pop("base_url", None)
     explicit_model = kwargs.pop("model", None)

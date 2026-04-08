@@ -547,6 +547,10 @@ def create_embedder(
     Returns:
         BaseEmbedder instance.
     """
+    # Refresh env from .env files so config changes take effect immediately
+    from code_graph_builder.foundation.utils.settings import refresh_env
+    refresh_env()
+
     if use_dummy:
         return DummyEmbedder()
 

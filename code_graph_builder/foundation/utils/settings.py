@@ -75,6 +75,46 @@ def load_settings(path: Path | None = None) -> dict:
     return data
 
 
+def refresh_env() -> None:
+    """Lightweight re-read of ``.env`` files and ``settings.json``.
+
+    This is designed to be called *before* each LLM / embedding factory
+    invocation so that any config changes made via ``cgb config`` or by
+    editing the ``.env`` file take effect immediately without restarting
+    the process.
+
+    The function is intentionally cheap: it only touches the filesystem
+    when the ``.env`` file's mtime has changed since the last refresh.
+    """
+    ws_env = Path(
+        os.environ.get("CGB_WORKSPACE", Path.home() / ".code-graph-builder")
+    ).expanduser() / ".env"
+
+    # Fast path: skip if the .env file hasn't been modified since last check
+    try:
+        mtime = ws_env.stat().st_mtime if ws_env.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+
+    last = getattr(refresh_env, "_last_mtime", -1.0)
+    if mtime == last:
+        return  # No change — nothing to do
+    refresh_env._last_mtime = mtime  # type: ignore[attr-defined]
+
+    # Re-read .env with override so changed values take effect
+    try:
+        from dotenv import load_dotenv
+        if ws_env.exists():
+            load_dotenv(ws_env, override=True)
+        # Also pick up local .env (CWD) if present
+        load_dotenv(override=True)
+    except Exception:
+        pass  # dotenv not installed or read error — ignore silently
+
+    # Re-read settings.json as fallback (setdefault — won't overwrite .env)
+    load_settings()
+
+
 def reload_env(workspace: Path | None = None) -> dict[str, list[str]]:
     """Hot-reload configuration from ``.env`` files and ``settings.json``.
 
