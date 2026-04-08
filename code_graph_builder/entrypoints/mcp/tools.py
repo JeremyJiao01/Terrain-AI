@@ -158,6 +158,14 @@ def _load_vector_store(vectors_path: Path) -> MemoryVectorStore:
     )
 
 
+class _PipelineTimeout(Exception):
+    """Raised when a pipeline step exceeds its timeout."""
+    def __init__(self, step_name: str, elapsed: float):
+        self.step_name = step_name
+        self.elapsed = elapsed
+        super().__init__(f"Step '{step_name}' timed out after {elapsed:.0f}s")
+
+
 class MCPToolsRegistry:
     """Registry that manages workspace-based repo services and tool handlers."""
 
@@ -903,13 +911,6 @@ class MCPToolsRegistry:
             logger.exception("Pipeline failed")
             raise ToolError({"error": str(exc), "error_code": "PIPELINE_ERROR", "status": "error"}) from exc
 
-
-class _PipelineTimeout(Exception):
-    """Raised when a pipeline step exceeds its timeout."""
-    def __init__(self, step_name: str, elapsed: float):
-        self.step_name = step_name
-        self.elapsed = elapsed
-        super().__init__(f"Step '{step_name}' timed out after {elapsed:.0f}s")
 
     # -------------------------------------------------------------------------
     # get_repository_info (merged: active repo metadata + graph statistics)

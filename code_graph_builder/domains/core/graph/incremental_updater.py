@@ -161,6 +161,13 @@ class IncrementalUpdater:
             graph_updater._process_function_calls()
 
             ingestor.flush_all()
+        # Connection closed here — release all references so Windows
+        # mandatory file locks on Kuzu DB files are freed immediately.
+        if hasattr(builder, '_ingestor'):
+            builder._ingestor = None
+        del builder
+        import gc
+        gc.collect()
 
         duration_ms = (time.monotonic() - t0) * 1000
         result = IncrementalResult(

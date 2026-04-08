@@ -74,18 +74,8 @@ logger.add(
     format=_log_format,
 )
 
-# Also write to a plain .txt file for easy inspection
-_debug_txt = _ws.expanduser() / "debug.txt"
-logger.add(
-    str(_debug_txt),
-    level="DEBUG" if _debug_enabled else "WARNING",
-    rotation="10 MB",
-    retention="3 days",
-    format=_log_format,
-)
-
 if _debug_enabled:
-    logger.debug("CGB_DEBUG enabled, logging to {} and {}", _debug_log, _debug_txt)
+    logger.debug("CGB_DEBUG enabled, logging to {}", _debug_log)
 
 from code_graph_builder.entrypoints.mcp.tools import MCPToolsRegistry, ToolError
 
@@ -99,6 +89,34 @@ _cached_head: str | None = None
 
 INCREMENTAL_FILE_LIMIT: int = 50
 """Fall back to full rebuild if more than this many files changed."""
+
+
+def _cascade_api_docs(repo_path: Path, db_path: Path, artifact_dir: Path) -> None:
+    """Regenerate API docs using a temporary read-only Kuzu connection.
+
+    Opens the connection, runs queries, and closes immediately — no lingering
+    file locks that would block subsequent operations on Windows.
+    """
+    import gc
+    from code_graph_builder.foundation.services.kuzu_service import KuzuIngestor
+    from code_graph_builder.entrypoints.mcp.pipeline import (
+        generate_api_docs_step,
+        _FUNC_DOC_QUERY,
+        _TYPE_DOC_QUERY_CLASS,
+        _TYPE_DOC_QUERY_TYPE,
+        _CALLS_QUERY,
+    )
+    from code_graph_builder.domains.upper.apidoc.api_doc_generator import generate_api_docs
+
+    # Use a read-only connection, closed immediately after queries
+    with KuzuIngestor(db_path, read_only=True) as ingestor:
+        func_rows = ingestor.query(_FUNC_DOC_QUERY)
+        type_rows = ingestor.query(_TYPE_DOC_QUERY_CLASS) + ingestor.query(_TYPE_DOC_QUERY_TYPE)
+        call_rows = ingestor.query(_CALLS_QUERY)
+    # Connection is closed here — file locks released
+    gc.collect()
+
+    generate_api_docs(func_rows, type_rows, call_rows, artifact_dir, repo_path=repo_path)
 
 
 async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
@@ -184,29 +202,26 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
             result.files_reindexed, result.callers_reindexed, result.duration_ms,
         )
 
-        # Cascade: regenerate API docs and vector index
+        # Cascade: regenerate API docs and vector index.
+        # IMPORTANT: Each step creates its own temporary Kuzu connection
+        # and releases it before the next step starts.  On Windows, Kuzu
+        # holds mandatory file locks — overlapping connections cause deadlock.
         from code_graph_builder.entrypoints.mcp.pipeline import (
             generate_api_docs_step,
             build_vector_index,
         )
-        from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
-        cascade_builder = CodeGraphBuilder(
-            repo_path=str(repo_path),
-            backend="kuzu",
-            backend_config={"db_path": str(db_path), "batch_size": 1000},
-        )
+
         if (artifact_dir / "api_docs").exists():
             try:
                 await asyncio.to_thread(
-                    generate_api_docs_step, cascade_builder, artifact_dir,
-                    rebuild=True, repo_path=repo_path
+                    _cascade_api_docs, repo_path, db_path, artifact_dir,
                 )
             except Exception as e:
                 logger.warning("API docs update failed: {}", e)
         if vectors_path.exists():
             try:
                 await asyncio.to_thread(
-                    build_vector_index, cascade_builder, repo_path, vectors_path,
+                    build_vector_index, None, repo_path, vectors_path,
                     rebuild=True
                 )
             except Exception as e:

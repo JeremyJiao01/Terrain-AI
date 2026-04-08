@@ -1,6 +1,6 @@
 {
   "name": "code-graph-builder-dev",
-  "version": "0.32.0",
+  "version": "0.34.0",
   "private": true,
   "description": "Local development wrapper for code-graph-builder",
   "bin": {
