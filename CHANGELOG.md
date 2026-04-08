@@ -2,6 +2,40 @@
 
 ---
 
+## [0.41.0] — 2026-04-08
+
+### Changed
+- `cgb index` no longer generates wiki by default; add `--wiki` flag to opt-in
+- `cgb rebuild` skips wiki by default; add `--wiki` flag or use `--step wiki`
+- Hide `initialize_repository` MCP tool from clients; users should index via `cgb index`
+- All MCP error messages now reference `cgb index <path>` instead of `initialize_repository`
+
+### Fixed
+- Arrow-key menu rendering (`cgb config`, `cgb repo`) — initial render now runs inside `tty.setraw()` so `\033[{N}A` cursor-up line count is consistent between initial and subsequent draws; raw mode uses explicit `\r\n` (CR+LF) since OPOST/ONLCR is disabled
+- LLM client: defensive parsing for null message/content in API responses; surface API-level errors returned with HTTP 200; handle MiniMax-style `base_resp` error codes
+
+### Added
+- `cgb index` prompts for custom display name; `cgb repo` offers rename after switch
+- `save_meta()` accepts optional `repo_name`, preserves custom names across re-index
+
+---
+
+### 变更
+- `cgb index` 默认不再生成 wiki；通过 `--wiki` 标志启用
+- `cgb rebuild` 默认跳过 wiki；通过 `--wiki` 标志或 `--step wiki` 启用
+- 隐藏 `initialize_repository` MCP 工具；用户应通过 `cgb index` 索引
+- 所有 MCP 错误提示现在引用 `cgb index <path>` 而非 `initialize_repository`
+
+### 修复
+- 箭头键菜单渲染（`cgb config`、`cgb repo`）— 初始渲染现在在 `tty.setraw()` 内执行，确保 `\033[{N}A` 光标上移行数在初始和后续绘制间一致；raw 模式使用显式 `\r\n`（CR+LF），因为 OPOST/ONLCR 已禁用
+- LLM 客户端：对 API 响应中的 null message/content 进行防御性解析；暴露 HTTP 200 返回的 API 级别错误；处理 MiniMax 风格的 `base_resp` 错误码
+
+### 新增
+- `cgb index` 提示输入自定义显示名称；`cgb repo` 切换后可重命名
+- `save_meta()` 支持可选 `repo_name` 参数，重新索引时保留自定义名称
+
+---
+
 ## [0.37.0] — 2026-04-08
 
 ### Added
