@@ -417,20 +417,19 @@ def _interactive_select(repos: list[dict]) -> int | None:
     Falls back to numbered input when neither raw-mode nor ANSI are available.
     """
     current = next((i for i, r in enumerate(repos) if r["active"]), 0)
+    drawn = False
 
     def render(selected: int) -> None:
+        nonlocal drawn
         if _ANSI:
-            if getattr(render, "_drawn", False):
-                sys.stdout.write("\033[u")  # restore saved cursor position
-            else:
-                sys.stdout.write("\033[s")  # save cursor position before first draw
-            render._drawn = True  # type: ignore[attr-defined]
+            if drawn:
+                sys.stdout.write(f"\033[{len(repos)}A")
             for i, r in enumerate(repos):
                 marker = _c("1;32", "▶") if i == selected else " "
                 active_tag = f"  {_c('33', '(active)')}" if r["active"] else ""
                 sys.stdout.write(f"\r\033[2K  {marker} {r['name']}{active_tag}\r\n")
+            drawn = True
         else:
-            # No cursor movement — reprint with a plain marker
             for i, r in enumerate(repos):
                 marker = "> " if i == selected else "  "
                 active_tag = "  (active)" if r["active"] else ""
@@ -438,12 +437,11 @@ def _interactive_select(repos: list[dict]) -> int | None:
         sys.stdout.flush()
 
     sys.stdout.write("\n")
-    render(current)
 
     if platform.system() == "Windows":
         try:
             import msvcrt  # type: ignore[import]
-
+            render(current)
             while True:
                 ch = msvcrt.getwch()
                 if ch in ("\r", "\n"):
@@ -462,9 +460,8 @@ def _interactive_select(repos: list[dict]) -> int | None:
                         print()  # blank line between redraws in plain mode
                     render(current)
         except ImportError:
-            # msvcrt unavailable — fall back to numbered selection
             return _numbered_select(repos)
-    else:
+    elif sys.stdin.isatty() and _ANSI:
         try:
             import tty
             import termios
@@ -473,6 +470,7 @@ def _interactive_select(repos: list[dict]) -> int | None:
             old = termios.tcgetattr(fd)
             try:
                 tty.setraw(fd)
+                render(current)       # initial render inside raw mode
                 while True:
                     ch = sys.stdin.read(1)
                     if ch in ("\r", "\n"):
@@ -494,6 +492,8 @@ def _interactive_select(repos: list[dict]) -> int | None:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
         except (ImportError, AttributeError):
             return _numbered_select(repos)
+    else:
+        return _numbered_select(repos)
 
     return current
 
@@ -677,28 +677,30 @@ _T_WARN   = "⚠"
 def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
     """Arrow-key single-select menu.  Returns index or None on Ctrl-C/q."""
     cursor = 0
+    drawn = False
 
-    def render(initial: bool = False) -> None:
-        if _ANSI:
-            # Save cursor before first draw; restore before each redraw.
-            # This avoids counting lines (which breaks across cooked/raw mode).
-            sys.stdout.write("\033[s" if initial else "\033[u")
+    def _render_ansi() -> None:
+        """Render menu items using ANSI escapes.  All calls MUST happen in the
+        same terminal mode (raw) so that ``\\033[{N}A`` line-counting is
+        consistent.  Each line uses ``\\r\\n`` (explicit CR+LF) because raw
+        mode disables ONLCR."""
+        nonlocal drawn
+        if drawn:
+            sys.stdout.write(f"\033[{len(options)}A")
         for i, opt in enumerate(options):
-            if _ANSI:
-                marker = _c("1;36", "◉") if i == cursor else _c("2", "○")
-                label = _c("1;36", opt) if i == cursor else opt
-                sys.stdout.write(f"\r\033[2K{prefix}{marker} {label}\r\n")
-            else:
-                marker = "> " if i == cursor else "  "
-                print(f"{prefix}{marker}{opt}")
+            marker = _c("1;36", "◉") if i == cursor else _c("2", "○")
+            label = _c("1;36", opt) if i == cursor else opt
+            sys.stdout.write(f"\r\033[2K{prefix}{marker} {label}\r\n")
+        drawn = True
         sys.stdout.flush()
 
-    render(initial=True)
+    # ── Try interactive raw-mode input ────────────────────────────────
+    raw_ok = sys.stdin.isatty() and _ANSI
 
-    raw_ok = sys.stdin.isatty()
     if raw_ok and platform.system() == "Windows":
         try:
             import msvcrt
+            _render_ansi()          # initial render (Windows: no OPOST issue)
             while True:
                 ch = msvcrt.getwch()
                 if ch in ("\r", "\n"):
@@ -713,10 +715,10 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
                         cursor = (cursor - 1) % len(options)
                     elif ch2 == "P":
                         cursor = (cursor + 1) % len(options)
-                    render()
-            raw_ok = False  # reached only if loop breaks unexpectedly
+                    _render_ansi()
         except ImportError:
             raw_ok = False
+
     elif raw_ok:
         try:
             import tty, termios
@@ -724,6 +726,7 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
             old = termios.tcgetattr(fd)
             try:
                 tty.setraw(fd)
+                _render_ansi()      # initial render *inside* raw mode
                 while True:
                     ch = sys.stdin.read(1)
                     if ch in ("\r", "\n"):
@@ -740,7 +743,7 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
                             cursor = (cursor - 1) % len(options)
                         elif seq == "[B":
                             cursor = (cursor + 1) % len(options)
-                        render()
+                        _render_ansi()
             finally:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
         except (ImportError, AttributeError):
@@ -748,7 +751,6 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
 
     if not raw_ok:
         # Fallback: numbered input
-        print()
         for i, opt in enumerate(options):
             print(f"{prefix}  {i + 1}) {opt}")
         try:
@@ -758,6 +760,8 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
                 return idx
         except (ValueError, EOFError, KeyboardInterrupt):
             pass
+        return None
+
     return None
 
 
