@@ -1,0 +1,302 @@
+<section class="module" id="module-6" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number" style="font-family:var(--font-display);font-size:var(--text-6xl);font-weight:800;color:var(--color-accent);opacity:0.15;display:block;line-height:1">06</span>
+      <h1 class="module-title" style="font-family:var(--font-display);font-size:var(--text-4xl);font-weight:700;line-height:1.15;margin-bottom:var(--space-3)">MCP 工具使用</h1>
+      <p class="module-subtitle" style="color:var(--color-text-secondary);font-size:var(--text-lg)">13 个工具、stdio 协议、增量同步与工作空间布局</p>
+    </header>
+
+    <div class="module-body">
+
+      <!-- Screen 1: MCP 协议概述 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">MCP：让 Claude 直接调用 CGB 的 13 个工具</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <span class="term" data-definition="MCP（Model Context Protocol）是 Anthropic 定义的开放标准协议，规定 LLM 如何发现和调用外部工具。工具以 JSON Schema 描述参数类型，通信通过 JSON-RPC 2.0 格式收发消息。CGB 实现了 MCP server，这样 Claude Desktop/Claude Code 就能原生调用 CGB 的所有分析能力。">MCP（Model Context Protocol）</span>
+          是 Anthropic 定义的标准，让 LLM 能调用外部工具。CGB 的 MCP server 通过
+          <span class="term" data-definition="stdio（标准输入/输出）通信意味着 MCP server 以子进程方式启动，通过进程的 stdin/stdout 读写 JSON-RPC 消息。不需要开 HTTP 端口，不需要网络配置，进程级别的隔离更安全，也无需担心端口冲突。Claude Desktop 直接 spawn 子进程即可。">stdio 管道</span>
+          通信——没有 HTTP 服务器，没有端口，Claude 直接 spawn 子进程，通过 stdin/stdout 交换
+          <span class="term" data-definition="JSON-RPC 2.0 是一种轻量级远程调用协议，消息格式为 JSON。请求：{jsonrpc:'2.0', method:'tools/call', params:{name:'find_api', arguments:{query:'...'}}, id:1}。响应：{jsonrpc:'2.0', result:{...}, id:1}。MCP 在此基础上定义了 tools/list、tools/call、resources/read 等方法。">JSON-RPC</span>
+          消息。
+        </p>
+
+        <!-- 4 类工具卡片 -->
+        <div class="stagger-children" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--space-3);margin:var(--space-6) 0">
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-4);border-top:3px solid var(--color-actor-5)">
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-2)">仓库管理</div>
+            <div style="font-weight:600;font-size:var(--text-sm);margin-bottom:var(--space-1)">5 个工具</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">初始化、查状态、列表、切换活跃库、链接已有索引</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-4);border-top:3px solid var(--color-actor-2)">
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-2);margin-bottom:var(--space-2)">代码搜索和文档</div>
+            <div style="font-weight:600;font-size:var(--text-sm);margin-bottom:var(--space-1)">4 个工具</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">混合搜索、浏览 L1/L2 文档、获取 L3 函数文档、生成文档</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-4);border-top:3px solid var(--color-actor-3)">
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-3);margin-bottom:var(--space-2)">调用图分析</div>
+            <div style="font-weight:600;font-size:var(--text-sm);margin-bottom:var(--space-1)">2 个工具</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">查找所有调用者、BFS 追踪完整调用链</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-4);border-top:3px solid var(--color-actor-4)">
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-4);margin-bottom:var(--space-2)">配置和维护</div>
+            <div style="font-weight:600;font-size:var(--text-sm);margin-bottom:var(--space-1)">2 个工具</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">查看服务器配置、重建向量索引（不重建图）</div>
+          </div>
+        </div>
+
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">为什么选 stdio 而不是 HTTP？</div>
+          <p style="font-size:var(--text-sm);line-height:1.7">stdio 通信的好处：零网络配置、进程级别权限隔离、没有端口冲突、无需认证 token（调用方本身就是本机进程），非常适合开发者工具场景。CGB 的 MCP server 入口是 <code>cgb-mcp</code>，底层是 <code>entrypoints/mcp/__main__.py</code>，用 Python 的 <code>sys.stdin/stdout</code> 实现完整的 JSON-RPC 2.0 消息循环。</p>
+        </div>
+      </section>
+
+      <!-- Screen 2: 工具调用流程 Group Chat 动画 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">工具调用全过程：Claude → JSON-RPC → 处理 → 响应</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          以 <code>find_api</code> 为例，看一次完整的工具调用链路。Claude 把自然语言问题转成工具调用请求，
+          MCP server 处理后返回结构化的 JSON 响应，Claude 再基于这个上下文组织回答。
+          整个过程对用户透明——Claude 自动决策何时调用哪个工具。
+        </p>
+
+        <div class="chat-window animate-in" id="chat-mcp1" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);overflow:hidden;margin:var(--space-6) 0">
+          <div style="padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--color-border);font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">工具调用过程 — find_api 示例</div>
+          <div style="padding:var(--space-4) var(--space-5);min-height:260px">
+
+            <!-- 1. 用户问题 -->
+            <div class="chat-message" data-sender="User" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:#6B6560;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">U</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:80%"><p style="font-size:var(--text-sm)">这个仓库里 authentication 是怎么实现的？</p></div>
+            </div>
+
+            <!-- 2. Claude 决策 -->
+            <div class="chat-message" data-sender="Claude" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">AI</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-1)">调用工具 find_api</p>
+                <pre style="font-size:var(--text-xs);background:var(--color-bg-code);color:#CDD6F4;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-3);margin:0;white-space:pre-wrap">{"name": "find_api", "arguments": {"query": "authentication login verify token", "top_k": 5}}</pre>
+              </div>
+            </div>
+
+            <!-- 3. JSON-RPC 发送 -->
+            <div class="chat-message" data-sender="MCP" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">MCP</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-1)">收到 JSON-RPC 请求，开始处理</p>
+                <p style="font-size:var(--text-sm)">向量化 query → 余弦相似度搜索 top-20 → 关键词提权重排 → 批量查图补全元数据...</p>
+              </div>
+            </div>
+
+            <!-- 4. 图数据库查询 -->
+            <div class="chat-message" data-sender="Graph" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-3);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">DB</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-1)">Kuzu 图查询返回</p>
+                <pre style="font-size:var(--text-xs);background:var(--color-bg-code);color:#CDD6F4;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-3);margin:0;white-space:pre-wrap">found: auth.verify_token (score: 0.91)
+found: auth.login (score: 0.87)
+found: middleware.require_auth (score: 0.83)
+...5 results with source_code, callers</pre>
+              </div>
+            </div>
+
+            <!-- 5. MCP 返回 JSON -->
+            <div class="chat-message" data-sender="MCP" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">MCP</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-1)">JSON-RPC response → Claude</p>
+                <pre style="font-size:var(--text-xs);background:var(--color-bg-code);color:#A6E3A1;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-3);margin:0;white-space:pre-wrap">{"status":"ok","results":[{"qualified_name":"auth.verify_token","score":0.91,"preview":"def verify_token(token: str) -> Optional[User]:...","file":"auth/tokens.py","line":42},...], "total":5}</pre>
+              </div>
+            </div>
+
+            <!-- 6. Claude 最终回答 -->
+            <div class="chat-message" data-sender="Claude" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-1);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">AI</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">Authentication 主要在 <code>auth/tokens.py</code> 实现。核心函数 <code>verify_token</code>（第42行）负责解析和校验 JWT，<code>login</code> 函数处理凭据验证后颁发 token，<code>middleware.require_auth</code> 是装饰器入口...</p>
+              </div>
+            </div>
+
+            <!-- typing indicator -->
+            <div class="chat-typing" style="display:none;align-items:center;gap:var(--space-3)">
+              <div class="chat-avatar" id="chat-mcp1-typing-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">MCP</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4)"><span>● ● ●</span></div>
+            </div>
+          </div>
+          <div style="padding:var(--space-3) var(--space-5);border-top:1px solid var(--color-border);display:flex;gap:var(--space-2);align-items:center">
+            <button class="chat-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一条</button>
+            <button class="chat-all-btn" style="background:transparent;color:var(--color-accent);border:1px solid var(--color-accent);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">全部显示</button>
+            <button class="chat-reset-btn" style="background:transparent;color:var(--color-text-muted);border:none;cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="chat-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">0 / 6 messages</span>
+          </div>
+        </div>
+
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">工具调用对用户完全透明</div>
+          <p style="font-size:var(--text-sm);line-height:1.7">Claude 自动决定何时、调用哪个工具、传入什么参数——用户只需提问。整个 JSON-RPC 往返通常在 100-500ms 内完成。如果 Claude Desktop 配置了 CGB MCP，每次对话中 Claude 都能访问最新的代码图谱，回答基于真实代码，而不是训练记忆。</p>
+        </div>
+      </section>
+
+      <!-- Screen 3: 13 个工具详解 + Translation Block -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">13 个工具分类详解</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-6)">
+          每个工具都有精心设计的参数接口，Claude 可以通过 <code>tools/list</code> 方法获取完整的 JSON Schema 描述，自动理解如何调用。
+        </p>
+
+        <!-- 工具详细卡片 grid -->
+        <div style="display:grid;gap:var(--space-4);margin-bottom:var(--space-6)">
+
+          <!-- 仓库管理 -->
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden">
+            <div style="padding:var(--space-3) var(--space-5);background:var(--color-actor-5);color:white;font-size:var(--text-sm);font-weight:600">仓库管理（5个）</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0">
+              <div style="padding:var(--space-4) var(--space-5);border-right:1px solid var(--color-border);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-1)">initialize_repository</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">完整索引流程：graph → api-docs → embeddings。支持进度回调，可传入 repo_path（默认当前目录）。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5);border-right:1px solid var(--color-border);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-1)">get_repository_info</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">活跃库快照：节点数 / 关系数 / 文件数 / 上次索引时间，无参数，O(1)。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-1)">list_repositories</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">列出 ~/.code-graph-builder/ 下所有 artifact_dir，含 indexed_at 时间戳。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5);border-right:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-1)">switch_repository</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">切换活跃库：写 active.txt。可传 repo_name 或 artifact_dir 路径。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-5);margin-bottom:var(--space-1)">link_repository</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">链接已有索引到新路径，不重建。适合团队共享同一份索引产物。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 代码搜索 -->
+          <div class="animate-in" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden">
+            <div style="padding:var(--space-3) var(--space-5);background:var(--color-actor-2);color:white;font-size:var(--text-sm);font-weight:600">代码搜索和文档（4个）</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0">
+              <div style="padding:var(--space-4) var(--space-5);border-right:1px solid var(--color-border);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-2);margin-bottom:var(--space-1)">find_api</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">混合搜索（语义向量 + 关键词）。参数：query, top_k。返回匹配函数列表 + score + 源码预览。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-2);margin-bottom:var(--space-1)">list_api_docs</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">浏览 L1/L2 文档层级。可选 module_name；不传则返回所有模块概览。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5);border-right:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-2);margin-bottom:var(--space-1)">get_api_doc</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">获取 L3 函数文档。参数：qualified_name。返回完整文档（含源码、调用树、参数说明）。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-2);margin-bottom:var(--space-1)">generate_api_docs</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">重生成 API 文档。mode：full / resume / enhance。resume 跳过已有文档，增量补全。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 调用图分析 + 配置 -->
+          <div class="animate-in" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+            <div style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden">
+              <div style="padding:var(--space-3) var(--space-5);background:var(--color-actor-3);color:white;font-size:var(--text-sm);font-weight:600">调用图分析（2个）</div>
+              <div style="padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-3);margin-bottom:var(--space-1)">find_callers</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">查找调用某函数的所有位置。输入：qualified_name。返回 caller 列表 + 文件位置。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-3);margin-bottom:var(--space-1)">trace_call_chain</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">BFS 追踪完整调用链。参数：start_function（可选 target）。返回 wiki 格式调查报告。</div>
+              </div>
+            </div>
+            <div style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden">
+              <div style="padding:var(--space-3) var(--space-5);background:var(--color-actor-4);color:white;font-size:var(--text-sm);font-weight:600">配置和维护（2个）</div>
+              <div style="padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-4);margin-bottom:var(--space-1)">get_config</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">显示服务器配置：LLM 设置、Embedding 设置、工作空间路径。调试时首先调用。</div>
+              </div>
+              <div style="padding:var(--space-4) var(--space-5)">
+                <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-actor-4);margin-bottom:var(--space-1)">rebuild_embeddings</div>
+                <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6">重建向量索引，不重建图。适合更换 embedding 模型后使用，比全量重建快数倍。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Translation Block: MCP 配置文件 -->
+        
+      </section>
+
+      <!-- Screen 4: 工作空间布局 + 增量同步 Flow 动画 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">工作空间布局与增量同步机制</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          所有索引产物都存在
+          <span class="term" data-definition="CGB 工作空间默认位于 ~/.code-graph-builder/。可通过 CGB_WORKSPACE 环境变量覆盖。工作空间内每个仓库有独立的 artifact_dir，名字格式是 repo_name + 8位路径 hash，保证不同路径的同名仓库不冲突。">~/.code-graph-builder/</span>
+          目录下。每个仓库有独立的
+          <span class="term" data-definition="artifact_dir 是 CGB 为一个仓库分配的存储目录，名字由仓库名+路径hash组成（如 myrepo_abc12345/）。内含 graph.db、vectors.pkl、meta.json、api_docs/ 等所有产物。换机器时只需复制这个目录，再用 link_repository 重新绑定路径即可。">artifact_dir</span>，
+          每次工具调用前会自动检查是否需要增量同步。
+        </p>
+
+        <!-- 工作空间目录树 -->
+        
+
+        <!-- 增量同步 Flow -->
+        <h3 style="font-size:var(--text-lg);font-weight:600;margin-bottom:var(--space-3)">增量同步流程</h3>
+        <div class="flow-animation animate-in" id="flow-mcp1"
+             data-steps='[{"label":"工具调用触发：任意 MCP 工具被调用前，先检查增量同步","highlight":"flow-mcp-trigger","packet":false},{"label":"读取 meta.json 中保存的 head_hash（上次索引时的 Git commit）","packet":true,"from":"flow-mcp-trigger","to":"flow-mcp-meta","highlight":"flow-mcp-meta"},{"label":"执行 git rev-parse HEAD 获取当前最新 commit hash","packet":true,"from":"flow-mcp-meta","to":"flow-mcp-git","highlight":"flow-mcp-git"},{"label":"hash 相同 → 跳过，<1ms 开销，直接进入实际工具逻辑","packet":true,"from":"flow-mcp-git","to":"flow-mcp-skip","highlight":"flow-mcp-skip"},{"label":"hash 不同 → git diff --name-only 获取变更文件列表","packet":true,"from":"flow-mcp-git","to":"flow-mcp-diff","highlight":"flow-mcp-diff"},{"label":"异步重建受影响节点的 graph 和 embeddings，完成后更新 head_hash","packet":true,"from":"flow-mcp-diff","to":"flow-mcp-rebuild","highlight":"flow-mcp-rebuild"}]'
+             style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;position:relative">
+          <div style="display:flex;justify-content:flex-start;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-6)">
+            <div class="flow-actor" id="flow-mcp-trigger" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🔔</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">工具调用</div>
+            </div>
+            <div style="color:var(--color-text-muted)">→</div>
+            <div class="flow-actor" id="flow-mcp-meta" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">📄</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">meta.json</div>
+            </div>
+            <div style="color:var(--color-text-muted)">→</div>
+            <div class="flow-actor" id="flow-mcp-git" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🌿</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">git HEAD</div>
+            </div>
+            <div style="color:var(--color-text-muted)">→</div>
+            <div class="flow-actor" id="flow-mcp-skip" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">⚡</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">跳过</div>
+            </div>
+            <div style="color:var(--color-text-muted)">or</div>
+            <div class="flow-actor" id="flow-mcp-diff" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">📋</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">git diff</div>
+            </div>
+            <div style="color:var(--color-text-muted)">→</div>
+            <div class="flow-actor" id="flow-mcp-rebuild" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🔧</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">增量重建</div>
+            </div>
+          </div>
+          <div class="flow-packet" style="display:none;position:absolute;width:12px;height:12px;border-radius:50%;background:var(--color-accent);pointer-events:none;z-index:10"></div>
+          <div style="border-top:1px solid var(--color-border);padding-top:var(--space-4);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
+            <button class="flow-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一步</button>
+            <button class="flow-reset-btn" style="background:transparent;color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="flow-step-label" style="margin-left:var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary);font-style:italic">点击"下一步"开始</span>
+            <span class="flow-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">Step 0 / 6</span>
+          </div>
+        </div>
+
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">增量同步的开销分析</div>
+          <p style="font-size:var(--text-sm);line-height:1.7">
+            当代码未改动时，检查开销极低（读一次文件 + 一次 git 命令）&lt;1ms，对工具调用几乎无感知。
+            当有代码改动时，只重建涉及变更文件的节点，避免对整个代码库全量重建（可能需要数分钟）。
+            这套机制让 CGB MCP server 可以在日常开发中"持续在线"——代码改动后不需要手动触发重建，
+            下次工具调用时自动同步。
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</section>

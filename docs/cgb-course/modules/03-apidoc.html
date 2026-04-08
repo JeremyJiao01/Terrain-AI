@@ -1,0 +1,179 @@
+<section class="module" id="module-3" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">API 文档生成</h1>
+      <p class="module-subtitle">三层文档结构、调用树渲染与 LLM 增强模式</p>
+    </header>
+
+    <div class="module-body">
+
+      <!-- Screen 1: 三层文档结构 -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">三层文档结构设计</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          API 文档被组织为三层，从粗到细：项目级汇总 → 模块级列表 → 函数级详情。
+          这个层次对应两种使用场景：<span class="term" data-definition="L1/L2 主要给人类开发者浏览概览用；L3 是为 embedding 优化的密集文本，包含足够上下文让 LLM 理解单个函数的完整语义。">人类浏览</span>和 LLM embedding 的输入粒度。
+          所有文档存储在 <code>artifact_dir/api_docs/</code> 目录下。
+        </p>
+
+        <!-- 三层卡片 -->
+        <div class="pattern-cards stagger-children" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--space-4);margin:var(--space-6) 0">
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-1);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">📋</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-1)">L1 — index.md</div>
+            <div style="font-size:var(--text-sm);color:var(--color-text-secondary)">项目级汇总表。列出所有模块路径、每个模块的函数/类数量。是进入文档系统的入口，也是 MCP <code>list_api_docs</code> 工具的数据来源。</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-2);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">📁</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-2)">L2 — modules/{qn}.md</div>
+            <div style="font-size:var(--text-sm);color:var(--color-text-secondary)">单模块文档。列出该模块所有公开函数和类，含一句话摘要和签名。文件名用模块 FQN 的点替换成下划线，避免路径冲突。</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-3);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">📄</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-3)">L3 — funcs/{qn}.md</div>
+            <div style="font-size:var(--text-sm);color:var(--color-text-secondary)">单函数详情页。为 embedding 优化的密集格式：签名、描述、ASCII 调用树、调用方列表（带文件+行号）、源码片段。是语义搜索的基础单元。</div>
+          </div>
+        </div>
+
+        <!-- L3 文档示例 -->
+        
+      </section>
+
+      <!-- Screen 2: 生成流程动画 -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">文档生成流水线</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          文档生成从图数据库出发，通过 <span class="term" data-definition="Cypher 是图数据库的查询语言，类似 SQL 对关系型数据库的地位。Kuzu 和 Memgraph 都支持 Cypher，CGB 用它查询节点、关系和调用链。">Cypher 查询</span>提取数据，渲染为 Markdown 后写入文件系统。
+        </p>
+
+        <div class="flow-animation animate-in" id="flow-apidoc"
+          data-steps='[
+            {"label":"执行 Cypher 查询：MATCH (f:Function) RETURN f —— 拿到全部函数节点列表","highlight":"flow-cypher","packet":false,"from":"","to":""},
+            {"label":"对每个模块执行 MATCH (m:Module)-[:DEFINES]->(f:Function) 查询，生成 L2 模块文档","highlight":"flow-l2","packet":true,"from":"flow-cypher","to":"flow-l2"},
+            {"label":"_build_call_tree() 递归查询 CALLS 边，渲染 ASCII 树；_get_callers() 查反向 CALLS 边","highlight":"flow-tree","packet":true,"from":"flow-l2","to":"flow-tree"},
+            {"label":"拼装 L3 文档内容（签名+描述+调用树+调用方+源码），写入 funcs/{qn}.md","highlight":"flow-l3","packet":true,"from":"flow-tree","to":"flow-l3"},
+            {"label":"汇总所有模块统计信息，生成 L1 index.md；更新 artifact_dir/api_docs/","highlight":"flow-l1","packet":true,"from":"flow-l3","to":"flow-l1"}
+          ]'
+          style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;position:relative">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-6)">
+            <div class="flow-actor" id="flow-cypher" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:85px;transition:border-color 0.3s,background 0.3s;flex:1">
+              <div style="font-size:1.25rem">🗄️</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">Cypher 查询</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-xs)">→</div>
+            <div class="flow-actor" id="flow-l2" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:85px;transition:border-color 0.3s,background 0.3s;flex:1">
+              <div style="font-size:1.25rem">📁</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">L2 模块文档</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-xs)">→</div>
+            <div class="flow-actor" id="flow-tree" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:85px;transition:border-color 0.3s,background 0.3s;flex:1">
+              <div style="font-size:1.25rem">🌿</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">调用树渲染</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-xs)">→</div>
+            <div class="flow-actor" id="flow-l3" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:85px;transition:border-color 0.3s,background 0.3s;flex:1">
+              <div style="font-size:1.25rem">📄</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">L3 函数文档</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-xs)">→</div>
+            <div class="flow-actor" id="flow-l1" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:85px;transition:border-color 0.3s,background 0.3s;flex:1">
+              <div style="font-size:1.25rem">📋</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">L1 index.md</div>
+            </div>
+          </div>
+          <div class="flow-packet" style="display:none;position:absolute;width:12px;height:12px;border-radius:50%;background:var(--color-accent)"></div>
+          <div style="border-top:1px solid var(--color-border);padding-top:var(--space-4);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
+            <button class="flow-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一步</button>
+            <button class="flow-reset-btn" style="background:transparent;color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="flow-step-label" style="margin-left:var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary);font-style:italic">点击"下一步"开始</span>
+            <span class="flow-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">Step 0 / 5</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: _build_call_tree 递归实现 -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">_build_call_tree：防环递归调用树</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          调用树渲染面临两个挑战：递归/循环调用导致的死循环、以及树深度爆炸。
+          <code>_build_call_tree()</code> 使用 <span class="term" data-definition="访问集（visited set）是一个记录已遍历节点的集合。每次递归前检查当前节点是否已在集合中，若在则截断，避免无限递归。">visited set</span> + 深度限制双重防护。
+        </p>
+
+        <!-- 代码翻译块 -->
+        
+      </section>
+
+      <!-- Screen 4: LLM 增强模式 Group Chat -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">LLM 增强模式：为无 docstring 函数生成描述</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          当 <code>mode='enhance'</code> 时，文档生成器会检测没有 docstring 的函数，将其签名 + 源码片段 + 调用上下文发送给 LLM，生成一句话描述，填入 <span class="term" data-definition="FILL 占位符是文档模板中的标记位。enhance 模式运行后，所有 &lt;!-- FILL --&gt; 会被 LLM 生成的描述替换。如果 LLM 调用失败，占位符保留，不影响其他字段。"><code>&lt;!-- FILL --&gt;</code></span> 位置。
+        </p>
+
+        <div class="chat-window animate-in" id="chat-enhance" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);overflow:hidden;margin:var(--space-6) 0">
+          <div style="padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--color-border);font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">enhance 模式 — LLM 增强流程</div>
+          <div style="padding:var(--space-4) var(--space-5);min-height:220px">
+
+            <div class="chat-message" data-sender="DocGenerator" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">DG</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">扫描完成，发现 47 个函数没有 docstring，其中 23 个可见性为 public。进入 enhance 模式，批量处理 public 函数。</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="LLMClient" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">LC</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">正在处理 <code>_infer_ownership()</code>：发送 prompt = 签名 + 前30行源码 + "该函数被以下函数调用: parse_file, build_graph"。等待 LLM 响应...</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="LLMResponse" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-3);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">LM</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">返回描述："Infers C++ pointer ownership semantics (borrowed vs owned) by analyzing parameter types and usage patterns in the function body."</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="DocGenerator" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">DG</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">将描述写入 <code>funcs/_infer_ownership.md</code>，替换 <code>&lt;!-- FILL --&gt;</code> 占位符。同时更新图数据库中该函数节点的 <code>docstring</code> 字段（用于后续 embedding）。</p>
+              </div>
+            </div>
+
+            <div class="chat-typing" style="display:none;align-items:center;gap:var(--space-3)">
+              <div class="chat-avatar" id="chat-enhance-typing-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">LC</div>
+              <div style="background:var(--color-bg-warm);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4)"><span class="chat-dots">● ● ●</span></div>
+            </div>
+          </div>
+          <div style="padding:var(--space-3) var(--space-5);border-top:1px solid var(--color-border);display:flex;gap:var(--space-2);align-items:center">
+            <button class="chat-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一条</button>
+            <button class="chat-all-btn" style="background:transparent;color:var(--color-accent);border:1px solid var(--color-accent);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">全部显示</button>
+            <button class="chat-reset-btn" style="background:transparent;color:var(--color-text-muted);border:none;cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="chat-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">0 / 4 messages</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: C++ 指针所有权推断 + Callout -->
+      <section class="screen animate-in">
+        <h2 class="screen-heading">_infer_ownership：C++ 指针所有权分析</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <code>_infer_ownership()</code> 是专门为 C++ 代码设计的静态分析功能。它通过分析参数类型标注和函数体内的内存操作，推断每个指针参数是<span class="term" data-definition="borrowed 指针：函数只使用该指针，不负责释放，生命周期由调用方管理（通常对应 const T* 或引用）。owned 指针：函数拥有该对象的所有权，负责释放（通常对应 T* 或 unique_ptr）。">owned 还是 borrowed</span>，写入 L3 文档的参数表格。
+        </p>
+
+        <!-- 代码翻译块 -->
+        
+
+        <!-- 最终 Callout -->
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">💡 关键洞察</div>
+          <p style="font-size:var(--text-sm)">三层文档结构的本质是<strong>粒度分层的语义索引</strong>。L1/L2 面向人类导航；L3 面向向量化——每个函数一个文件，embedding 时天然按语义单元切分，避免了文档块切割的粒度问题。LLM enhance 模式进一步把"静态代码结构"升维为"可读语义描述"，让语义搜索从"字符串相似"进化为"意图匹配"。</p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</section>

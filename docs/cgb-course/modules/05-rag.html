@@ -1,0 +1,293 @@
+<section class="module" id="module-5" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number" style="font-family:var(--font-display);font-size:var(--text-6xl);font-weight:800;color:var(--color-accent);opacity:0.15;display:block;line-height:1">05</span>
+      <h1 class="module-title" style="font-family:var(--font-display);font-size:var(--text-4xl);font-weight:700;line-height:1.15;margin-bottom:var(--space-3)">RAG 系统</h1>
+      <p class="module-subtitle" style="color:var(--color-text-secondary);font-size:var(--text-lg)">双通道检索、Cypher 生成与 LLM 上下文组装</p>
+    </header>
+
+    <div class="module-body">
+
+      <!-- Screen 1: RAG 架构概述 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">RAG = 检索 + 生成，CGB 的双通道设计</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <span class="term" data-definition="RAG（Retrieval-Augmented Generation）：检索增强生成。核心思路是：LLM 不直接回答问题，而是先从知识库检索相关内容，把检索结果塞入 prompt，再让 LLM 基于真实上下文生成答案。解决了 LLM 无法实时了解私有代码库的问题。">RAG</span>
+          解决的核心问题是：LLM 不认识你的私有代码库。CGB 的 RAG 是
+          <strong>双通道检索</strong>——不只用向量相似度，还能把自然语言转成
+          <span class="term" data-definition="Cypher 是图数据库的查询语言，类似 SQL。例如 MATCH (f:Function)-[:CALLS]->(g:Function) WHERE f.name='parse_args' RETURN g.name 查询 parse_args 调用了哪些函数。CGB 的图里存了 CALLS/DEFINES/INHERITS 等关系，Cypher 能精确利用这些结构。">Cypher 图查询</span>，
+          两路结果融合后送给 LLM。这让回答既有语义广度，又有结构精度。
+        </p>
+
+        <!-- 三大组件卡片 -->
+        <div class="stagger-children" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--space-4);margin:var(--space-6) 0">
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-2);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">🔍</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-2)">SemanticSearchService</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6;margin-bottom:var(--space-2)">向量通道。把 query 转向量，在 MemoryVectorStore 中找最相似函数。支持关键词提权再排序。</div>
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-muted)">domains/core/search/semantic_search.py</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-3);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">🔮</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-3)">CypherGenerator</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6;margin-bottom:var(--space-2)">图查询通道。把自然语言问题通过 LLM 翻译成 Cypher，执行后得到精确的结构化结果（调用链、继承关系等）。</div>
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-muted)">domains/upper/rag/cypher_generator.py</div>
+          </div>
+          <div class="animate-in" style="background:var(--color-surface);border:2px solid var(--color-actor-4);border-radius:var(--radius-md);padding:var(--space-5)">
+            <div style="font-size:1.5rem;margin-bottom:var(--space-2)">🤖</div>
+            <div style="font-family:var(--font-display);font-weight:700;margin-bottom:var(--space-1);color:var(--color-actor-4)">RAGEngine</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-secondary);line-height:1.6;margin-bottom:var(--space-2)">总协调器。驱动两路检索、组装 prompt 上下文、调用 Kimi LLM 生成答案、构建 RAGResult 返回。</div>
+            <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-muted)">domains/upper/rag/rag_engine.py</div>
+          </div>
+        </div>
+
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">💡 双通道的互补性</div>
+          <p style="font-size:var(--text-sm);line-height:1.7">向量搜索擅长"模糊意图匹配"——即使描述不精确也能找到相关函数。Cypher 查询擅长"精确结构查询"——"找所有继承了 BaseEmbedder 的类"这种问题向量搜索无能为力，Cypher 一条 MATCH 语句搞定。两路结果去重后融合，LLM 拿到的上下文既有广度又有深度。</p>
+        </div>
+      </section>
+
+      <!-- Screen 2: CypherGenerator 代码翻译块 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">CypherGenerator：NL → 图查询</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <code>CypherGenerator</code> 的实现出人意料地简洁：给 LLM 一个描述图 Schema 的 system prompt，
+          把用户问题直接发过去，LLM 输出 Cypher。没有手写规则，没有 AST 解析——全靠 LLM 理解 Schema 后的
+          <span class="term" data-definition="Few-shot 指在 prompt 中给 LLM 几个例子（输入→输出对），帮助它理解任务格式。CypherGenerator 的 _SCHEMA_PROMPT 是 zero-shot——只描述 Schema 和规则，不给示例。对于结构良好的图 Schema，zero-shot 效果已足够好。">zero-shot 推理</span>。
+        </p>
+
+        
+
+        <!-- NL→Cypher 示例 -->
+        <div style="display:grid;gap:var(--space-3);margin:var(--space-6) 0">
+          <div class="animate-in" style="display:flex;gap:var(--space-4);align-items:flex-start;padding:var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md)">
+            <div style="background:var(--color-actor-3);color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-sm);flex-shrink:0">Q</div>
+            <div>
+              <div style="font-weight:600;margin-bottom:var(--space-1);font-size:var(--text-sm)">自然语言：找所有解析命令行参数的函数</div>
+              <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-secondary);background:var(--color-bg);padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);margin-top:var(--space-2)">MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN f.qualified_name, f.signature LIMIT 50</div>
+            </div>
+          </div>
+          <div class="animate-in" style="display:flex;gap:var(--space-4);align-items:flex-start;padding:var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md)">
+            <div style="background:var(--color-actor-3);color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-sm);flex-shrink:0">Q</div>
+            <div>
+              <div style="font-weight:600;margin-bottom:var(--space-1);font-size:var(--text-sm)">自然语言：找所有继承了 BaseEmbedder 的类</div>
+              <div style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--color-text-secondary);background:var(--color-bg);padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);margin-top:var(--space-2)">MATCH (c:Class)-[:INHERITS]->(b:Class) WHERE b.name = 'BaseEmbedder' RETURN c.qualified_name, c.path LIMIT 50</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 3: SemanticSearchService 搜索流程 Flow 动画 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">SemanticSearchService：向量 + 图上下文融合</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          语义搜索不只返回向量相似度结果——它还会从图数据库回填函数的完整元数据（源码、文件路径、行号），
+          以及可选的调用方/被调用方列表，形成
+          <span class="term" data-definition="SemanticSearchResult 是语义搜索的最终输出单元。除了相似度分数，还包含 source_code（源码）、file_path（文件）、start_line/end_line（行号），这些信息直接来自图数据库的查询补全，不需要再发一次查询。">SemanticSearchResult</span>
+          传给 RAGEngine 组装 prompt。
+        </p>
+
+        <div class="flow-animation animate-in" id="flow-rag1"
+             data-steps='[{"label":"用户 query 进入 search()，embed_query() 生成 2560 维查询向量","highlight":"query","packet":false,"from":"query","to":"query"},{"label":"vector_store.search_similar() 取 top_k×4=40 个候选，_keyword_boost() 对候选重排","packet":true,"from":"query","to":"vector","highlight":"vector"},{"label":"用 qualified_name 列表去图数据库批量查询节点详情（源码、路径、行号）","packet":true,"from":"vector","to":"graph","highlight":"graph"},{"label":"_enrich_context() 可选：查询 CALLS 边回填 callers/callees 列表（RAGEngine 层）","packet":true,"from":"graph","to":"enrich","highlight":"enrich"},{"label":"返回 List[SemanticSearchResult]，每个包含 score + 完整代码上下文","packet":true,"from":"enrich","to":"result","highlight":"result"}]'
+             style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-6);margin:var(--space-6) 0;position:relative">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-6)">
+            <div class="flow-actor" id="flow-query" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">💬</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">Query</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-lg)">→</div>
+            <div class="flow-actor" id="flow-vector" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🎯</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">向量检索</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-lg)">→</div>
+            <div class="flow-actor" id="flow-graph" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🗄️</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">图查询</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-lg)">→</div>
+            <div class="flow-actor" id="flow-enrich" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">🔗</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">上下文增强</div>
+            </div>
+            <div style="color:var(--color-text-muted);font-size:var(--text-lg)">→</div>
+            <div class="flow-actor" id="flow-result" style="background:var(--color-surface-warm);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);text-align:center;min-width:80px;transition:border-color 0.3s,background 0.3s">
+              <div style="font-size:1.25rem">📋</div>
+              <div style="font-size:var(--text-xs);font-weight:600;margin-top:var(--space-1)">SearchResult</div>
+            </div>
+          </div>
+          <div class="flow-packet" style="display:none;position:absolute;width:12px;height:12px;border-radius:50%;background:var(--color-accent);pointer-events:none;z-index:10"></div>
+          <div style="border-top:1px solid var(--color-border);padding-top:var(--space-4);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap">
+            <button class="flow-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一步</button>
+            <button class="flow-reset-btn" style="background:transparent;color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="flow-step-label" style="margin-left:var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary);font-style:italic">点击"下一步"开始</span>
+            <span class="flow-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">Step 0 / 5</span>
+          </div>
+        </div>
+
+        <!-- SemanticSearchResult 字段表 -->
+        <div class="animate-in" style="margin:var(--space-6) 0;overflow:hidden;border-radius:var(--radius-md);border:1px solid var(--color-border)">
+          <table style="width:100%;border-collapse:collapse">
+            <thead style="background:var(--color-bg)">
+              <tr>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">字段</th>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">类型</th>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">来源</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">score</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">float (0-1)</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm)">余弦相似度 + 关键词奖励，4位小数</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">qualified_name</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">str</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm)">VectorRecord.qualified_name 直接透传</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">source_code</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">str | None</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm)">图数据库补填，或从文件提取 start_line~end_line</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">type</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">str</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm)">Function / Class / Method 等，图数据库补填</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Screen 4: RAGEngine 完整流程 Group Chat -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">RAGEngine：从 query 到最终答案</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <code>RAGEngine.query()</code> 是整个 RAG 链路的入口。它驱动语义检索、
+          <span class="term" data-definition="CodeContext 是 RAGEngine 组装 prompt 的中间数据结构。包含：source_code（实际代码）、qualified_name（函数标识）、entity_type（节点类型）、callers/callees（调用关系列表），以及 format_context() 方法，负责把这些字段拼成 LLM 能理解的文本片段。">CodeContext</span>
+          组装和 LLM 调用，最终返回带源码引用的 <code>RAGResult</code>。
+          LLM 后端使用 Kimi（Moonshot AI），temperature=0.7，max_tokens=4096。
+        </p>
+
+        <div class="chat-window animate-in" id="chat-rag1" style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);overflow:hidden;margin:var(--space-6) 0">
+          <div style="padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--color-border);font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">组件对话 — query("embed_query 和 embed_documents 有什么区别") 执行过程</div>
+          <div style="padding:var(--space-4) var(--space-5);min-height:240px">
+
+            <div class="chat-message" data-sender="RAGEngine" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">RE</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">收到 query，启动 Step 1：调用 <code>_semantic_search(query, top_k=10)</code>，向 SemanticSearchService 发起语义搜索请求。</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="SemanticSearchService" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">SS</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">向量搜索完成，返回 top-10 结果：<code>embed_query (0.945)</code>、<code>embed_documents (0.921)</code>、<code>embed_batch (0.887)</code>…… 附带完整 source_code 和 file_path。</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="RAGEngine" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">RE</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">Step 2：<code>_build_contexts()</code> 为每个 result 创建 CodeContext，调用 <code>_enrich_context()</code> 查询 CALLS 边，把 callers/callees 写入 context.callers / context.callees（各取前5个）。</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="LLMClient" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-3);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">LC</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">Step 3/4：<code>prompts.format_rag_query(query, contexts)</code> 拼装 system+user prompt，包含10个函数的源码片段和调用关系。发送给 Kimi API（kimi-k2.5），等待生成…</p>
+              </div>
+            </div>
+
+            <div class="chat-message" data-sender="RAGEngine" style="display:none;align-items:flex-start;gap:var(--space-3);margin-bottom:var(--space-4)">
+              <div class="chat-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">RE</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);max-width:85%">
+                <p style="font-size:var(--text-sm)">Step 5：返回 <code>RAGResult(query=..., response="embed_query 附加 CODE_RETRIEVAL_TASK 指令 + 中文检测，用于查询端编码；embed_documents 不加指令，用于文档端批量建索引...", sources=[SourceReference(embed_query, embed_documents)], metadata={semantic_results:10, model:"kimi-k2.5"})</code></p>
+              </div>
+            </div>
+
+            <div class="chat-typing" style="display:none;align-items:center;gap:var(--space-3)">
+              <div class="chat-avatar" id="chat-rag1-typing-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--color-actor-2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:var(--text-xs);color:white;flex-shrink:0">SS</div>
+              <div style="background:var(--color-bg);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4)"><span class="chat-dots">● ● ●</span></div>
+            </div>
+          </div>
+          <div style="padding:var(--space-3) var(--space-5);border-top:1px solid var(--color-border);display:flex;gap:var(--space-2);align-items:center">
+            <button class="chat-next-btn" style="background:var(--color-accent);color:white;border:none;border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">下一条</button>
+            <button class="chat-all-btn" style="background:transparent;color:var(--color-accent);border:1px solid var(--color-accent);border-radius:var(--radius-sm);padding:var(--space-2) var(--space-4);cursor:pointer;font-size:var(--text-sm)">全部显示</button>
+            <button class="chat-reset-btn" style="background:transparent;color:var(--color-text-muted);border:none;cursor:pointer;font-size:var(--text-sm)">重置</button>
+            <span class="chat-progress" style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">0 / 5 messages</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screen 5: RAGConfig + RAGResult 数据结构 -->
+      <section class="screen animate-in" style="margin-top:var(--space-12)">
+        <h2 class="screen-heading">配置与输出：RAGConfig 和 RAGResult</h2>
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-bottom:var(--space-4)">
+          <code>RAGConfig</code> 由三个子配置组成，全部支持从环境变量读取（<code>RAGConfig.from_env()</code>）。
+          <code>RAGResult</code> 是 RAG 系统的输出契约，包含答案文本、来源引用列表和执行元数据，
+          可直接通过 <code>to_markdown()</code> 渲染为 Markdown 文档。
+        </p>
+
+        <!-- 配置表格 -->
+        <div class="animate-in" style="margin:var(--space-6) 0;overflow:hidden;border-radius:var(--radius-md);border:1px solid var(--color-border)">
+          <table style="width:100%;border-collapse:collapse">
+            <thead style="background:var(--color-bg)">
+              <tr>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">配置项</th>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">默认值</th>
+                <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-sm);font-weight:600;color:var(--color-text-secondary)">环境变量</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">moonshot.model</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">kimi-k2.5</td>
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-xs)">MOONSHOT_MODEL</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">moonshot.temperature</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">0.7</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-muted)">——</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">retrieval.semantic_top_k</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">10</td>
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-xs)">RAG_SEMANTIC_TOP_K</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">retrieval.max_context_tokens</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">8000</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-muted)">——</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">retrieval.include_callers</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">True</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-muted)">——</td>
+              </tr>
+              <tr style="border-top:1px solid var(--color-border)">
+                <td style="padding:var(--space-3) var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)">retrieval.graph_max_depth</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-secondary)">2</td>
+                <td style="padding:var(--space-3) var(--space-4);font-size:var(--text-sm);color:var(--color-text-muted)">——</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- RAGResult 代码翻译块 -->
+        
+
+        <!-- 最终 Callout -->
+        <div class="animate-in" style="background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-5);margin:var(--space-6) 0">
+          <div style="font-family:var(--font-display);font-weight:600;margin-bottom:var(--space-2);color:var(--color-accent)">💡 RAG 的价值在哪里</div>
+          <p style="font-size:var(--text-sm);line-height:1.7">没有 RAG，AI 助手只能基于训练数据推测你的代码行为。有了 RAG，每次回答都基于真实检索到的源码——LLM 不是在"编"，而是在"读你的代码再解释"。双通道（向量+图）确保无论是模糊的"语义查询"还是精确的"结构查询"，都能找到相关代码，最终回答质量远高于直接问 LLM。</p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</section>
