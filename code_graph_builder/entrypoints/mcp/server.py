@@ -56,6 +56,9 @@ from mcp.types import TextContent, Tool
 logger.remove()  # Remove default stderr sink
 
 # --- CGB_DEBUG file logging ---
+# CGB_DEBUG is read from workspace .env (single source of truth).
+# reload_env() above syncs .env → os.environ and removes keys absent from .env,
+# so system-level CGB_DEBUG exports are ignored.
 _debug_enabled = os.environ.get("CGB_DEBUG", "").strip().lower() in ("1", "true", "yes")
 _ws = Path(os.environ.get("CGB_WORKSPACE", Path.home() / ".code-graph-builder"))
 _debug_log = _ws.expanduser() / "debug.log"

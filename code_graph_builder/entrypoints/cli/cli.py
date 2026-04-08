@@ -569,9 +569,26 @@ def _detect_embed_info() -> dict[str, str]:
     return {}
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
+def cmd_status(args: argparse.Namespace) -> int:
     """Show the currently active repository."""
     ws = _get_workspace_root()
+    env_path = ws / ".env"
+
+    # ── Handle --debug toggle ──
+    toggle = getattr(args, "debug", None)
+    if toggle is not None:
+        env_data = _load_env_file(env_path)
+        if toggle:
+            env_data["CGB_DEBUG"] = "1"
+            _save_env_file(env_path, env_data)
+            print(f"\n  {_c('32', 'Debug mode enabled')}  — MCP server will log to {ws / 'debug.log'}")
+            print(f"  Restart the MCP server for the change to take effect.\n")
+        else:
+            env_data.pop("CGB_DEBUG", None)
+            _save_env_file(env_path, env_data)
+            print(f"\n  {_c('33', 'Debug mode disabled')}\n")
+        return 0
+
     repos = _load_repos(ws)
     total = len(repos)
 
@@ -610,6 +627,20 @@ def cmd_status(_args: argparse.Namespace) -> int:
         print(f"  embedding  {_c('32', embed['model'])}   {embed['provider']}   {embed['base_url']}")
     else:
         print(f"  embedding  {_c('33', '(not configured)')}   — cgb config --embed-model <model> to set")
+
+    # ── Debug ──
+    env_data = _load_env_file(env_path)
+    debug_val = env_data.get("CGB_DEBUG", "").strip().lower()
+    debug_on = debug_val in ("1", "true", "yes")
+    if debug_on:
+        debug_log = ws / "debug.log"
+        size = ""
+        if debug_log.exists():
+            mb = debug_log.stat().st_size / (1024 * 1024)
+            size = f"   {mb:.1f} MB"
+        print(f"  debug      {_c('32', 'ON')}{size}   {debug_log}")
+    else:
+        print(f"  debug      {_c('2', 'OFF')}   — cgb status --debug on to enable")
 
     # ── Version ──
     print(f"  version    cgb {__version__}")
@@ -2088,6 +2119,15 @@ Windows:
         "status",
         help="Show the currently active repository",
         description="Display info about the currently active CodeGraphWiki repository.",
+    )
+    status_parser.add_argument(
+        "--debug",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="on|off",
+        type=lambda v: v.lower() in ("1", "true", "yes", "on") if isinstance(v, str) else v,
+        help="Toggle MCP debug logging: --debug on / --debug off (or just --debug to enable)",
     )
     status_parser.set_defaults(func=cmd_status)
 

@@ -92,6 +92,7 @@ def reload_env(workspace: Path | None = None) -> dict[str, list[str]]:
         "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL",
         "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL", "EMBEDDING_MODEL",
         "EMBEDDING_PROVIDER", "EMBED_API_KEY", "EMBED_BASE_URL", "EMBED_MODEL",
+        "CGB_DEBUG",
     })
 
     # Snapshot current values
