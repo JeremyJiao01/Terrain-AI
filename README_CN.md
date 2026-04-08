@@ -103,9 +103,12 @@ Windows 平台使用：
 ### 工作区命令
 
 ```bash
-cgb status              # 显示当前活跃仓库（路径、版本）
+cgb status              # 显示活跃仓库、工作区、LLM 和 Embedding 信息
 cgb list                # 列出所有已索引仓库
 cgb repo                # 交互式切换活跃仓库
+cgb config              # 交互式配置向导（LLM、Embedding、工作区）
+cgb link <path>         # 将本地仓库关联到共享的预构建产物
+cgb link <path> --db x  # 关联到指定产物目录
 ```
 
 ### 索引

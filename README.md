@@ -103,9 +103,12 @@ The `cgb` command-line tool provides workspace management, indexing, and queryin
 ### Workspace Commands
 
 ```bash
-cgb status              # Show active repository (path, version)
+cgb status              # Show active repository, workspace, LLM & embedding info
 cgb list                # List all indexed repositories
 cgb repo                # Interactively switch active repository
+cgb config              # Interactive configuration wizard (LLM, embedding, workspace)
+cgb link <path>         # Link a local repo to shared pre-built artifacts
+cgb link <path> --db x  # Link to a specific artifact directory
 ```
 
 ### Indexing

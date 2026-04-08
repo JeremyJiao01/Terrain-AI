@@ -2,6 +2,54 @@
 
 ---
 
+## [0.37.0] — 2026-04-08
+
+### Added
+- `cgb link <path> [--db <name>]` — associate a local repo with shared pre-built artifacts (graph.db, vectors.pkl, api_docs/, wiki/); supports interactive selector, symlinks for zero disk overhead, and per-repo meta.json
+- Auto-refresh `.env` before each LLM/embedding service creation — `refresh_env()` re-reads the workspace `.env` only when mtime changes, so `cgb config` edits take effect without process restart
+
+### Fixed
+- `cgb link` now handles Windows-style paths pasted from File Explorer address bar (e.g. `C:\Users\john\project`); strips quotes/whitespace and uses `PureWindowsPath` for cross-OS correctness
+
+---
+
+### 新增
+- `cgb link <path> [--db <name>]` — 将本地仓库关联到共享的预构建产物（graph.db、vectors.pkl、api_docs/、wiki/）；支持交互式选择、符号链接零磁盘开销、每仓库独立 meta.json
+- 每次创建 LLM/Embedding 服务前自动刷新 `.env` — `refresh_env()` 仅在文件修改时间变化时重新读取，`cgb config` 修改后无需重启进程
+
+### 修复
+- `cgb link` 现在可正确处理从 Windows 资源管理器地址栏粘贴的路径（如 `C:\Users\john\project`）；自动去除引号和空白，使用 `PureWindowsPath` 实现跨平台兼容
+
+---
+
+## [0.36.0] — 2026-04-08
+
+### Added
+- `cgb config` interactive wizard — arrow-key menu UI matching the npx `--setup` wizard style, supports both interactive and CLI flag modes
+- Enhanced `cgb status` — displays workspace path, LLM model, embedding model, and provider info
+- `/ask` and `/trace` skills — project-scoped Claude Code slash commands for quick queries and call chain tracing
+- `reload_config` MCP tool — hot-reload settings without restarting the server
+- Auto-install skills on `npx --setup` — copies slash commands to `.claude/commands/` during first-time setup
+
+### Fixed
+- MCP deadlock: prevent blocking git calls and Kuzu file locks during concurrent MCP operations
+- `commands_cli.py` now loads workspace `.env` correctly (previously only loaded CWD `.env`)
+
+---
+
+### 新增
+- `cgb config` 交互式配置向导 — 箭头键菜单 UI，与 npx `--setup` 风格一致，支持交互模式和 CLI 参数模式
+- 增强 `cgb status` — 显示工作区路径、LLM 模型、Embedding 模型和提供商信息
+- `/ask` 和 `/trace` 技能 — 项目级 Claude Code 斜杠命令，用于快速查询和调用链追踪
+- `reload_config` MCP 工具 — 热重载配置，无需重启服务器
+- `npx --setup` 自动安装技能 — 首次配置时自动将斜杠命令复制到 `.claude/commands/`
+
+### 修复
+- MCP 死锁：防止并发 MCP 操作时 git 调用和 Kuzu 文件锁阻塞
+- `commands_cli.py` 现在正确加载工作区 `.env`（之前仅加载当前目录的 `.env`）
+
+---
+
 ## [0.34.0] — 2026-04-08
 
 ### Added
