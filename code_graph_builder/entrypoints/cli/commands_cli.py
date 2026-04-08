@@ -39,7 +39,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load workspace .env first, then local .env (same priority as MCP server)
+_ws = Path(os.environ.get("CGB_WORKSPACE", Path.home() / ".code-graph-builder"))
+load_dotenv(_ws.expanduser() / ".env", override=False)
+load_dotenv(override=False)
 
 from code_graph_builder.foundation.services.git_service import GitChangeDetector as _GCD  # noqa: E402
 from code_graph_builder.foundation.utils.settings import load_settings  # noqa: E402

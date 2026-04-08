@@ -514,6 +514,59 @@ def _numbered_select(repos: list[dict]) -> int | None:
         return None
 
 
+def _detect_llm_info() -> dict[str, str]:
+    """Detect current LLM configuration from environment."""
+    providers = [
+        ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "Generic"),
+        ("LITELLM_API_KEY", "LITELLM_BASE_URL", "LITELLM_MODEL", "LiteLLM"),
+        ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "OpenAI"),
+        ("MOONSHOT_API_KEY", "LLM_BASE_URL", "MOONSHOT_MODEL", "Moonshot"),
+    ]
+    for key_env, url_env, model_env, name in providers:
+        api_key = os.environ.get(key_env, "")
+        if api_key:
+            return {
+                "provider": name,
+                "model": os.environ.get(model_env, "(default)"),
+                "base_url": os.environ.get(url_env, "(default)"),
+                "api_key": api_key[:4] + "****" + api_key[-4:] if len(api_key) >= 8 else "****",
+            }
+    return {}
+
+
+def _detect_embed_info() -> dict[str, str]:
+    """Detect current embedding configuration from environment."""
+    provider = os.environ.get("EMBEDDING_PROVIDER", "").lower()
+    # Try explicit EMBED_* keys first
+    for key_env, url_env, model_env, name in [
+        ("EMBED_API_KEY", "EMBED_BASE_URL", "EMBED_MODEL", "Custom"),
+        ("EMBEDDING_API_KEY", "EMBEDDING_BASE_URL", "EMBEDDING_MODEL", "OpenAI-compatible"),
+        ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "EMBED_MODEL", "Qwen3/DashScope"),
+    ]:
+        api_key = os.environ.get(key_env, "")
+        if api_key:
+            detected_name = name
+            if provider:
+                detected_name = provider.capitalize()
+            return {
+                "provider": detected_name,
+                "model": os.environ.get(model_env, "(default)"),
+                "base_url": os.environ.get(url_env, "(default)"),
+                "api_key": api_key[:4] + "****" + api_key[-4:] if len(api_key) >= 8 else "****",
+            }
+    # Fallback: check if OPENAI_API_KEY or LLM_API_KEY can serve as embedding key
+    for key_env, name in [("OPENAI_API_KEY", "OpenAI"), ("LLM_API_KEY", "Generic")]:
+        api_key = os.environ.get(key_env, "")
+        if api_key:
+            return {
+                "provider": name + " (shared)",
+                "model": os.environ.get("EMBED_MODEL", "(default)"),
+                "base_url": os.environ.get("EMBED_BASE_URL", "(default)"),
+                "api_key": api_key[:4] + "****" + api_key[-4:] if len(api_key) >= 8 else "****",
+            }
+    return {}
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     """Show the currently active repository."""
     ws = _get_workspace_root()
@@ -521,22 +574,420 @@ def cmd_status(_args: argparse.Namespace) -> int:
     total = len(repos)
 
     active = next((r for r in repos if r["active"]), None)
+
+    # ── Workspace ──
+    print()
+    print(f"  workspace  {_c('2', str(ws))}")
+
+    # ── Repository ──
     if active is None:
-        print(f"active  (none)   {total} repos indexed  —  cgb repo to select")
-        return 1
-
-    cwd = Path.cwd().resolve()
-    linked = next((r for r in repos if Path(r["path"]).resolve() == cwd), None)
-
-    if linked and linked["active"]:
-        print(_c("32", f"here    {active['name']}   {cwd}"))
-    elif linked:
-        print(_c("33", f"here    {linked['name']}   {cwd}   (not active — cgb repo to switch)"))
+        print(f"  active     {_c('33', '(none)')}   {total} repos indexed  —  cgb repo to select")
     else:
-        print(_c("2", f"here    not indexed   {cwd}   (cgb index to add)"))
+        cwd = Path.cwd().resolve()
+        linked = next((r for r in repos if Path(r["path"]).resolve() == cwd), None)
 
-    print(f"active  {active['name']}   {active['path']}")
-    print(f"version cgb {__version__}")
+        if linked and linked["active"]:
+            print(f"  here       {_c('32', active['name'])}   {cwd}")
+        elif linked:
+            print(f"  here       {_c('33', linked['name'])}   {cwd}   (not active — cgb repo to switch)")
+        else:
+            print(f"  here       {_c('2', 'not indexed')}   {cwd}   (cgb index to add)")
+
+        print(f"  active     {active['name']}   {active['path']}")
+
+    # ── LLM ──
+    llm = _detect_llm_info()
+    if llm:
+        print(f"  llm        {_c('32', llm['model'])}   {llm['provider']}   {llm['base_url']}")
+    else:
+        print(f"  llm        {_c('33', '(not configured)')}   — cgb config --llm-model <model> to set")
+
+    # ── Embedding ──
+    embed = _detect_embed_info()
+    if embed:
+        print(f"  embedding  {_c('32', embed['model'])}   {embed['provider']}   {embed['base_url']}")
+    else:
+        print(f"  embedding  {_c('33', '(not configured)')}   — cgb config --embed-model <model> to set")
+
+    # ── Version ──
+    print(f"  version    cgb {__version__}")
+    print()
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# config — view / modify LLM and embedding configuration
+# ---------------------------------------------------------------------------
+
+def _load_env_file(env_path: Path) -> dict[str, str]:
+    """Parse a .env file into a dict."""
+    if not env_path.exists():
+        return {}
+    result: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        eq = stripped.find("=")
+        if eq == -1:
+            continue
+        key = stripped[:eq].strip()
+        val = stripped[eq + 1:].strip()
+        # Strip surrounding quotes
+        if len(val) >= 2 and ((val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'")):
+            val = val[1:-1]
+        result[key] = val
+    return result
+
+
+def _save_env_file(env_path: Path, data: dict[str, str]) -> None:
+    """Write a dict as a .env file, preserving non-empty values only."""
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# code-graph-builder configuration",
+        "# Managed by cgb config / setup wizard. Edit freely.",
+        "",
+    ]
+    for key, val in data.items():
+        if val:
+            lines.append(f"{key}={val}")
+    lines.append("")
+    env_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _mask(s: str) -> str:
+    """Mask an API key for display: sk-ab****ef."""
+    if not s or len(s) < 8:
+        return "****" if s else "(not set)"
+    return s[:4] + "****" + s[-4:]
+
+
+# ── Tree-drawing characters (matches npx --setup style) ──────────────
+_T_SIDE   = "│"
+_T_BRANCH = "├─"
+_T_LAST   = "╰─"
+_T_DOT    = "●"
+_T_OK     = "✓"
+_T_WARN   = "⚠"
+
+
+def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
+    """Arrow-key single-select menu.  Returns index or None on Ctrl-C/q."""
+    cursor = 0
+
+    def render(initial: bool = False) -> None:
+        if not initial and _ANSI:
+            sys.stdout.write(f"\033[{len(options)}A")
+        for i, opt in enumerate(options):
+            if _ANSI:
+                marker = _c("1;36", "◉") if i == cursor else _c("2", "○")
+                label = _c("1;36", opt) if i == cursor else opt
+                sys.stdout.write(f"\033[2K{prefix}{marker} {label}\n")
+            else:
+                marker = "> " if i == cursor else "  "
+                print(f"{prefix}{marker}{opt}")
+        sys.stdout.flush()
+
+    render(initial=True)
+
+    raw_ok = sys.stdin.isatty()
+    if raw_ok and platform.system() == "Windows":
+        try:
+            import msvcrt
+            while True:
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
+                    return cursor
+                if ch in ("\x03", "q"):
+                    sys.stdout.write("\n")
+                    return None
+                if ch in ("\x00", "\xe0"):
+                    ch2 = msvcrt.getwch()
+                    if ch2 == "H":
+                        cursor = (cursor - 1) % len(options)
+                    elif ch2 == "P":
+                        cursor = (cursor + 1) % len(options)
+                    render()
+            raw_ok = False  # reached only if loop breaks unexpectedly
+        except ImportError:
+            raw_ok = False
+    elif raw_ok:
+        try:
+            import tty, termios
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while True:
+                    ch = sys.stdin.read(1)
+                    if ch in ("\r", "\n"):
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return cursor
+                    if ch in ("\x03", "q"):
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return None
+                    if ch == "\x1b":
+                        seq = sys.stdin.read(2)
+                        if seq == "[A":
+                            cursor = (cursor - 1) % len(options)
+                        elif seq == "[B":
+                            cursor = (cursor + 1) % len(options)
+                        render()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except (ImportError, AttributeError):
+            raw_ok = False
+
+    if not raw_ok:
+        # Fallback: numbered input
+        print()
+        for i, opt in enumerate(options):
+            print(f"{prefix}  {i + 1}) {opt}")
+        try:
+            choice = input(f"{prefix}  Enter number: ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return idx
+        except (ValueError, EOFError, KeyboardInterrupt):
+            pass
+    return None
+
+
+def _prompt(label: str, default: str = "") -> str:
+    """Prompt for input with an optional default shown in brackets."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        val = input(f"  {_T_SIDE}  {label}{suffix}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return val or default
+
+
+# LLM / Embedding provider presets (name, base_url, default_model)
+_LLM_PROVIDERS = [
+    ("OpenAI / compatible",  "https://api.openai.com/v1",       "gpt-4o"),
+    ("DeepSeek",             "https://api.deepseek.com/v1",     "deepseek-chat"),
+    ("Moonshot / Kimi",      "https://api.moonshot.cn/v1",      "kimi-k2.5"),
+    ("LiteLLM proxy",        "http://localhost:4000/v1",         "gpt-4o"),
+    ("Custom endpoint",      "",                                 ""),
+]
+
+_EMBED_PROVIDERS = [
+    ("DashScope / Qwen",     "https://dashscope.aliyuncs.com/api/v1", "text-embedding-v4"),
+    ("OpenAI Embeddings",    "https://api.openai.com/v1",              "text-embedding-3-small"),
+    ("Custom endpoint",      "",                                        ""),
+]
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """View or modify LLM / embedding configuration."""
+    ws = _get_workspace_root()
+    env_path = ws / ".env"
+    env_data = _load_env_file(env_path)
+
+    # ── Non-interactive mode: apply CLI flags directly ────────────────
+    has_flags = any(
+        getattr(args, a, None) is not None
+        for a in ("llm_model", "llm_base_url", "llm_api_key",
+                   "embed_model", "embed_base_url", "embed_api_key")
+    )
+    if has_flags:
+        changes: list[str] = []
+        for attr, env_key in [
+            ("llm_model",    "LLM_MODEL"),
+            ("llm_base_url", "LLM_BASE_URL"),
+            ("llm_api_key",  "LLM_API_KEY"),
+            ("embed_model",  "EMBED_MODEL"),
+            ("embed_base_url", "EMBED_BASE_URL"),
+            ("embed_api_key",  "EMBED_API_KEY"),
+        ]:
+            val = getattr(args, attr, None)
+            if val is not None:
+                env_data[env_key] = val
+                os.environ[env_key] = val
+                display = "****" if "api_key" in attr else val
+                changes.append(f"{env_key}={display}")
+        _save_env_file(env_path, env_data)
+        print()
+        print(f"  {_c('32', 'Configuration updated')}  ({env_path})")
+        print()
+        for c in changes:
+            print(f"    {_c('32', _T_OK)} {c}")
+        print()
+        return 0
+
+    # ── Interactive mode ──────────────────────────────────────────────
+    llm_info = _detect_llm_info()
+    embed_info = _detect_embed_info()
+
+    print()
+    print(f"  {_T_DOT} {_c('1', 'Current Configuration')}  ({env_path})")
+    print(f"  {_T_SIDE}")
+
+    # Show current LLM
+    if llm_info:
+        print(f"  {_T_BRANCH} LLM:       {_c('32', llm_info['model'])}  {_c('2', llm_info['provider'])}")
+        print(f"  {_T_SIDE}             base_url  {llm_info['base_url']}")
+        print(f"  {_T_SIDE}             api_key   {llm_info['api_key']}")
+    else:
+        print(f"  {_T_BRANCH} LLM:       {_c('33', '(not configured)')}")
+
+    print(f"  {_T_SIDE}")
+
+    # Show current Embedding
+    if embed_info:
+        print(f"  {_T_LAST} Embedding: {_c('32', embed_info['model'])}  {_c('2', embed_info['provider'])}")
+        print(f"               base_url  {embed_info['base_url']}")
+        print(f"               api_key   {embed_info['api_key']}")
+    else:
+        print(f"  {_T_LAST} Embedding: {_c('33', '(not configured)')}")
+
+    print()
+
+    # ── Ask what to configure ─────────────────────────────────────────
+    menu_options = [
+        "Configure LLM",
+        "Configure Embedding",
+        "Configure both",
+        "Exit (no changes)",
+    ]
+    print(f"  {_T_DOT} What would you like to configure?")
+    print(f"  {_T_SIDE}  Use ↑↓ to navigate, Enter to confirm")
+    print(f"  {_T_SIDE}")
+
+    choice = _select_menu(menu_options, prefix=f"  {_T_SIDE}  ")
+    if choice is None or choice == 3:
+        print(f"  {_T_LAST} No changes.")
+        print()
+        return 0
+
+    configure_llm = choice in (0, 2)
+    configure_embed = choice in (1, 2)
+    any_saved = False
+
+    # ── LLM Configuration ────────────────────────────────────────────
+    if configure_llm:
+        print()
+        print(f"  {_T_DOT} LLM Provider")
+        print(f"  {_T_SIDE}")
+        if llm_info:
+            print(f"  {_T_SIDE}  Current: {_mask(env_data.get('LLM_API_KEY', ''))} → {env_data.get('LLM_BASE_URL', '(default)')}")
+            print(f"  {_T_SIDE}")
+
+        provider_names = [p[0] for p in _LLM_PROVIDERS] + ["Skip"]
+        print(f"  {_T_SIDE}  Select provider:")
+        print(f"  {_T_SIDE}")
+
+        llm_choice = _select_menu(provider_names, prefix=f"  {_T_SIDE}  ")
+
+        if llm_choice is not None and llm_choice < len(_LLM_PROVIDERS):
+            pname, purl, pmodel = _LLM_PROVIDERS[llm_choice]
+            # Pre-fill with existing values or provider defaults
+            cur_url = env_data.get("LLM_BASE_URL", purl) or purl
+            cur_model = env_data.get("LLM_MODEL", pmodel) or pmodel
+            cur_key = env_data.get("LLM_API_KEY", "")
+
+            print(f"  {_T_SIDE}")
+            new_key = _prompt("API Key", _mask(cur_key) if cur_key else "")
+            # If user entered the masked version, keep old key
+            if new_key == _mask(cur_key):
+                new_key = cur_key
+
+            new_url = _prompt("Base URL", cur_url if purl else "")
+            new_model = _prompt("Model", cur_model if pmodel else "")
+
+            if new_key and new_key != "****":
+                env_data["LLM_API_KEY"] = new_key
+            if new_url:
+                env_data["LLM_BASE_URL"] = new_url
+            if new_model:
+                env_data["LLM_MODEL"] = new_model
+
+            key_display = _mask(env_data.get("LLM_API_KEY", ""))
+            print(f"  {_T_SIDE}")
+            print(f"  {_T_LAST} {_c('32', _T_OK)} {pname} / {env_data.get('LLM_MODEL', '?')}  (key: {key_display})")
+            any_saved = True
+        else:
+            print(f"  {_T_LAST} {_T_WARN} Skipped")
+
+    # ── Embedding Configuration ──────────────────────────────────────
+    if configure_embed:
+        print()
+        print(f"  {_T_DOT} Embedding Provider")
+        print(f"  {_T_SIDE}")
+        if embed_info:
+            embed_key_display = env_data.get("EMBED_API_KEY", "") or env_data.get("DASHSCOPE_API_KEY", "")
+            print(f"  {_T_SIDE}  Current: {_mask(embed_key_display)} → {env_data.get('EMBED_BASE_URL', env_data.get('DASHSCOPE_BASE_URL', '(default)'))}")
+            print(f"  {_T_SIDE}")
+
+        provider_names = [p[0] for p in _EMBED_PROVIDERS] + ["Skip"]
+        print(f"  {_T_SIDE}  Select provider:")
+        print(f"  {_T_SIDE}")
+
+        embed_choice = _select_menu(provider_names, prefix=f"  {_T_SIDE}  ")
+
+        if embed_choice is not None and embed_choice < len(_EMBED_PROVIDERS):
+            ename, eurl, emodel = _EMBED_PROVIDERS[embed_choice]
+            # For DashScope, use DASHSCOPE_* keys
+            if embed_choice == 0:
+                key_env, url_env = "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"
+            else:
+                key_env, url_env = "EMBED_API_KEY", "EMBED_BASE_URL"
+
+            cur_url = env_data.get(url_env, eurl) or eurl
+            cur_model = env_data.get("EMBED_MODEL", emodel) or emodel
+            cur_key = env_data.get(key_env, "")
+
+            print(f"  {_T_SIDE}")
+            new_key = _prompt("API Key", _mask(cur_key) if cur_key else "")
+            if new_key == _mask(cur_key):
+                new_key = cur_key
+
+            new_url = _prompt("Base URL", cur_url if eurl else "")
+            new_model = _prompt("Model", cur_model if emodel else "")
+
+            if new_key and new_key != "****":
+                env_data[key_env] = new_key
+            if new_url:
+                env_data[url_env] = new_url
+            if new_model:
+                env_data["EMBED_MODEL"] = new_model
+
+            key_display = _mask(env_data.get(key_env, ""))
+            print(f"  {_T_SIDE}")
+            print(f"  {_T_LAST} {_c('32', _T_OK)} {ename} / {env_data.get('EMBED_MODEL', '?')}  (key: {key_display})")
+            any_saved = True
+        else:
+            print(f"  {_T_LAST} {_T_WARN} Skipped")
+
+    # ── Save ─────────────────────────────────────────────────────────
+    if any_saved:
+        _save_env_file(env_path, env_data)
+        # Also update os.environ for immediate effect in this process
+        for key, val in env_data.items():
+            if val:
+                os.environ[key] = val
+        print()
+        print(f"  {_T_DOT} {_c('32', 'Configuration saved')}")
+        print(f"  {_T_SIDE}")
+        print(f"  {_T_BRANCH} File: {env_path}")
+        llm_model = env_data.get("LLM_MODEL", "")
+        embed_model = env_data.get("EMBED_MODEL", "")
+        if llm_model:
+            print(f"  {_T_BRANCH} LLM:       {llm_model}  →  {env_data.get('LLM_BASE_URL', '?')}")
+        if embed_model:
+            print(f"  {_T_BRANCH} Embedding: {embed_model}  →  {env_data.get('EMBED_BASE_URL', env_data.get('DASHSCOPE_BASE_URL', '?'))}")
+        print(f"  {_T_LAST} {_c('2', 'Restart MCP server or call reload_config for changes to take effect.')}")
+        print()
+    else:
+        print()
+        print(f"  No changes made.")
+        print()
 
     return 0
 
@@ -1357,6 +1808,20 @@ Windows:
         description="Display info about the currently active CodeGraphWiki repository.",
     )
     status_parser.set_defaults(func=cmd_status)
+
+    # config command
+    config_parser = subparsers.add_parser(
+        "config",
+        help="View or modify LLM / embedding configuration",
+        description="View current config or set LLM / embedding model, base URL, and API key.",
+    )
+    config_parser.add_argument("--llm-model", type=str, default=None, help="Set LLM model name (e.g. gpt-4o)")
+    config_parser.add_argument("--llm-base-url", type=str, default=None, help="Set LLM API base URL")
+    config_parser.add_argument("--llm-api-key", type=str, default=None, help="Set LLM API key")
+    config_parser.add_argument("--embed-model", type=str, default=None, help="Set embedding model name")
+    config_parser.add_argument("--embed-base-url", type=str, default=None, help="Set embedding API base URL")
+    config_parser.add_argument("--embed-api-key", type=str, default=None, help="Set embedding API key")
+    config_parser.set_defaults(func=cmd_config)
 
     # list command
     list_parser = subparsers.add_parser(
