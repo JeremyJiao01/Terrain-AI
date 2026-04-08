@@ -1,6 +1,6 @@
 {
   "name": "code-graph-builder",
-  "version": "0.30.10",
+  "version": "0.31.0",
   "description": "Code knowledge graph builder with MCP server for AI-assisted code navigation",
   "license": "MIT",
   "bin": {
