@@ -55,7 +55,7 @@ class DefinitionProcessor:
     ) -> tuple[Node, cs.SupportedLanguage] | None:
         """Process a single file and extract definitions."""
         relative_path = file_path.relative_to(self.repo_path)
-        logger.info(f"Processing file: {relative_path}")
+        logger.debug(f"Processing file: {relative_path}")
 
         try:
             lang_queries = queries.get(language)
@@ -340,7 +340,7 @@ class DefinitionProcessor:
                         kind, class_name, members
                     )
 
-                logger.info(f"  Found class: {class_name}")
+                logger.debug(f"  Found class: {class_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.CLASS, class_props)
 
                 self.ingestor.ensure_relationship_batch(
@@ -401,7 +401,7 @@ class DefinitionProcessor:
                     cs.KEY_END_LINE: method_node.end_point[0] + 1,
                 }
 
-                logger.info(f"    Found method: {method_name}")
+                logger.debug(f"    Found method: {method_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.METHOD, method_props)
                 self.function_registry[method_qn] = NodeType.METHOD
                 if method_name not in self.simple_name_lookup:
@@ -701,7 +701,7 @@ class DefinitionProcessor:
                 if c_docstring:
                     td_props[cs.KEY_DOCSTRING] = c_docstring
 
-                logger.info(f"  Found typedef: {td_name}")
+                logger.debug(f"  Found typedef: {td_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.TYPE, td_props)
 
                 self.ingestor.ensure_relationship_batch(
@@ -789,7 +789,7 @@ class DefinitionProcessor:
                 if c_docstring:
                     macro_props[cs.KEY_DOCSTRING] = c_docstring
 
-                logger.info(f"  Found macro: {macro_name}")
+                logger.debug(f"  Found macro: {macro_name}")
                 self.ingestor.ensure_node_batch(cs.NodeLabel.FUNCTION, macro_props)
 
                 self.ingestor.ensure_relationship_batch(
@@ -854,7 +854,7 @@ class DefinitionProcessor:
 
     def process_dependencies(self, filepath: Path) -> None:
         """Process dependency files."""
-        logger.info(f"Processing dependencies: {filepath}")
+        logger.debug(f"Processing dependencies: {filepath}")
 
     def process_all_method_overrides(self) -> None:
         """Process all method overrides."""

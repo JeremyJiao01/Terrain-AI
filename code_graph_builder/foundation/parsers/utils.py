@@ -113,7 +113,7 @@ def ingest_method(
         cs.KEY_DOCSTRING: get_docstring_func(method_node),
     }
 
-    logger.info(f"    Found Method: {method_name} (qn: {method_qn})")
+    logger.debug(f"    Found Method: {method_name} (qn: {method_qn})")
     ingestor.ensure_node_batch(cs.NodeLabel.METHOD, method_props)
     function_registry[method_qn] = NodeType.METHOD
     simple_name_lookup[method_name].add(method_qn)

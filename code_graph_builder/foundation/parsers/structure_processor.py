@@ -51,7 +51,7 @@ class StructureProcessor:
                 cs.KEY_PATH: str(self.repo_path),
             },
         )
-        logger.info(f"Created Project node: {self.project_name}")
+        logger.debug(f"Created Project node: {self.project_name}")
 
         directories = {self.repo_path}
         for path in self.repo_path.rglob(cs.GLOB_ALL):

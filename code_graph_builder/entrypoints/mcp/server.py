@@ -99,6 +99,7 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
 
     state = registry.active_state
     if state is None:
+        logger.debug("  sync: no active repo, skipping")
         return  # No active repo yet
 
     repo_path, artifact_dir = state
@@ -106,12 +107,15 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
     vectors_path = artifact_dir / "vectors.pkl"
 
     if not db_path.exists():
+        logger.debug("  sync: graph.db not found, skipping")
         return  # Graph not built yet
 
     from code_graph_builder.foundation.services.git_service import GitChangeDetector
 
+    logger.debug("  sync: calling get_current_head...")
     detector = GitChangeDetector()
     current_head = detector.get_current_head(repo_path)
+    logger.debug("  sync: get_current_head returned: {}", current_head[:8] if current_head else None)
 
     if current_head is None:
         return  # Not a git repo
@@ -215,11 +219,18 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
 
 
 async def main() -> None:
+    import time as _time
+    _t_main = _time.monotonic()
+    logger.debug("=== main() entered ===")
+
     workspace = Path(
         os.environ.get("CGB_WORKSPACE", Path.home() / ".code-graph-builder")
     ).expanduser().resolve()
+    logger.debug("  workspace: {}", workspace)
 
+    logger.debug("  creating MCPToolsRegistry (includes _try_auto_load)...")
     registry = MCPToolsRegistry(workspace=workspace)
+    logger.debug("  MCPToolsRegistry created ({:.0f}ms)", (_time.monotonic() - _t_main) * 1000)
 
     server = Server(
         SERVER_NAME,
@@ -260,17 +271,27 @@ async def main() -> None:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        import time as _time
+        _t0 = _time.monotonic()
+        logger.debug("┌── call_tool START: {} args={}", name, arguments)
+
         # Check for committed code changes and sync incrementally if needed.
         # Skip for initialize_repository (full rebuild) and other write-heavy
         # tools to avoid Kuzu lock contention on Windows.
         _SKIP_SYNC_TOOLS = {"initialize_repository", "build_graph", "rebuild_embeddings"}
         if name not in _SKIP_SYNC_TOOLS:
+            logger.debug("│  incremental_sync BEGIN")
+            _ts = _time.monotonic()
             try:
                 await asyncio.wait_for(_maybe_incremental_sync(registry), timeout=30)
             except asyncio.TimeoutError:
                 logger.warning("Incremental sync timed out (30s), skipping")
             except Exception as exc:
                 logger.warning("Incremental sync failed: {}", exc)
+            logger.debug("│  incremental_sync END ({:.0f}ms)", (_time.monotonic() - _ts) * 1000)
+        else:
+            logger.debug("│  incremental_sync SKIPPED (tool in skip list)")
+
         handler = registry.get_handler(name)
         if handler is None:
             raise ValueError(f"Unknown tool: {name}")
@@ -320,16 +341,21 @@ async def main() -> None:
 
             kwargs["_progress_cb"] = _progress_cb
 
+        logger.debug("│  handler BEGIN: {}", name)
+        _th = _time.monotonic()
         try:
             result = await handler(**kwargs)
         except ToolError:
+            logger.debug("│  handler RAISED ToolError ({:.0f}ms)", (_time.monotonic() - _th) * 1000)
             # ToolError already carries structured JSON in str(exc).
             # Re-raise so the MCP framework returns isError=True to the agent.
             raise
         except Exception as exc:
+            logger.debug("│  handler RAISED Exception ({:.0f}ms)", (_time.monotonic() - _th) * 1000)
             # Unexpected exception — wrap into ToolError for consistent handling.
             logger.exception(f"Tool '{name}' raised an unhandled exception")
             raise ToolError({"error": str(exc), "tool": name}) from exc
+        logger.debug("│  handler END ({:.0f}ms)", (_time.monotonic() - _th) * 1000)
 
         # Notify client that tool list may have changed after state-changing ops
         _STATE_CHANGING_TOOLS = {"initialize_repository", "build_graph", "switch_repository"}
@@ -343,16 +369,20 @@ async def main() -> None:
             text = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         else:
             text = str(result)
+        logger.debug("└── call_tool DONE: {} total={:.0f}ms", name, (_time.monotonic() - _t0) * 1000)
         return [TextContent(type="text", text=text)]
 
+    logger.debug("=== MCP server starting stdio transport ===")
     try:
         async with stdio_server() as (read_stream, write_stream):
+            logger.debug("=== stdio_server ready, entering server.run() ===")
             await server.run(
                 read_stream,
                 write_stream,
                 server.create_initialization_options(),
             )
     finally:
+        logger.debug("=== MCP server shutting down ===")
         registry.close()
 
 
