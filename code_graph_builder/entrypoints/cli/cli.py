@@ -421,12 +421,14 @@ def _interactive_select(repos: list[dict]) -> int | None:
     def render(selected: int) -> None:
         if _ANSI:
             if getattr(render, "_drawn", False):
-                sys.stdout.write(f"\033[{len(repos)}A")
+                sys.stdout.write("\033[u")  # restore saved cursor position
+            else:
+                sys.stdout.write("\033[s")  # save cursor position before first draw
             render._drawn = True  # type: ignore[attr-defined]
             for i, r in enumerate(repos):
                 marker = _c("1;32", "▶") if i == selected else " "
                 active_tag = f"  {_c('33', '(active)')}" if r["active"] else ""
-                sys.stdout.write(f"\r  {marker} {r['name']}{active_tag}\n")
+                sys.stdout.write(f"\r\033[2K  {marker} {r['name']}{active_tag}\r\n")
         else:
             # No cursor movement — reprint with a plain marker
             for i, r in enumerate(repos):
@@ -474,11 +476,11 @@ def _interactive_select(repos: list[dict]) -> int | None:
                 while True:
                     ch = sys.stdin.read(1)
                     if ch in ("\r", "\n"):
-                        sys.stdout.write("\n")
+                        sys.stdout.write("\r\n")
                         sys.stdout.flush()
                         return current
                     if ch in ("\x03", "q"):
-                        sys.stdout.write("\n")
+                        sys.stdout.write("\r\n")
                         sys.stdout.flush()
                         return None
                     if ch == "\x1b":
@@ -677,8 +679,10 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
     cursor = 0
 
     def render(initial: bool = False) -> None:
-        if not initial and _ANSI:
-            sys.stdout.write(f"\033[{len(options)}A")
+        if _ANSI:
+            # Save cursor before first draw; restore before each redraw.
+            # This avoids counting lines (which breaks across cooked/raw mode).
+            sys.stdout.write("\033[s" if initial else "\033[u")
         for i, opt in enumerate(options):
             if _ANSI:
                 marker = _c("1;36", "◉") if i == cursor else _c("2", "○")
