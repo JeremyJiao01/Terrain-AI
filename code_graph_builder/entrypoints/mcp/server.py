@@ -30,14 +30,14 @@ import os
 import sys
 from pathlib import Path
 
-# Force unbuffered stdout/stderr on Windows to prevent MCP stdio deadlock.
+# Force unbuffered stdout/stderr to prevent MCP stdio deadlock.
 # When Python's stdout is connected to a pipe (MCP JSON-RPC transport),
-# it defaults to full buffering, which can hold back responses indefinitely.
-if sys.platform == "win32":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(write_through=True)
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(write_through=True)
+# it defaults to full buffering on ALL platforms, which can hold back
+# responses indefinitely.  write_through=True forces immediate flushing.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(write_through=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(write_through=True)
 
 from dotenv import load_dotenv
 
@@ -142,9 +142,12 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
 
     from code_graph_builder.foundation.services.git_service import GitChangeDetector
 
-    logger.debug("  sync: calling get_current_head...")
     detector = GitChangeDetector()
-    current_head = detector.get_current_head(repo_path)
+
+    # IMPORTANT: git subprocess calls are blocking — run in thread pool
+    # to avoid stalling the asyncio event loop (and the MCP transport).
+    logger.debug("  sync: calling get_current_head (in thread)...")
+    current_head = await asyncio.to_thread(detector.get_current_head, repo_path)
     logger.debug("  sync: get_current_head returned: {}", current_head[:8] if current_head else None)
 
     if current_head is None:
@@ -165,7 +168,10 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
         except Exception:
             pass
 
-    changed_files, new_head = detector.get_changed_files(repo_path, last_commit)
+    logger.debug("  sync: calling get_changed_files (in thread)...")
+    changed_files, new_head = await asyncio.to_thread(
+        detector.get_changed_files, repo_path, last_commit
+    )
 
     if new_head is not None:
         _cached_head = new_head  # Update cache regardless of outcome below
@@ -202,10 +208,19 @@ async def _maybe_incremental_sync(registry: "MCPToolsRegistry") -> None:
             result.files_reindexed, result.callers_reindexed, result.duration_ms,
         )
 
+        # IMPORTANT: Force GC *before* cascade steps to ensure Kuzu
+        # write-mode file locks from IncrementalUpdater are fully released.
+        # On Windows, Kuzu Database objects hold mandatory file locks that
+        # persist until the Python object is garbage-collected — even after
+        # explicit close().  Without this barrier the cascade read-only
+        # connections below will deadlock waiting for the lock.
+        import gc
+        gc.collect()
+        logger.debug("  sync: GC barrier after incremental update")
+
         # Cascade: regenerate API docs and vector index.
-        # IMPORTANT: Each step creates its own temporary Kuzu connection
-        # and releases it before the next step starts.  On Windows, Kuzu
-        # holds mandatory file locks — overlapping connections cause deadlock.
+        # Each step creates its own temporary read-only Kuzu connection
+        # and releases it before the next step starts.
         from code_graph_builder.entrypoints.mcp.pipeline import (
             generate_api_docs_step,
             build_vector_index,
