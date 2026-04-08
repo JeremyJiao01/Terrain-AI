@@ -149,13 +149,40 @@ class LLMClient:
             response.raise_for_status()
             data = response.json()
 
-            choice = data["choices"][0]
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Unexpected response format: {data!r}")
+            if "error" in data:
+                err = data["error"]
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                raise RuntimeError(f"API error: {msg}")
+            choices = data.get("choices")
+            if not choices:
+                raise RuntimeError(f"API returned no choices. Response: {data!r}")
+
+            choice = choices[0]
+            message = choice.get("message")
+            if message is None:
+                finish_reason = choice.get("finish_reason", "unknown")
+                raise RuntimeError(
+                    f"API returned null message (finish_reason={finish_reason!r}). "
+                    f"Response: {data!r}"
+                )
+            content = message.get("content")
+            if content is None:
+                finish_reason = choice.get("finish_reason", "unknown")
+                raise RuntimeError(
+                    f"API returned null content (finish_reason={finish_reason!r}). "
+                    f"Response: {data!r}"
+                )
             return ChatResponse(
-                content=choice["message"]["content"],
+                content=content,
                 usage=data.get("usage", {}),
                 model=data.get("model", self.model),
                 finish_reason=choice.get("finish_reason", "unknown"),
             )
+
+        except RuntimeError:
+            raise
 
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error: {e}")
@@ -207,14 +234,41 @@ class LLMClient:
             response.raise_for_status()
             data = response.json()
 
-            choice = data["choices"][0]
+            # Detect API-level errors returned with HTTP 200
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Unexpected response format: {data!r}")
+            if "error" in data:
+                err = data["error"]
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                raise RuntimeError(f"API error: {msg}")
+            choices = data.get("choices")
+            if not choices:
+                raise RuntimeError(f"API returned no choices. Response: {data!r}")
+
+            choice = choices[0]
+            message = choice.get("message")
+            if message is None:
+                finish_reason = choice.get("finish_reason", "unknown")
+                raise RuntimeError(
+                    f"API returned null message (finish_reason={finish_reason!r}). "
+                    f"Response: {data!r}"
+                )
+            content = message.get("content")
+            if content is None:
+                finish_reason = choice.get("finish_reason", "unknown")
+                raise RuntimeError(
+                    f"API returned null content (finish_reason={finish_reason!r}). "
+                    f"Response: {data!r}"
+                )
             return ChatResponse(
-                content=choice["message"]["content"],
+                content=content,
                 usage=data.get("usage", {}),
                 model=data.get("model", self.model),
                 finish_reason=choice.get("finish_reason", "unknown"),
             )
 
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"Request failed: {e}")
             raise RuntimeError(f"API request failed: {e}")

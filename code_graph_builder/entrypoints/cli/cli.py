@@ -683,7 +683,7 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
             if _ANSI:
                 marker = _c("1;36", "◉") if i == cursor else _c("2", "○")
                 label = _c("1;36", opt) if i == cursor else opt
-                sys.stdout.write(f"\033[2K{prefix}{marker} {label}\n")
+                sys.stdout.write(f"\r\033[2K{prefix}{marker} {label}\r\n")
             else:
                 marker = "> " if i == cursor else "  "
                 print(f"{prefix}{marker}{opt}")
@@ -723,11 +723,11 @@ def _select_menu(options: list[str], prefix: str = "  ") -> int | None:
                 while True:
                     ch = sys.stdin.read(1)
                     if ch in ("\r", "\n"):
-                        sys.stdout.write("\n")
+                        sys.stdout.write("\r\n")
                         sys.stdout.flush()
                         return cursor
                     if ch in ("\x03", "q"):
-                        sys.stdout.write("\n")
+                        sys.stdout.write("\r\n")
                         sys.stdout.flush()
                         return None
                     if ch == "\x1b":
@@ -1016,6 +1016,19 @@ def cmd_list(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _rename_repo(artifact_dir: Path, new_name: str) -> None:
+    """Update repo_name in meta.json."""
+    meta_file = artifact_dir / "meta.json"
+    if not meta_file.exists():
+        return
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    meta["repo_name"] = new_name
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+
 def cmd_repo(_args: argparse.Namespace) -> int:
     """Interactively select and switch the active repository."""
     ws = _get_workspace_root()
@@ -1037,6 +1050,17 @@ def cmd_repo(_args: argparse.Namespace) -> int:
     (ws / "active.txt").write_text(target["artifact_dir"].name, encoding="utf-8")
     print(f"Switched to: {target['name']}")
     print(f"Path: {target['path']}")
+
+    # Offer rename after switching
+    try:
+        rename_input = input(f"Rename [{target['name']}] (Enter to keep): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        rename_input = ""
+    if rename_input and rename_input != target["name"]:
+        _rename_repo(target["artifact_dir"], rename_input)
+        print(f"Renamed to: {rename_input}")
+
     return 0
 
 
@@ -1400,6 +1424,15 @@ def cmd_index(args: argparse.Namespace) -> int:
     if getattr(args, "incremental", False):
         return _run_incremental_index(args, repo_path, ws)
 
+    # Prompt for a display name (default: directory name)
+    default_name = repo_path.name
+    try:
+        user_input = input(f"Database name [{default_name}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        user_input = ""
+    custom_name = user_input if user_input else default_name
+
     skip_embed = args.no_embed
     skip_wiki = args.no_wiki or skip_embed
     rebuild = True  # Default: always rebuild
@@ -1453,7 +1486,7 @@ def cmd_index(args: argparse.Namespace) -> int:
         # embedding is skipped or fails later.
         from code_graph_builder.foundation.services.git_service import GitChangeDetector
         _head = GitChangeDetector().get_current_head(repo_path)
-        save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head)
+        save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head, repo_name=custom_name)
         ws_root = _get_workspace_root()
         (ws_root / "active.txt").write_text(artifact_dir.name, encoding="utf-8")
 
@@ -1487,9 +1520,9 @@ def cmd_index(args: argparse.Namespace) -> int:
         bar.finish()
         # Update meta with final page_count (active.txt already written above).
         _head = GitChangeDetector().get_current_head(repo_path)
-        save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
+        save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head, repo_name=custom_name)
 
-        print(f"{_c('32', '✓')} Done   {repo_path.name}   active repo set")
+        print(f"{_c('32', '✓')} Done   {custom_name}   active repo set")
         if not skip_wiki:
             print(f"  wiki pages: {page_count}")
         return 0

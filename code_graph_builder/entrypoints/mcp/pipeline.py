@@ -1383,11 +1383,16 @@ def save_meta(
     repo_path: Path,
     wiki_page_count: int,
     last_indexed_commit: str | None = None,
+    repo_name: str | None = None,
 ) -> None:
     """Save or update artifact metadata.
 
     Preserves existing fields (like step-completion flags) and updates
     the timestamp and wiki page count.
+
+    Args:
+        repo_name: Custom display name. If None, keeps existing custom name or
+                   falls back to repo_path.name.
     """
     meta_file = artifact_dir / "meta.json"
     existing: dict = {}
@@ -1396,6 +1401,9 @@ def save_meta(
             existing = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             pass
+
+    # Determine the display name: explicit arg > existing custom name > dir name
+    resolved_name = repo_name or existing.get("repo_name") or repo_path.name or "root"
 
     # Auto-detect which artifacts exist
     has_graph = (artifact_dir / "graph.db").exists()
@@ -1406,7 +1414,7 @@ def save_meta(
     meta = {
         **existing,
         "repo_path": repo_path.as_posix(),
-        "repo_name": repo_path.name or "root",
+        "repo_name": resolved_name,
         "indexed_at": datetime.now().isoformat(),
         "wiki_page_count": wiki_page_count,
         "steps": {
