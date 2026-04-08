@@ -260,13 +260,17 @@ async def main() -> None:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        # Check for committed code changes and sync incrementally if needed
-        try:
-            await asyncio.wait_for(_maybe_incremental_sync(registry), timeout=30)
-        except asyncio.TimeoutError:
-            logger.warning("Incremental sync timed out (30s), skipping")
-        except Exception as exc:
-            logger.warning("Incremental sync failed: {}", exc)
+        # Check for committed code changes and sync incrementally if needed.
+        # Skip for initialize_repository (full rebuild) and other write-heavy
+        # tools to avoid Kuzu lock contention on Windows.
+        _SKIP_SYNC_TOOLS = {"initialize_repository", "build_graph", "rebuild_embeddings"}
+        if name not in _SKIP_SYNC_TOOLS:
+            try:
+                await asyncio.wait_for(_maybe_incremental_sync(registry), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("Incremental sync timed out (30s), skipping")
+            except Exception as exc:
+                logger.warning("Incremental sync failed: {}", exc)
         handler = registry.get_handler(name)
         if handler is None:
             raise ValueError(f"Unknown tool: {name}")
