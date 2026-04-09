@@ -20,6 +20,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -629,6 +630,38 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  embedding  {_c('32', embed['model'])}   {embed['provider']}   {embed['base_url']}")
     else:
         print(f"  embedding  {_c('33', '(not configured)')}   — cgb config --embed-model <model> to set")
+
+    # ── Language parsers ──
+    _CORE_LANGS: list[tuple[str, str]] = [
+        ("python",     "tree_sitter_python"),
+        ("javascript", "tree_sitter_javascript"),
+        ("typescript", "tree_sitter_typescript"),
+        ("c",          "tree_sitter_c"),
+        ("c++",        "tree_sitter_cpp"),
+    ]
+    _EXTRA_LANGS: list[tuple[str, str]] = [
+        ("rust",  "tree_sitter_rust"),
+        ("go",    "tree_sitter_go"),
+        ("java",  "tree_sitter_java"),
+        ("lua",   "tree_sitter_lua"),
+        ("scala", "tree_sitter_scala"),
+    ]
+    available_langs: list[str] = []
+    missing_langs: list[str] = []
+    for lang, module in _CORE_LANGS + _EXTRA_LANGS:
+        if importlib.util.find_spec(module) is not None:
+            available_langs.append(lang)
+        else:
+            missing_langs.append(lang)
+
+    if missing_langs:
+        print(
+            f"  parsers    {_c('32', ' '.join(available_langs))}"
+            f"   {_c('33', '(missing: ' + ' '.join(missing_langs) + ')')}"
+        )
+        print(f"             {_c('2', 'Add: npx code-graph-builder@latest --setup')}")
+    else:
+        print(f"  parsers    {_c('32', ' '.join(available_langs))}")
 
     # ── Debug ──
     env_data = _load_env_file(env_path)

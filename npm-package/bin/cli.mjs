@@ -166,6 +166,102 @@ function selectMenu(options, prefix = "  ", defaultIndex = 0, allowBack = false)
   });
 }
 
+/**
+ * Interactive multi-select checkbox menu.
+ * Arrow keys to navigate, Space to toggle, Enter to confirm.
+ * Returns array of selected indices, null on Ctrl+C, -2 on ← (back).
+ *
+ * @param {string[]} options - Display labels
+ * @param {number[]} preSelected - Initially checked indices
+ * @param {string} prefix - Tree prefix for each line
+ * @param {boolean} allowBack - Whether ← arrow triggers back (-2)
+ * @returns {Promise<number[]|null|-2>}
+ */
+/**
+ * @param {number[]} lockedIndices - Always-checked indices that cannot be toggled.
+ *   Rendered as dim green [x] with dim label to indicate they are core/required.
+ */
+function multiSelectMenu(options, preSelected = [], prefix = "  ", allowBack = false, lockedIndices = []) {
+  return new Promise((resolve) => {
+    const out = process.stderr;
+    let cursor = 0;
+    const locked = new Set(lockedIndices);
+    const selected = new Set(preSelected);
+    // Locked items are always selected
+    for (const i of locked) selected.add(i);
+
+    const DIM   = "\x1b[2m";
+    const BOLD  = "\x1b[1m";
+    const CYAN  = "\x1b[36m";
+    const GREEN = "\x1b[32m";
+    const RESET = "\x1b[0m";
+
+    const lineCount = options.length + 1 + (allowBack ? 1 : 0); // +1 hint
+
+    function render(initial = false) {
+      if (!initial) out.write(`\x1b[${lineCount}A`);
+      out.write(`\x1b[2K${prefix}${DIM}Space to toggle · Enter to confirm${allowBack ? " · ← back" : ""}${RESET}\n`);
+      for (let i = 0; i < options.length; i++) {
+        const isActive  = i === cursor;
+        const isLocked  = locked.has(i);
+        const isChecked = selected.has(i);
+
+        let box, label;
+        if (isLocked) {
+          // Dim green checkbox + dim label — visually "selected but not toggleable"
+          box   = `${DIM}${GREEN}[x]${RESET}`;
+          label = isActive
+            ? `${DIM}${GREEN}${options[i]}${RESET}`
+            : `${DIM}${options[i]}${RESET}`;
+        } else {
+          box = isChecked
+            ? `${GREEN}[x]${RESET}`
+            : `${DIM}[ ]${RESET}`;
+          label = isActive
+            ? `${BOLD}${CYAN}${options[i]}${RESET}`
+            : options[i];
+        }
+        out.write(`\x1b[2K${prefix}${box} ${label}\n`);
+      }
+      if (allowBack) {
+        out.write(`\x1b[2K${prefix}${DIM}← Back to previous step${RESET}\n`);
+      }
+    }
+
+    out.write("\x1b[?25l");
+    render(true);
+
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    function cleanup() {
+      stdin.setRawMode(wasRaw || false);
+      stdin.removeListener("data", onKey);
+      out.write("\x1b[?25h");
+    }
+
+    function onKey(buf) {
+      const key = buf.toString();
+      if (key === "\x03") { cleanup(); resolve(null); return; }
+      if (key === "\x1b[D" && allowBack) { cleanup(); resolve(-2); return; }
+      if (key === "\x1b[A" || key === "k") { cursor = (cursor - 1 + options.length) % options.length; render(); return; }
+      if (key === "\x1b[B" || key === "j") { cursor = (cursor + 1) % options.length; render(); return; }
+      if (key === " ") {
+        // Locked items cannot be toggled
+        if (locked.has(cursor)) { render(); return; }
+        if (selected.has(cursor)) selected.delete(cursor);
+        else selected.add(cursor);
+        render();
+        return;
+      }
+      if (key === "\r" || key === "\n") { cleanup(); resolve([...selected]); return; }
+    }
+    stdin.on("data", onKey);
+  });
+}
+
 function box(title) {
   const pad = 54;
   const inner = `  ${title}  `;
@@ -392,14 +488,32 @@ async function runSetup() {
     { name: "OpenAI",    url: "https://api.openai.com/v1",             model: "text-embedding-3-small", keyEnv: "OPENAI_API_KEY", urlEnv: "OPENAI_BASE_URL" },
   ];
 
+  // --- Language items (core = always installed, locked in UI; optional = user choice) ---
+  const ALL_LANG_ITEMS = [
+    { label: "Python",     pkg: null,                  locked: true  },
+    { label: "JavaScript", pkg: null,                  locked: true  },
+    { label: "TypeScript", pkg: null,                  locked: true  },
+    { label: "C",          pkg: null,                  locked: true  },
+    { label: "C++",        pkg: null,                  locked: true  },
+    { label: "Rust",       pkg: "tree-sitter-rust",    locked: false },
+    { label: "Go",         pkg: "tree-sitter-go",      locked: false },
+    { label: "Java",       pkg: "tree-sitter-java",    locked: false },
+    { label: "Lua",        pkg: "tree-sitter-lua",     locked: false },
+    { label: "Scala",      pkg: "tree-sitter-scala",   locked: false },
+  ];
+  const LOCKED_LANG_INDICES = ALL_LANG_ITEMS.map((l, i) => l.locked ? i : -1).filter(i => i !== -1);
+
+  // Filled in step 4, consumed in the verification section
+  let selectedLangPkgs = [];
+
   // --- Step-based wizard with ← back support ---
   let step = 1;
 
-  while (step >= 1 && step <= 3) {
+  while (step >= 1 && step <= 4) {
 
     // ─── Step 1: Workspace ───
     if (step === 1) {
-      log(`  ${T.DOT} Step 1/3  Workspace`);
+      log(`  ${T.DOT} Step 1/4  Workspace`);
       log(`  ${T.SIDE}`);
       log(`  ${T.BRANCH} Stores indexed repos, graphs, and embeddings`);
 
@@ -414,7 +528,7 @@ async function runSetup() {
 
     // ─── Step 2: LLM Provider ───
     if (step === 2) {
-      log(`  ${T.DOT} Step 2/3  LLM Provider`);
+      log(`  ${T.DOT} Step 2/4  LLM Provider`);
       log(`  ${T.SIDE}`);
       log(`  ${T.BRANCH} For natural language queries & descriptions`);
       log(`  ${T.SIDE}  Use ↑↓ navigate, Enter confirm, ← back`);
@@ -476,7 +590,7 @@ async function runSetup() {
 
     // ─── Step 3: Embedding Provider ───
     if (step === 3) {
-      log(`  ${T.DOT} Step 3/3  Embedding Provider`);
+      log(`  ${T.DOT} Step 3/4  Embedding Provider`);
       log(`  ${T.SIDE}`);
       log(`  ${T.BRANCH} For semantic code search`);
       log(`  ${T.SIDE}  Use ↑↓ navigate, Enter confirm, ← back`);
@@ -540,7 +654,47 @@ async function runSetup() {
         log(`  ${T.LAST} ${T.WARN} Skipped (configure later in ${ENV_FILE})`);
       }
 
-      step = 4; // done
+      step = 4;
+      continue;
+    }
+
+    // ─── Step 4: Language Support ───
+    if (step === 4) {
+      log(`  ${T.DOT} Step 4/4  Language Support`);
+      log(`  ${T.SIDE}`);
+      log(`  ${T.BRANCH} Dimmed items are core dependencies — always included`);
+      log(`  ${T.BRANCH} Space to toggle additional languages, Enter to confirm`);
+      log(`  ${T.SIDE}`);
+
+      const langLabels = ALL_LANG_ITEMS.map(l => l.label);
+      // Default: only core (locked) ones selected; optional start unchecked
+      const defaultSelected = [...LOCKED_LANG_INDICES];
+
+      rl.close();
+      const langResult = await multiSelectMenu(langLabels, defaultSelected, `  ${T.SIDE}  `, true, LOCKED_LANG_INDICES);
+      rl = createInterface({ input: process.stdin, output: process.stderr });
+      ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+
+      if (langResult === -2) { log(); step = 3; continue; }
+      if (langResult === null) { rl.close(); return; }
+
+      // Only collect optional (non-locked) packages that the user checked
+      selectedLangPkgs = langResult
+        .filter(i => !ALL_LANG_ITEMS[i].locked && ALL_LANG_ITEMS[i].pkg)
+        .map(i => ALL_LANG_ITEMS[i].pkg);
+
+      const selectedOptionalLabels = langResult
+        .filter(i => !ALL_LANG_ITEMS[i].locked)
+        .map(i => ALL_LANG_ITEMS[i].label);
+
+      if (selectedOptionalLabels.length > 0) {
+        log(`  ${T.LAST} ${T.OK} + ${selectedOptionalLabels.join(" · ")}`);
+      } else {
+        log(`  ${T.LAST} ${T.OK} Core only`);
+      }
+      log();
+
+      step = 5; // done — exit loop
       continue;
     }
   }
@@ -587,13 +741,16 @@ async function runSetup() {
 
   // 2. Package — auto-install or upgrade
   const pip = findPip();
-  // Always force-reinstall so the latest published version is used even
-  // when the same version number is already present locally.
-  log(`  ${T.SIDE}  ${T.WORK} Installing ${PYTHON_PACKAGE} (force-reinstall)...`);
+  // Build install target: base package + any optional language extras user selected
+  const installTargets = [PYTHON_PACKAGE, ...selectedLangPkgs];
+  const installDesc = selectedLangPkgs.length > 0
+    ? `${PYTHON_PACKAGE} + ${selectedLangPkgs.join(", ")}`
+    : PYTHON_PACKAGE;
+  log(`  ${T.SIDE}  ${T.WORK} Installing ${installDesc} (force-reinstall)...`);
   if (pip) {
     try {
       execSync(
-        [...pip, "install", "--force-reinstall", "--upgrade", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+        [...pip, "install", "--force-reinstall", "--upgrade", ...installTargets].map(s => `"${s}"`).join(" "),
         { stdio: "pipe", shell: true }
       );
     } catch { /* handled below */ }
@@ -602,6 +759,9 @@ async function runSetup() {
   if (pythonPackageInstalled()) {
     const ver = getPackageVersion();
     log(`  ${T.BRANCH} ${T.OK} ${PYTHON_PACKAGE} ${ver || ""}`);
+    if (selectedLangPkgs.length > 0) {
+      log(`  ${T.SIDE}       Language extras: ${selectedLangPkgs.join(", ")}`);
+    }
   } else {
     log(`  ${T.BRANCH} ${T.FAIL} Package not installed`);
     log(`  ${T.LAST}   Run manually: pip install ${PYTHON_PACKAGE}`);
@@ -756,6 +916,23 @@ async function runSetup() {
 
   log();
   log(`  ${T.DOT} Setup complete`);
+  log(`  ${T.SIDE}`);
+  log(`  ${T.BRANCH} Run  cgb index <path>  to index a codebase`);
+
+  // Show which language parsers are installed
+  const optionalItems   = ALL_LANG_ITEMS.filter(l => !l.locked);
+  const installedExtras = optionalItems.filter(l => selectedLangPkgs.includes(l.pkg)).map(l => l.label);
+  const missingExtras   = optionalItems.filter(l => !selectedLangPkgs.includes(l.pkg)).map(l => l.label);
+  const coreList = "Python · JS · TS · C · C++";
+  const extraList = installedExtras.length > 0 ? " · " + installedExtras.join(" · ") : "";
+  log(`  ${T.BRANCH} Parsers: ${coreList}${extraList}`);
+
+  if (missingExtras.length > 0) {
+    log(`  ${T.LAST} To add more languages (${missingExtras.join(", ")}), re-run:`);
+    log(`         npx code-graph-builder@latest --setup`);
+  } else {
+    log(`  ${T.LAST} All language parsers installed`);
+  }
   log();
 }
 
@@ -854,17 +1031,19 @@ function autoInstallAndStart(extraArgs) {
     process.exit(1);
   }
 
-  process.stderr.write(`Installing ${PYTHON_PACKAGE}...\n`);
+  // Auto-install includes all language extras so the server can index any repo
+  const autoInstallTarget = `${PYTHON_PACKAGE}[treesitter-full]`;
+  process.stderr.write(`Installing ${autoInstallTarget}...\n`);
 
   try {
     execSync(
-      [...pip, "install", "--force-reinstall", "--upgrade", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+      [...pip, "install", "--force-reinstall", "--upgrade", autoInstallTarget].map(s => `"${s}"`).join(" "),
       { stdio: "inherit", shell: true }
     );
   } catch (err) {
     process.stderr.write(
-      `\nFailed to install ${PYTHON_PACKAGE}.\n` +
-        `Try manually: ${pip.join(" ")} install ${PYTHON_PACKAGE}\n`
+      `\nFailed to install ${autoInstallTarget}.\n` +
+        `Try manually: ${pip.join(" ")} install "${autoInstallTarget}"\n`
     );
     process.exit(1);
   }
@@ -872,12 +1051,12 @@ function autoInstallAndStart(extraArgs) {
   if (!pythonPackageInstalled()) {
     process.stderr.write(
       `\nInstallation completed but package not importable.\n` +
-        `Try manually: ${pip.join(" ")} install ${PYTHON_PACKAGE}\n`
+        `Try manually: ${pip.join(" ")} install "${autoInstallTarget}"\n`
     );
     process.exit(1);
   }
 
-  process.stderr.write(`${PYTHON_PACKAGE} installed successfully.\n`);
+  process.stderr.write(`${autoInstallTarget} installed successfully.\n`);
 
   // Windows: ensure Python Scripts dir is on user PATH
   if (IS_WIN && PYTHON_CMD) {

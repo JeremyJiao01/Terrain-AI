@@ -2,6 +2,34 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+- `npx code-graph-builder --setup` wizard: new **Step 4 — Language Support** for selecting additional language parsers (Rust, Go, Java, Lua, Scala)
+  - Core languages (Python, JS, TS, C, C++) shown as pre-checked and locked (cannot be deselected)
+  - Optional languages default to unchecked; user selects with Space, confirms with Enter
+  - pip install command dynamically includes only selected packages
+  - Setup complete summary lists installed parsers and reminds how to add more: re-run `--setup`
+- `cgb status` now shows a **parsers** line listing which tree-sitter language packages are installed, with a hint to run `--setup` for missing ones
+
+### Changed
+- `npx code-graph-builder --server` (auto-install path) now installs `code-graph-builder[treesitter-full]` so all language parsers are available out of the box
+
+---
+
+### 新增
+- `npx code-graph-builder --setup` 向导新增 **Step 4 — Language Support** 语言支持选择步骤
+  - 核心语言（Python、JS、TS、C、C++）以灰色 [x] 锁定显示，无法取消
+  - 可选语言（Rust、Go、Java、Lua、Scala）默认全部未选，空格切换，回车确认
+  - pip 安装命令根据选择动态拼接，只安装用户勾选的语言包
+  - 安装完成摘要显示已安装的 parser 列表，并提示通过重新运行 `--setup` 添加更多语言
+- `cgb status` 新增 **parsers** 行，显示当前已安装的 tree-sitter 语言包，缺失时给出修复提示
+
+### 变更
+- `npx code-graph-builder --server`（自动安装路径）改为安装 `code-graph-builder[treesitter-full]`，开箱即支持全部语言解析器
+
+---
+
 ## [0.43.0] — 2026-04-09
 
 ### Changed
