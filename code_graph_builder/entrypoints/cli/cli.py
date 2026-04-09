@@ -131,6 +131,7 @@ from loguru import logger
 
 from code_graph_builder import __version__
 from code_graph_builder.domains.core.graph.builder import CodeGraphBuilder
+from code_graph_builder.entrypoints.mcp.tools import _resolve_artifact_dir
 from code_graph_builder.foundation.types.config import (
     KuzuConfig,
     MemgraphConfig,
@@ -400,8 +401,9 @@ def _load_repos(ws: Path) -> list[dict]:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        resolved = _resolve_artifact_dir(child)
         repos.append({
-            "artifact_dir": child,
+            "artifact_dir": resolved,
             "name": meta.get("repo_name", child.name),
             "path": meta.get("repo_path", "unknown"),
             "indexed_at": meta.get("indexed_at", "unknown"),

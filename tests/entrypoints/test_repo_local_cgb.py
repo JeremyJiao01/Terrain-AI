@@ -123,3 +123,44 @@ class TestMCPAutoLoadWithLocalCgb:
         with patch.object(MCPToolsRegistry, "_load_services") as mock_load:
             registry = MCPToolsRegistry(workspace=ws)
             mock_load.assert_called_once_with(ws_artifact)
+
+
+class TestCLILoadReposWithLocalCgb:
+    """CLI _load_repos() should resolve .cgb/ for repos that have it."""
+
+    def test_load_repos_resolves_local_cgb(self, tmp_path: Path):
+        from code_graph_builder.entrypoints.cli.cli import _load_repos
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        ws_artifact = ws / "myrepo_abc123"
+        _make_artifact_dir(ws_artifact, repo_path=repo.as_posix())
+
+        local_cgb = repo / ".cgb"
+        _make_artifact_dir(local_cgb, repo_path=repo.as_posix())
+
+        (ws / "active.txt").write_text("myrepo_abc123", encoding="utf-8")
+
+        repos = _load_repos(ws)
+        assert len(repos) == 1
+        assert repos[0]["artifact_dir"] == local_cgb
+
+    def test_load_repos_keeps_workspace_when_no_local_cgb(self, tmp_path: Path):
+        from code_graph_builder.entrypoints.cli.cli import _load_repos
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        ws_artifact = ws / "myrepo_abc123"
+        _make_artifact_dir(ws_artifact, repo_path=repo.as_posix())
+
+        (ws / "active.txt").write_text("myrepo_abc123", encoding="utf-8")
+
+        repos = _load_repos(ws)
+        assert len(repos) == 1
+        assert repos[0]["artifact_dir"] == ws_artifact
