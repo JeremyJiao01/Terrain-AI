@@ -220,6 +220,7 @@ class MCPToolsRegistry:
         artifact_dir_name = active_file.read_text(encoding="utf-8", errors="replace").strip()
         artifact_dir = self._workspace / artifact_dir_name
         if artifact_dir.exists():
+            artifact_dir = _resolve_artifact_dir(artifact_dir)
             try:
                 self._load_services(artifact_dir)
                 logger.info(f"Auto-loaded repo from: {artifact_dir}")

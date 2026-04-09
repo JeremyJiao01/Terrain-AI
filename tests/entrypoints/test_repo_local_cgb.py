@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch, MagicMock
 
 
 def _make_artifact_dir(path: Path, repo_path: str = "/fake/repo") -> None:
@@ -81,3 +82,44 @@ class TestResolveArtifactDir:
 
         result = _resolve_artifact_dir(ws_artifact)
         assert result == ws_artifact
+
+
+class TestMCPAutoLoadWithLocalCgb:
+    """MCPToolsRegistry._try_auto_load() should prefer .cgb/ when available."""
+
+    def test_auto_load_uses_local_cgb(self, tmp_path: Path):
+        from code_graph_builder.entrypoints.mcp.tools import MCPToolsRegistry
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        ws_artifact = ws / "myrepo_abc123"
+        _make_artifact_dir(ws_artifact, repo_path=repo.as_posix())
+
+        local_cgb = repo / ".cgb"
+        _make_artifact_dir(local_cgb, repo_path=repo.as_posix())
+
+        (ws / "active.txt").write_text("myrepo_abc123", encoding="utf-8")
+
+        with patch.object(MCPToolsRegistry, "_load_services") as mock_load:
+            registry = MCPToolsRegistry(workspace=ws)
+            mock_load.assert_called_once_with(local_cgb)
+
+    def test_auto_load_falls_back_to_workspace(self, tmp_path: Path):
+        from code_graph_builder.entrypoints.mcp.tools import MCPToolsRegistry
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        ws_artifact = ws / "myrepo_abc123"
+        _make_artifact_dir(ws_artifact, repo_path=repo.as_posix())
+
+        (ws / "active.txt").write_text("myrepo_abc123", encoding="utf-8")
+
+        with patch.object(MCPToolsRegistry, "_load_services") as mock_load:
+            registry = MCPToolsRegistry(workspace=ws)
+            mock_load.assert_called_once_with(ws_artifact)
