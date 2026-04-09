@@ -750,7 +750,7 @@ async function runSetup() {
   if (pip) {
     try {
       execSync(
-        [...pip, "install", "--force-reinstall", "--upgrade", ...installTargets].map(s => `"${s}"`).join(" "),
+        [...pip, "install", "--prefer-binary", "--force-reinstall", "--upgrade", ...installTargets].map(s => `"${s}"`).join(" "),
         { stdio: "pipe", shell: true }
       );
     } catch { /* handled below */ }
@@ -1037,7 +1037,7 @@ function autoInstallAndStart(extraArgs) {
 
   try {
     execSync(
-      [...pip, "install", "--force-reinstall", "--upgrade", autoInstallTarget].map(s => `"${s}"`).join(" "),
+      [...pip, "install", "--prefer-binary", "--force-reinstall", "--upgrade", autoInstallTarget].map(s => `"${s}"`).join(" "),
       { stdio: "inherit", shell: true }
     );
   } catch (err) {
