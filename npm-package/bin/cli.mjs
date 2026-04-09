@@ -609,6 +609,29 @@ async function runSetup() {
     return;
   }
 
+  // 2b. Windows: ensure Python Scripts dir is on user PATH so `cgb` works
+  if (IS_WIN && PYTHON_CMD) {
+    try {
+      const scriptsDir = execSync(
+        `${PYTHON_CMD} -c "import sysconfig; print(sysconfig.get_path('scripts'))"`,
+        { encoding: "utf-8", shell: true }
+      ).trim();
+      if (scriptsDir && existsSync(scriptsDir)) {
+        const userPath = execSync('powershell -Command "[Environment]::GetEnvironmentVariable(\'Path\',\'User\')"', {
+          encoding: "utf-8", shell: true
+        }).trim();
+        if (!userPath.toLowerCase().split(";").some(p => p.trim().toLowerCase() === scriptsDir.toLowerCase())) {
+          const newPath = userPath ? `${userPath};${scriptsDir}` : scriptsDir;
+          execSync(`setx PATH "${newPath}"`, { stdio: "pipe", shell: true });
+          // Also update current process PATH so smoke test works
+          process.env.Path = `${process.env.Path};${scriptsDir}`;
+          log(`  ${T.BRANCH} ${T.OK} Added Python Scripts to user PATH: ${scriptsDir}`);
+          log(`  ${T.SIDE}       (new PowerShell windows will pick this up automatically)`);
+        }
+      }
+    } catch { /* non-critical, skip silently */ }
+  }
+
   // 3. MCP server smoke test
   log(`  ${T.SIDE}  ${T.WORK} MCP server smoke test...`);
 
@@ -855,6 +878,27 @@ function autoInstallAndStart(extraArgs) {
   }
 
   process.stderr.write(`${PYTHON_PACKAGE} installed successfully.\n`);
+
+  // Windows: ensure Python Scripts dir is on user PATH
+  if (IS_WIN && PYTHON_CMD) {
+    try {
+      const scriptsDir = execSync(
+        `${PYTHON_CMD} -c "import sysconfig; print(sysconfig.get_path('scripts'))"`,
+        { encoding: "utf-8", shell: true }
+      ).trim();
+      if (scriptsDir && existsSync(scriptsDir)) {
+        const userPath = execSync('powershell -Command "[Environment]::GetEnvironmentVariable(\'Path\',\'User\')"', {
+          encoding: "utf-8", shell: true
+        }).trim();
+        if (!userPath.toLowerCase().split(";").some(p => p.trim().toLowerCase() === scriptsDir.toLowerCase())) {
+          const newPath = userPath ? `${userPath};${scriptsDir}` : scriptsDir;
+          execSync(`setx PATH "${newPath}"`, { stdio: "pipe", shell: true });
+          process.env.Path = `${process.env.Path};${scriptsDir}`;
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
   runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
 }
 

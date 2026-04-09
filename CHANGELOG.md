@@ -2,6 +2,32 @@
 
 ---
 
+## [0.42.0] — 2026-04-09
+
+### Changed
+- `cgb index --incremental/-i` renamed to `cgb index --update/-u` for brevity
+- Remove `code-graph-builder` entry point from Python package to avoid conflict with npm CLI; use `cgb` instead
+
+### Added
+- `cgb reload` command — hot-reload `.env` configuration and display changes
+- `python -m code_graph_builder` entry point (`__main__.py`) as fallback when `cgb` is not on PATH
+- Windows: `npx code-graph-builder --setup` now auto-adds Python Scripts directory to user PATH
+- Python 3.10 compatibility: `StrEnum` polyfill for `enum` module
+
+---
+
+### 变更
+- `cgb index --incremental/-i` 重命名为 `cgb index --update/-u`，更简短
+- 移除 Python 包的 `code-graph-builder` 入口点，避免与 npm CLI 冲突；统一使用 `cgb`
+
+### 新增
+- `cgb reload` 命令 — 热重载 `.env` 配置并显示变更
+- `python -m code_graph_builder` 入口点（`__main__.py`），在 `cgb` 不在 PATH 时可作为备选
+- Windows：`npx code-graph-builder --setup` 现在自动将 Python Scripts 目录添加到用户 PATH
+- Python 3.10 兼容性：为 `enum` 模块添加 `StrEnum` polyfill
+
+---
+
 ## [0.41.0] — 2026-04-08
 
 ### Changed

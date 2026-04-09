@@ -1895,6 +1895,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_reload(args: argparse.Namespace) -> int:
+    """Hot-reload .env configuration and display changes."""
+    from code_graph_builder.foundation.utils.settings import reload_env
+
+    changes = reload_env()
+    updated = changes.get("updated", [])
+    removed = changes.get("removed", [])
+
+    if not updated and not removed:
+        print(f"  {_c('32', 'OK')} No configuration changes detected.")
+        return 0
+
+    if updated:
+        print(f"  {_c('36', 'updated')} {', '.join(updated)}")
+    if removed:
+        print(f"  {_c('33', 'removed')} {', '.join(removed)}")
+
+    print(f"\n  {_c('2', 'Note: MCP server needs restart or reload_config call to pick up changes.')}")
+    return 0
+
+
 def main() -> int:
     """Main entry point for CLI."""
     # Load exclusively from workspace .env — single source of truth.
@@ -2301,6 +2322,14 @@ Windows:
         description="Add the cgb executable directory to the current user's PATH on Windows.",
     )
     setup_parser.set_defaults(func=cmd_setup)
+
+    # reload command
+    reload_parser = subparsers.add_parser(
+        "reload",
+        help="Hot-reload .env configuration and show changes",
+        description="Reload configuration from workspace .env file and display what changed.",
+    )
+    reload_parser.set_defaults(func=cmd_reload)
 
     args = parser.parse_args()
 

@@ -42,7 +42,6 @@ semantic = []
 rag = []
 
 [project.scripts]
-code-graph-builder = "code_graph_builder.entrypoints.cli.cli:main"
 cgb = "code_graph_builder.entrypoints.cli.cli:main"
 cgb-mcp = "code_graph_builder.entrypoints.mcp:main"
 
