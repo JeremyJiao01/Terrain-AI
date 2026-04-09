@@ -2278,6 +2278,12 @@ Windows:
         default="kuzu",
         help="Storage backend (default: kuzu)",
     )
+    index_parser.add_argument(
+        "--output",
+        choices=["local", "workspace"],
+        default=None,
+        help="Output destination: 'local' for .cgb/ in repo, 'workspace' for ~/.code-graph-builder/",
+    )
     index_parser.set_defaults(func=cmd_index)
 
     # link command
