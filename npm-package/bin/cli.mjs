@@ -445,18 +445,38 @@ async function runSetup() {
 
     // Rename ~/.code-graph-builder -> ~/.terrain
     if (!existsSync(WORKSPACE_DIR)) {
+      let migrated = false;
       try {
         renameSync(OLD_WORKSPACE, WORKSPACE_DIR);
+        migrated = true;
         log(`  ${T.BRANCH} ${T.OK} Renamed ${OLD_WORKSPACE} -> ${WORKSPACE_DIR}`);
       } catch {
         // renameSync can fail on Windows (cross-device, locked files, etc.)
-        // Fall back to recursive copy + delete
+        // Fall back to recursive copy, then best-effort delete
         try {
           cpSync(OLD_WORKSPACE, WORKSPACE_DIR, { recursive: true });
-          rmSync(OLD_WORKSPACE, { recursive: true, force: true });
-          log(`  ${T.BRANCH} ${T.OK} Migrated ${OLD_WORKSPACE} -> ${WORKSPACE_DIR}`);
-        } catch (err2) {
-          log(`  ${T.BRANCH} ${T.WARN} Migration failed: ${err2.message}`);
+          migrated = true;
+          log(`  ${T.BRANCH} ${T.OK} Copied ${OLD_WORKSPACE} -> ${WORKSPACE_DIR}`);
+        } catch (cpErr) {
+          log(`  ${T.BRANCH} ${T.WARN} Migration failed: ${cpErr.message}`);
+        }
+        // Best-effort removal of the old directory.
+        // On Windows files may be locked by another process — try
+        // rmSync first, then fall back to "rd /s /q" which can
+        // sometimes succeed where Node's fs fails.
+        if (migrated) {
+          try {
+            rmSync(OLD_WORKSPACE, { recursive: true, force: true });
+          } catch {
+            if (IS_WIN) {
+              try {
+                execSync(`rd /s /q "${OLD_WORKSPACE}"`, { stdio: "pipe", shell: true });
+              } catch { /* still locked */ }
+            }
+            if (existsSync(OLD_WORKSPACE)) {
+              log(`  ${T.BRANCH} ${T.WARN} Could not remove ${OLD_WORKSPACE} (may be locked by another program). Please delete it manually.`);
+            }
+          }
         }
       }
     } else {
