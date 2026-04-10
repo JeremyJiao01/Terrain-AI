@@ -248,18 +248,27 @@ class TerrainBuilder:
                 stats = ingestor.get_statistics()
                 total_nodes = stats.get("node_count", 0)
                 total_rels = stats.get("relationship_count", 0)
+                node_labels = stats.get("node_labels", {})
+                functions_found = (
+                    node_labels.get("Function", 0) + node_labels.get("Method", 0)
+                )
+                classes_found = node_labels.get("Class", 0)
+                files_processed = node_labels.get("File", 0)
             else:
                 # Fallback for ingestors without get_statistics
                 total_nodes = 0
                 total_rels = 0
+                functions_found = 0
+                classes_found = 0
+                files_processed = 0
 
             return BuildResult(
                 project_name=self.repo_path.name,
                 nodes_created=total_nodes,
                 relationships_created=total_rels,
-                functions_found=0,  # Will be updated from stats
-                classes_found=0,
-                files_processed=0,
+                functions_found=functions_found,
+                classes_found=classes_found,
+                files_processed=files_processed,
                 errors=[],
             )
 

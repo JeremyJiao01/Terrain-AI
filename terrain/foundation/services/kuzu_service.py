@@ -803,13 +803,13 @@ class KuzuIngestor:
             tables = []
             while result.has_next():
                 row = result.get_next()
-                tables.append(row[0] if row else None)
+                # show_tables() columns: id, name, type, ...  — use name (index 1)
+                tables.append(row[1] if row and len(row) > 1 else None)
 
             for table in tables:
                 if table:
                     try:
-                        # Quote table name to handle special cases (e.g., numeric names)
-                        self._execute_with_retry(f'DROP TABLE "{table}"')
+                        self._execute_with_retry(f'DROP TABLE {table}')
                     except Exception as e:
                         logger.debug(f"Error dropping table {table}: {e}")
 

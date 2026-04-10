@@ -137,7 +137,7 @@ class _CompatUnpickler(pickle.Unpickler):
             ("terrain.domains.core.embedding.vector_store", "SearchResult"),
         ("code_graph_builder.domains.core.search.semantic_search", "SemanticSearchService"):
             ("terrain.domains.core.search.semantic_search", "SemanticSearchService"),
-        # Pre-0.30 paths (flat layout)
+        # Pre-0.30 code_graph_builder paths (flat layout)
         ("code_graph_builder.embeddings.vector_store", "MemoryVectorStore"):
             ("terrain.domains.core.embedding.vector_store", "MemoryVectorStore"),
         ("code_graph_builder.embeddings.vector_store", "VectorRecord"):
@@ -149,6 +149,19 @@ class _CompatUnpickler(pickle.Unpickler):
         ("code_graph_builder.embedding.vector_store", "VectorRecord"):
             ("terrain.domains.core.embedding.vector_store", "VectorRecord"),
         ("code_graph_builder.tools.semantic_search", "SemanticSearchService"):
+            ("terrain.domains.core.search.semantic_search", "SemanticSearchService"),
+        # Pre-harness terrain paths (terrain flat layout before domains/ refactor)
+        ("terrain.embeddings.vector_store", "MemoryVectorStore"):
+            ("terrain.domains.core.embedding.vector_store", "MemoryVectorStore"),
+        ("terrain.embeddings.vector_store", "VectorRecord"):
+            ("terrain.domains.core.embedding.vector_store", "VectorRecord"),
+        ("terrain.embeddings.vector_store", "SearchResult"):
+            ("terrain.domains.core.embedding.vector_store", "SearchResult"),
+        ("terrain.embedding.vector_store", "MemoryVectorStore"):
+            ("terrain.domains.core.embedding.vector_store", "MemoryVectorStore"),
+        ("terrain.embedding.vector_store", "VectorRecord"):
+            ("terrain.domains.core.embedding.vector_store", "VectorRecord"),
+        ("terrain.tools.semantic_search", "SemanticSearchService"):
             ("terrain.domains.core.search.semantic_search", "SemanticSearchService"),
     }
 
