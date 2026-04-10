@@ -1,6 +1,6 @@
 {
   "name": "terrain-ai",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "Give your AI a complete map of any codebase — function signatures, call graphs, and semantic search",
   "license": "MIT",
   "bin": {

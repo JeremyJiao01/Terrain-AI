@@ -240,9 +240,9 @@ def _resolve_artifact_dir(ws_artifact_dir: Path) -> Path:
     if not repo_path.is_dir():
         return ws_artifact_dir
 
-    local_cgb = repo_path / ".terrain"
-    if (local_cgb / "graph.db").exists():
-        return local_cgb
+    local_dir = repo_path / ".terrain"
+    if (local_dir / "graph.db").exists():
+        return local_dir
 
     return ws_artifact_dir
 

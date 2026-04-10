@@ -30,7 +30,7 @@ if [[ "${1:-}" == "--raw-test" ]]; then
     echo "   Debug log: $DEBUG_LOG"
     echo ""
     echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"debug-test","version":"0.1"}}}' \
-        | CGB_DEBUG=1 CGB_WORKSPACE="$CGB_WORKSPACE" timeout 15 python3 -m code_graph_builder.entrypoints.mcp.server 2>/dev/null \
+        | TERRAIN_DEBUG=1 TERRAIN_WORKSPACE="$CGB_WORKSPACE" timeout 15 python3 -m terrain.entrypoints.mcp.server 2>/dev/null \
         || echo ""
     echo ""
     echo "--- Debug log tail ---"
@@ -55,8 +55,8 @@ echo ""
 : > "$DEBUG_LOG"
 
 # Launch MCP Inspector connected to local Python source
-export CGB_DEBUG=1
-export CGB_WORKSPACE
+export TERRAIN_DEBUG=1
+export TERRAIN_WORKSPACE="$CGB_WORKSPACE"
 
 npx @modelcontextprotocol/inspector \
-    python3 -m code_graph_builder.entrypoints.mcp.server
+    python3 -m terrain.entrypoints.mcp.server

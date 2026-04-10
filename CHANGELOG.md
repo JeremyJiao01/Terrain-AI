@@ -4,29 +4,67 @@
 
 ## [Unreleased]
 
-### Added
-- `npx terrain --setup` wizard: new **Step 4 — Language Support** for selecting additional language parsers (Rust, Go, Java, Lua, Scala)
-  - Core languages (Python, JS, TS, C, C++) shown as pre-checked and locked (cannot be deselected)
-  - Optional languages default to unchecked; user selects with Space, confirms with Enter
-  - pip install command dynamically includes only selected packages
-  - Setup complete summary lists installed parsers and reminds how to add more: re-run `--setup`
-- `cgb status` now shows a **parsers** line listing which tree-sitter language packages are installed, with a hint to run `--setup` for missing ones
+---
+
+## [2.1.1] — 2026-04-11
+
+### Fixed
+- CLI help text now consistently references `terrain` instead of the old `cgb` alias
 
 ### Changed
-- `npx terrain --server` (auto-install path) now installs `terrain[treesitter-full]` so all language parsers are available out of the box
+- `terrain move` wizard enhanced: step-based navigation (← back support), workspace size and indexed repo count displayed before confirmation; setup auto-removes legacy `code-graph-builder` MCP tool from Claude Code
+- GitHub CI no longer runs LLM/embedding tests (require API keys); full suite remains available locally via `python -m pytest tests/`
+
+### Tests
+- `test_embedder.py` rewritten to target `OpenAIEmbedder` — matches actual `.env` config (`EMBED_API_KEY` / `EMBED_BASE_URL` / `EMBED_MODEL=text-embedding-v4`)
+
+---
+
+### 修复
+- CLI 帮助文本统一使用 `terrain`，移除残留的 `cgb` 别名
+
+### 变更
+- `terrain move` 向导增强：支持 ← 返回上一步、在确认前显示 workspace 大小与已索引仓库数量；setup 时自动从 Claude Code 移除旧版 `code-graph-builder` MCP 工具
+- GitHub CI 不再运行需要 API Key 的 LLM/Embedding 测试；本地仍可通过 `python -m pytest tests/` 完整运行
+
+### 测试
+- `test_embedder.py` 改为测试 `OpenAIEmbedder`，与当前 `.env` 配置（`EMBED_API_KEY` / `EMBED_BASE_URL` / `EMBED_MODEL=text-embedding-v4`）保持一致
+
+---
+
+## [2.0.0] — 2026-04-10
+
+### Added
+- **Subcommand-style CLI**: `terrain setup / server / update / move / uninstall / help` replaces the old `--flag` style while remaining backward-compatible
+- **Background auto-updater**: silently checks for new versions every 4 h and installs them in a detached process — never blocks startup. A pending-update marker notifies the user on next run. Opt out with `DISABLE_AUTOUPDATER=1`
+- **`terrain move`**: interactive wizard to relocate the workspace — migrates all data (rename-first, copy+delete fallback for cross-device moves), updates `CGB_WORKSPACE` in `.env`
+- **Auto-migrate legacy workspace**: setup wizard automatically moves `~/.code-graph-builder` → `~/.terrain` and uninstalls the old `code-graph-builder` pip package
+- **Embedding checkpoint/resume**: embedding pipeline persists progress to `vectors.checkpoint.pkl` after every batch; interrupted runs resume from where they left off instead of re-embedding from scratch
+- **Repo-local `.terrain/` support**: `terrain index` stores the index alongside the repo (`--output local`); MCP and CLI auto-prefer the local `.terrain/` over the global workspace when both exist
+
+### Fixed
+- Windows: split copy and delete into separate steps during legacy migration so a locked directory no longer masks a successful copy; falls back to `rd /s /q` and warns the user to delete manually if still locked
+
+### Changed
+- Full rebrand: **Code Graph Builder → Terrain** — Python package `terrain-ai`, CLI command `terrain`, MCP server `terrain-mcp`, class `TerrainBuilder`, workspace `~/.terrain`, env var `TERRAIN_WORKSPACE`
+- Backward-compatible pickle unpickler for pre-2.0 vector stores
 
 ---
 
 ### 新增
-- `npx terrain --setup` 向导新增 **Step 4 — Language Support** 语言支持选择步骤
-  - 核心语言（Python、JS、TS、C、C++）以灰色 [x] 锁定显示，无法取消
-  - 可选语言（Rust、Go、Java、Lua、Scala）默认全部未选，空格切换，回车确认
-  - pip 安装命令根据选择动态拼接，只安装用户勾选的语言包
-  - 安装完成摘要显示已安装的 parser 列表，并提示通过重新运行 `--setup` 添加更多语言
-- `cgb status` 新增 **parsers** 行，显示当前已安装的 tree-sitter 语言包，缺失时给出修复提示
+- **子命令风格 CLI**：`terrain setup / server / update / move / uninstall / help` 替代旧版 `--flag` 风格，向后兼容
+- **后台自动更新器**：每 4 小时静默检查新版本并在后台安装，不阻塞启动；通过 `DISABLE_AUTOUPDATER=1` 关闭
+- **`terrain move`**：交互式向导，迁移 workspace（优先 rename，跨设备时 copy+delete 兜底），自动更新 `.env` 中的 `CGB_WORKSPACE`
+- **自动迁移旧 workspace**：setup 向导自动将 `~/.code-graph-builder` 迁移至 `~/.terrain` 并卸载旧版 pip 包
+- **Embedding 断点续传**：每批次完成后将进度持久化到 `vectors.checkpoint.pkl`，中断后从断点继续，无需从头重跑
+- **Repo-local `.terrain/` 支持**：`terrain index --output local` 将索引存储在仓库旁；MCP 和 CLI 自动优先使用本地 `.terrain/`，其次才是全局 workspace
+
+### 修复
+- Windows：迁移旧 workspace 时将复制与删除分为两步，避免目录被锁时掩盖成功的复制；删除失败时降级为 `rd /s /q`，仍失败则提示用户手动删除
 
 ### 变更
-- `npx terrain --server`（自动安装路径）改为安装 `terrain[treesitter-full]`，开箱即支持全部语言解析器
+- **完整品牌重塑**：Code Graph Builder → Terrain — Python 包 `terrain-ai`、CLI `terrain`、MCP 服务器 `terrain-mcp`、类名 `TerrainBuilder`、workspace `~/.terrain`、环境变量 `TERRAIN_WORKSPACE`
+- 兼容 2.0 之前 vector store 的 pickle 反序列化
 
 ---
 

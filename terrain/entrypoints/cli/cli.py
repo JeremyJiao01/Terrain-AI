@@ -2112,10 +2112,10 @@ Low-level commands:
   terrain export /path --output ./graph.json --build
   terrain stats --db-path ./graph.db
 
-Run 'cgb <command> --help' for details on any command.
+Run 'terrain <command> --help' for details on any command.
 
 Windows:
-  terrain setup                     add cgb to user PATH (run once after install)
+  terrain setup                     add terrain to user PATH (run once after install)
         """,
         add_help=False,
     )
@@ -2496,8 +2496,8 @@ Windows:
     # setup command (Windows PATH helper)
     setup_parser = subparsers.add_parser(
         "setup",
-        help="Add cgb to the system PATH (Windows only)",
-        description="Add the cgb executable directory to the current user's PATH on Windows.",
+        help="Add terrain to the system PATH (Windows only)",
+        description="Add the terrain executable directory to the current user's PATH on Windows.",
     )
     setup_parser.set_defaults(func=cmd_setup)
 

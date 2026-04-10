@@ -1,11 +1,11 @@
-"""Tests for Qwen3Embedder - API-based Qwen3 Embedding integration.
+"""Tests for OpenAIEmbedder - OpenAI-compatible embedding integration.
 
-These tests verify the Qwen3Embedder class correctly:
-1. Loads API configuration from environment variables
-2. Makes HTTP requests to DashScope API
-3. Handles API responses and errors
-4. Implements batch processing with retry logic
-5. Handles edge cases gracefully
+Matches current .env configuration:
+    EMBED_API_KEY=...
+    EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+    EMBED_MODEL=text-embedding-v4
+
+create_embedder() detects EMBED_API_KEY and routes to OpenAIEmbedder.
 """
 
 from __future__ import annotations
@@ -18,268 +18,216 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+ENV_KEY = "EMBED_API_KEY"
+ENV_BASE_URL = "EMBED_BASE_URL"
+ENV_MODEL = "EMBED_MODEL"
+CONFIGURED_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+CONFIGURED_MODEL = "text-embedding-v4"
+EMBEDDING_DIM = 1536
 
-class TestQwen3Embedder:
-    """Test suite for Qwen3Embedder class (API mode)."""
+
+def _make_openai_response(n: int = 1, dim: int = EMBEDDING_DIM) -> dict:
+    """Build a minimal OpenAI-compatible embeddings response."""
+    return {
+        "data": [
+            {"embedding": [0.1 * (i + 1)] * dim, "index": i}
+            for i in range(n)
+        ],
+        "usage": {"prompt_tokens": n * 5, "total_tokens": n * 5},
+    }
+
+
+class TestOpenAIEmbedder:
+    """Test suite for OpenAIEmbedder (the class activated by .env EMBED_API_KEY)."""
 
     @pytest.fixture
     def mock_env(self, monkeypatch):
-        """Set up mock environment variables."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test-key")
-        monkeypatch.setenv("DASHSCOPE_BASE_URL", "https://test.api.com")
-
-    @pytest.fixture
-    def sample_api_response(self):
-        """Create a sample successful API response."""
-        return {
-            "output": {
-                "embeddings": [
-                    {"embedding": [0.1] * 1536, "text_index": 0}
-                ]
-            },
-            "usage": {"total_tokens": 10}
-        }
-
-    @pytest.fixture
-    def sample_batch_response(self):
-        """Create a sample batch API response."""
-        return {
-            "output": {
-                "embeddings": [
-                    {"embedding": [0.1] * 1536, "text_index": 0},
-                    {"embedding": [0.2] * 1536, "text_index": 1},
-                    {"embedding": [0.3] * 1536, "text_index": 2},
-                ]
-            },
-            "usage": {"total_tokens": 30}
-        }
+        """Set up env vars matching .env configuration."""
+        monkeypatch.setenv(ENV_KEY, "sk-test-embed-key")
+        monkeypatch.setenv(ENV_BASE_URL, CONFIGURED_BASE_URL)
+        monkeypatch.setenv(ENV_MODEL, CONFIGURED_MODEL)
 
     def test_embedder_initialization_with_env_var(self, mock_env):
-        """Test that Qwen3Embedder loads API key from environment."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """OpenAIEmbedder reads EMBED_API_KEY / EMBED_BASE_URL / EMBED_MODEL."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder()
+        embedder = OpenAIEmbedder()
 
-        assert embedder.api_key == "sk-test-key"
-        assert embedder.base_url == "https://test.api.com"
-        assert embedder.model == "text-embedding-v4"
+        assert embedder.api_key == "sk-test-embed-key"
+        assert embedder.base_url == CONFIGURED_BASE_URL
+        assert embedder.model == CONFIGURED_MODEL
 
     def test_embedder_initialization_with_api_key_param(self):
-        """Test that Qwen3Embedder accepts API key as parameter."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """OpenAIEmbedder accepts api_key as constructor parameter."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder(api_key="sk-param-key")
+        embedder = OpenAIEmbedder(api_key="sk-param-key")
 
         assert embedder.api_key == "sk-param-key"
 
-    def test_embedder_initialization_missing_api_key(self):
-        """Test that Qwen3Embedder raises error without API key."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+    def test_embedder_initialization_missing_api_key(self, monkeypatch):
+        """OpenAIEmbedder raises ValueError when no API key is available."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(ValueError, match="DashScope API key required"):
-                Qwen3Embedder()
+        for key in ("EMBED_API_KEY", "EMBEDDING_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
 
-    def test_embed_code_makes_api_request(self, mock_env, sample_api_response):
-        """Test embed_code makes HTTP POST request to API."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        with pytest.raises(ValueError, match="API key required"):
+            OpenAIEmbedder()
+
+    def test_embed_code_makes_api_request(self, mock_env):
+        """embed_code POSTs to {base_url}/embeddings."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = sample_api_response
-            mock_post.return_value = mock_response
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: _make_openai_response(1),
+            )
 
-            embedder = Qwen3Embedder()
+            embedder = OpenAIEmbedder()
             result = embedder.embed_code("def test(): pass")
 
             mock_post.assert_called_once()
-            call_args = mock_post.call_args
-            assert "embeddings/text-embedding/text-embedding" in call_args[0][0]
+            url = mock_post.call_args[0][0]
+            assert url.endswith("/embeddings")
+            assert CONFIGURED_BASE_URL in url
 
             assert isinstance(result, list)
-            assert len(result) == 1536
+            assert len(result) == EMBEDDING_DIM
 
-    def test_embed_code_with_instruction(self, mock_env, sample_api_response):
-        """Test embed_code adds instruction when requested."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+    def test_embed_code_payload_format(self, mock_env):
+        """embed_code sends OpenAI-compatible payload: {model, input: [...]}."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = sample_api_response
-            mock_post.return_value = mock_response
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: _make_openai_response(1),
+            )
 
-            embedder = Qwen3Embedder()
-            embedder.embed_code("test query", use_instruction=True)
+            embedder = OpenAIEmbedder()
+            embedder.embed_code("hello world")
 
-            call_kwargs = mock_post.call_args[1]
-            payload = call_kwargs["json"]
-            text = payload["input"]["texts"][0]
-            assert "Instruct:" in text
-            assert "Query:" in text
+            payload = mock_post.call_args[1]["json"]
+            assert payload["model"] == CONFIGURED_MODEL
+            assert isinstance(payload["input"], list)
+            assert "hello world" in payload["input"]
 
     def test_embed_code_api_error(self, mock_env):
-        """Test embed_code handles API errors gracefully."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """embed_code raises RuntimeError on non-200 status."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 401
-            mock_response.text = "Unauthorized"
-            mock_response.json.side_effect = Exception("No JSON")
-            mock_post.return_value = mock_response
+            mock_post.return_value = MagicMock(
+                status_code=401,
+                text="Unauthorized",
+                json=MagicMock(side_effect=Exception("No JSON")),
+            )
 
-            embedder = Qwen3Embedder()
+            embedder = OpenAIEmbedder()
 
-            with pytest.raises(RuntimeError, match="API request failed"):
+            with pytest.raises(RuntimeError):
                 embedder.embed_code("test")
 
-    def test_embed_batch_makes_single_request(self, mock_env, sample_batch_response):
-        """Test embed_batch makes API request for multiple texts."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+    def test_embed_batch_makes_single_request(self, mock_env):
+        """embed_batch batches texts into one API call when under batch_size."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = sample_batch_response
-            mock_post.return_value = mock_response
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: _make_openai_response(3),
+            )
 
-            embedder = Qwen3Embedder(batch_size=5)
-            texts = ["code1", "code2", "code3"]
-            results = embedder.embed_batch(texts)
+            embedder = OpenAIEmbedder(batch_size=5)
+            results = embedder.embed_batch(["code1", "code2", "code3"])
 
             assert len(results) == 3
-            assert all(len(r) == 1536 for r in results)
+            assert all(len(r) == EMBEDDING_DIM for r in results)
             mock_post.assert_called_once()
 
     def test_embed_batch_respects_batch_size(self, mock_env):
-        """Test embed_batch splits large batches correctly."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """embed_batch splits large inputs into multiple API calls."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         call_count = 0
 
         def mock_post(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            # Return embeddings for each text in the batch
-            texts = kwargs["json"]["input"]["texts"]
-            mock_response.json.return_value = {
-                "output": {
-                    "embeddings": [
-                        {"embedding": [0.1] * 1536, "text_index": i}
+            texts = kwargs["json"]["input"]
+            return MagicMock(
+                status_code=200,
+                json=lambda: {
+                    "data": [
+                        {"embedding": [0.1] * EMBEDDING_DIM, "index": i}
                         for i in range(len(texts))
                     ]
-                }
-            }
-            return mock_response
+                },
+            )
 
         with patch("requests.post", side_effect=mock_post):
-            embedder = Qwen3Embedder(batch_size=2)
-            texts = ["code1", "code2", "code3", "code4", "code5"]
-            results = embedder.embed_batch(texts)
+            embedder = OpenAIEmbedder(batch_size=2)
+            results = embedder.embed_batch(["c1", "c2", "c3", "c4", "c5"])
 
             assert len(results) == 5
-            # Should make 3 calls: 2+2+1
-            assert call_count == 3
+            assert call_count == 3  # 2 + 2 + 1
 
     def test_embed_batch_empty_list(self, mock_env):
-        """Test embed_batch handles empty list."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """embed_batch returns [] for empty input without hitting the API."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder()
-        results = embedder.embed_batch([])
-
-        assert results == []
+        embedder = OpenAIEmbedder()
+        assert embedder.embed_batch([]) == []
 
     def test_embed_batch_api_failure(self, mock_env):
-        """Test embed_batch handles API failure."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """embed_batch propagates API errors."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 500
-            mock_response.text = "Internal Server Error"
-            mock_response.json.side_effect = Exception("No JSON")
-            mock_post.return_value = mock_response
+            mock_post.return_value = MagicMock(
+                status_code=500,
+                text="Internal Server Error",
+                json=MagicMock(side_effect=Exception("No JSON")),
+            )
 
-            embedder = Qwen3Embedder()
-            texts = ["code1", "code2", "code3"]
+            embedder = OpenAIEmbedder()
 
             with pytest.raises(RuntimeError):
-                embedder.embed_batch(texts)
+                embedder.embed_batch(["code1", "code2", "code3"])
 
-    def test_rate_limit_retry(self, mock_env, sample_api_response):
-        """Test embed_code retries on rate limit (429)."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+    def test_rate_limit_retry(self, mock_env):
+        """embed_code retries on HTTP 429 and succeeds on third attempt."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
         call_count = 0
 
         def mock_post(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            mock_response = MagicMock()
-
             if call_count < 3:
-                mock_response.status_code = 429
-            else:
-                mock_response.status_code = 200
-                mock_response.json.return_value = sample_api_response
-
-            return mock_response
+                return MagicMock(status_code=429)
+            return MagicMock(status_code=200, json=lambda: _make_openai_response(1))
 
         with patch("requests.post", side_effect=mock_post):
-            with patch("time.sleep") as mock_sleep:  # Don't actually sleep
-                embedder = Qwen3Embedder(max_retries=3)
+            with patch("time.sleep"):
+                embedder = OpenAIEmbedder(max_retries=3)
                 result = embedder.embed_code("test")
 
-                assert len(result) == 1536
+                assert len(result) == EMBEDDING_DIM
                 assert call_count == 3
-                mock_sleep.assert_called()  # Should have waited between retries
 
     def test_get_embedding_dimension(self, mock_env):
-        """Test get_embedding_dimension returns correct value."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        """get_embedding_dimension returns 1536 for text-embedding-v4."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder()
-        dimension = embedder.get_embedding_dimension()
+        embedder = OpenAIEmbedder()
+        assert embedder.get_embedding_dimension() == EMBEDDING_DIM
 
-        assert dimension == 1536  # text-embedding-v4 dimension
-
-    def test_health_check_success(self, mock_env, sample_api_response):
-        """Test health_check returns True when API is accessible."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
-
-        with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = sample_api_response
-            mock_post.return_value = mock_response
-
-            embedder = Qwen3Embedder()
-            result = embedder.health_check()
-
-            assert result is True
-
-    def test_health_check_failure(self, mock_env):
-        """Test health_check returns False when API fails."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
-
-        with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 401
-            mock_post.return_value = mock_response
-
-            embedder = Qwen3Embedder()
-            result = embedder.health_check()
-
-            assert result is False
-
-    def test_request_timeout_retry(self, mock_env, sample_api_response):
-        """Test request timeout triggers retry."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+    def test_request_timeout_retry(self, mock_env):
+        """embed_code retries on Timeout and succeeds on second attempt."""
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
         from requests.exceptions import Timeout
 
         call_count = 0
@@ -289,67 +237,65 @@ class TestQwen3Embedder:
             call_count += 1
             if call_count < 2:
                 raise Timeout("Connection timeout")
-
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = sample_api_response
-            return mock_response
+            return MagicMock(status_code=200, json=lambda: _make_openai_response(1))
 
         with patch("requests.post", side_effect=mock_post):
-            embedder = Qwen3Embedder(max_retries=3)
+            embedder = OpenAIEmbedder(max_retries=3)
             result = embedder.embed_code("test")
 
-            assert len(result) == 1536
+            assert len(result) == EMBEDDING_DIM
             assert call_count == 2
 
 
 class TestEmbedderConfiguration:
-    """Test suite for Qwen3Embedder configuration."""
+    """Test OpenAIEmbedder reads EMBED_MODEL and EMBED_BASE_URL from .env."""
 
-    def test_default_model(self, monkeypatch):
-        """Test default model is text-embedding-v4."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    def test_default_model_from_env(self, monkeypatch):
+        """EMBED_MODEL env var sets the model."""
+        monkeypatch.setenv(ENV_KEY, "sk-test")
+        monkeypatch.setenv(ENV_MODEL, CONFIGURED_MODEL)
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder()
-        assert embedder.model == "text-embedding-v4"
+        embedder = OpenAIEmbedder()
+        assert embedder.model == CONFIGURED_MODEL
 
-    def test_custom_model(self, monkeypatch):
-        """Test custom model can be specified."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    def test_custom_model_param(self, monkeypatch):
+        """Constructor model param overrides env var."""
+        monkeypatch.setenv(ENV_KEY, "sk-test")
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder(model="custom-model")
+        embedder = OpenAIEmbedder(model="custom-model")
         assert embedder.model == "custom-model"
 
-    def test_batch_size_limit(self, monkeypatch):
-        """Test batch size is capped at MAX_BATCH_SIZE."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    def test_base_url_from_env(self, monkeypatch):
+        """EMBED_BASE_URL env var sets the base URL."""
+        monkeypatch.setenv(ENV_KEY, "sk-test")
+        monkeypatch.setenv(ENV_BASE_URL, CONFIGURED_BASE_URL)
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        embedder = Qwen3Embedder(batch_size=100)
-        assert embedder.batch_size == 25  # Capped at MAX_BATCH_SIZE
+        embedder = OpenAIEmbedder()
+        assert embedder.base_url == CONFIGURED_BASE_URL
 
-    def test_api_key_format_warning(self, monkeypatch):
-        """Test warning for invalid API key format."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "invalid-key")
+    def test_known_model_dimension(self, monkeypatch):
+        """text-embedding-v4 falls back to default 1536 dimension."""
+        monkeypatch.setenv(ENV_KEY, "sk-test")
+        monkeypatch.setenv(ENV_MODEL, CONFIGURED_MODEL)
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import Qwen3Embedder
+        from terrain.domains.core.embedding.qwen3_embedder import OpenAIEmbedder
 
-        # Should not raise, but log warning
-        embedder = Qwen3Embedder()
-        assert embedder.api_key == "invalid-key"
+        embedder = OpenAIEmbedder()
+        assert embedder.get_embedding_dimension() == EMBEDDING_DIM
 
 
 class TestDummyEmbedder:
     """Test suite for DummyEmbedder."""
 
     def test_embed_code_returns_zero_vector(self):
-        """Test DummyEmbedder returns zero vector."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import DummyEmbedder
+        """DummyEmbedder returns zero vector."""
+        from terrain.domains.core.embedding.qwen3_embedder import DummyEmbedder
 
         embedder = DummyEmbedder(dimension=1536)
         result = embedder.embed_code("test")
@@ -358,8 +304,8 @@ class TestDummyEmbedder:
         assert all(x == 0.0 for x in result)
 
     def test_embed_batch_returns_zero_vectors(self):
-        """Test DummyEmbedder returns zero vectors for batch."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import DummyEmbedder
+        """DummyEmbedder returns zero vectors for batch."""
+        from terrain.domains.core.embedding.qwen3_embedder import DummyEmbedder
 
         embedder = DummyEmbedder(dimension=768)
         results = embedder.embed_batch(["a", "b", "c"])
@@ -369,48 +315,62 @@ class TestDummyEmbedder:
 
 
 class TestCreateEmbedder:
-    """Test suite for create_embedder factory function."""
+    """Test create_embedder factory — mirrors .env auto-detection logic."""
 
     def test_create_embedder_with_dummy(self):
-        """Test factory creates DummyEmbedder when requested."""
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import (
+        """use_dummy=True always returns DummyEmbedder."""
+        from terrain.domains.core.embedding.qwen3_embedder import (
             DummyEmbedder,
             create_embedder,
         )
 
         embedder = create_embedder(use_dummy=True)
-
         assert isinstance(embedder, DummyEmbedder)
 
-    def test_create_embedder_with_api_key(self, monkeypatch):
-        """Test factory creates Qwen3Embedder when only DASHSCOPE_API_KEY is set
-        (no explicit EMBED_API_KEY / EMBEDDING_API_KEY present)."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-factory")
-        monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    def test_create_embedder_with_embed_api_key(self, monkeypatch):
+        """EMBED_API_KEY triggers OpenAIEmbedder (the .env default path)."""
+        monkeypatch.setenv(ENV_KEY, "sk-embed-key")
+        monkeypatch.setenv(ENV_BASE_URL, CONFIGURED_BASE_URL)
+        monkeypatch.setenv(ENV_MODEL, CONFIGURED_MODEL)
         monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import (
-            Qwen3Embedder,
+        from terrain.domains.core.embedding.qwen3_embedder import (
+            OpenAIEmbedder,
             create_embedder,
         )
 
         embedder = create_embedder()
-
-        assert isinstance(embedder, Qwen3Embedder)
+        assert isinstance(embedder, OpenAIEmbedder)
 
     def test_create_embedder_passes_kwargs(self, monkeypatch):
-        """Test factory passes kwargs to embedder."""
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-        monkeypatch.delenv("EMBED_API_KEY", raising=False)
+        """Extra kwargs are forwarded to OpenAIEmbedder."""
+        monkeypatch.setenv(ENV_KEY, "sk-test")
         monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
-        from code_graph_builder.domains.core.embedding.qwen3_embedder import (
-            Qwen3Embedder,
+        from terrain.domains.core.embedding.qwen3_embedder import (
+            OpenAIEmbedder,
             create_embedder,
         )
 
         embedder = create_embedder(batch_size=10, max_retries=5)
-
-        assert isinstance(embedder, Qwen3Embedder)
+        assert isinstance(embedder, OpenAIEmbedder)
         assert embedder.batch_size == 10
         assert embedder.max_retries == 5
+
+    def test_create_embedder_embed_api_key_takes_priority_over_dashscope(
+        self, monkeypatch
+    ):
+        """EMBED_API_KEY takes priority over DASHSCOPE_API_KEY."""
+        monkeypatch.setenv(ENV_KEY, "sk-embed")
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-dashscope")
+        monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+
+        from terrain.domains.core.embedding.qwen3_embedder import (
+            OpenAIEmbedder,
+            create_embedder,
+        )
+
+        embedder = create_embedder()
+        assert isinstance(embedder, OpenAIEmbedder)

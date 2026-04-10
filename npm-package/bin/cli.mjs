@@ -14,7 +14,7 @@
 
 import { spawn, execFileSync, execSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, copyFileSync, renameSync, cpSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, copyFileSync, renameSync, cpSync, unlinkSync, statSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -747,6 +747,19 @@ async function runSetup() {
   log();
   log(box("terrain  Setup Wizard"));
   log();
+
+  // --- Step -1: Uninstall legacy code-graph-builder MCP tool ---
+  if (commandExists("claude")) {
+    log(`  ${T.DOT} Removing legacy MCP tool`);
+    log(`  ${T.SIDE}`);
+    try {
+      execSync("claude mcp remove code-graph-builder", { stdio: "pipe", shell: true });
+      log(`  ${T.LAST} ${T.OK} Removed code-graph-builder MCP tool`);
+    } catch {
+      log(`  ${T.LAST} ${T.OK} No legacy MCP tool found (skipped)`);
+    }
+    log();
+  }
 
   // --- Step 0: Clear npx cache ---
   log(`  ${T.DOT} Preparing`);
@@ -1588,8 +1601,8 @@ async function runUninstall() {
 // ---------------------------------------------------------------------------
 
 async function runMove() {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+  let rl = createInterface({ input: process.stdin, output: process.stderr });
+  let ask = (q) => new Promise((resolve) => rl.question(q, resolve));
   const log = (msg = "") => process.stderr.write(msg + "\n");
 
   log();
@@ -1607,128 +1620,203 @@ async function runMove() {
     process.exit(1);
   }
 
-  log(`  ${T.DOT} Current workspace`);
-  log(`  ${T.SIDE}`);
-  log(`  ${T.LAST} ${currentWorkspace}`);
-  log();
+  // Calculate workspace size for display
+  let sizeLabel = "";
+  try {
+    const output = IS_WIN
+      ? execSync(`powershell -c "(Get-ChildItem -Recurse '${currentWorkspace}' | Measure-Object -Property Length -Sum).Sum"`, { stdio: "pipe", shell: true }).toString().trim()
+      : execSync(`du -sh "${currentWorkspace}" 2>/dev/null`, { stdio: "pipe", shell: true }).toString().trim();
+    if (IS_WIN) {
+      const bytes = parseInt(output, 10);
+      if (!isNaN(bytes)) {
+        if (bytes > 1e9) sizeLabel = `${(bytes / 1e9).toFixed(1)} GB`;
+        else if (bytes > 1e6) sizeLabel = `${(bytes / 1e6).toFixed(1)} MB`;
+        else sizeLabel = `${(bytes / 1e3).toFixed(0)} KB`;
+      }
+    } else {
+      sizeLabel = output.split(/\s/)[0];
+    }
+  } catch { /* ignore */ }
 
-  // --- Ask for new path ---
-  const newPath = (await ask("  New workspace path: ")).trim();
+  // Count indexed repos
+  let repoCount = 0;
+  try {
+    const repoDir = join(currentWorkspace, "repos");
+    if (existsSync(repoDir)) {
+      repoCount = readdirSync(repoDir).filter(f => {
+        try { return statSync(join(repoDir, f)).isDirectory(); } catch { return false; }
+      }).length;
+    }
+  } catch { /* ignore */ }
 
-  if (!newPath) {
-    log(`\n  ${T.WARN} No path entered. Aborted.\n`);
-    rl.close();
-    process.exit(0);
-  }
+  // --- Step-based wizard with ← back support ---
+  let newWorkspace = "";
+  let step = 1;
 
-  // Resolve to absolute path
-  const { resolve } = await import("node:path");
-  const newWorkspace = resolve(newPath.replace(/^~(?=\/|$)/, homedir()));
+  while (step >= 1 && step <= 3) {
 
-  if (newWorkspace === currentWorkspace) {
-    log(`\n  ${T.WARN} New path is the same as the current workspace. Nothing to do.\n`);
-    rl.close();
-    process.exit(0);
-  }
+    // ─── Step 1: Show current workspace info ───
+    if (step === 1) {
+      log(`  ${T.DOT} Step 1/3  Current Workspace`);
+      log(`  ${T.SIDE}`);
+      log(`  ${T.BRANCH} Path:  ${currentWorkspace}`);
+      if (sizeLabel) {
+        log(`  ${T.BRANCH} Size:  ${sizeLabel}`);
+      }
+      log(`  ${T.LAST} Repos: ${repoCount > 0 ? `${repoCount} indexed` : "none"}`);
+      log();
+      step = 2;
+      continue;
+    }
 
-  if (existsSync(newWorkspace)) {
-    log(`\n  ${T.WARN} Target already exists: ${newWorkspace}`);
-    const overwrite = (await ask("  Merge into existing directory? [y/N]: ")).trim().toLowerCase();
-    if (overwrite !== "y" && overwrite !== "yes") {
-      log("\n  Aborted.\n");
+    // ─── Step 2: Choose destination ───
+    if (step === 2) {
+      log(`  ${T.DOT} Step 2/3  New Location`);
+      log(`  ${T.SIDE}`);
+      log(`  ${T.BRANCH} All repos, graphs, and embeddings will be moved`);
+      log(`  ${T.SIDE}`);
+
+      const newPath = (await ask(`  ${T.SIDE}  Path: `)).trim();
+
+      if (!newPath) {
+        log(`  ${T.LAST} ${T.WARN} No path entered. Aborted.\n`);
+        rl.close();
+        return;
+      }
+
+      // Resolve to absolute path
+      const { resolve: resolvePath } = await import("node:path");
+      newWorkspace = resolvePath(newPath.replace(/^~(?=\/|$)/, homedir()));
+
+      if (newWorkspace === currentWorkspace) {
+        log(`  ${T.LAST} ${T.WARN} Same as current workspace, nothing to do.\n`);
+        rl.close();
+        return;
+      }
+
+      if (existsSync(newWorkspace)) {
+        log(`  ${T.SIDE}`);
+        log(`  ${T.SIDE}  ${T.WARN} Target already exists: ${newWorkspace}`);
+
+        rl.close();
+        const mergeChoice = await selectMenu(
+          ["Merge into existing directory", "Cancel"],
+          `  ${T.SIDE}  `, 0, true,
+        );
+        rl = createInterface({ input: process.stdin, output: process.stderr });
+        ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+
+        if (mergeChoice === -2) { log(); step = 1; continue; }
+        if (mergeChoice === -1 || mergeChoice === 1) {
+          log(`  ${T.LAST} Aborted.\n`);
+          rl.close();
+          return;
+        }
+      }
+
+      log(`  ${T.LAST} ${T.OK} ${newWorkspace}`);
+      log();
+      step = 3;
+      continue;
+    }
+
+    // ─── Step 3: Confirm and execute ───
+    if (step === 3) {
+      log(`  ${T.DOT} Step 3/3  Confirm`);
+      log(`  ${T.SIDE}`);
+      log(`  ${T.BRANCH} From:   ${currentWorkspace}`);
+      log(`  ${T.BRANCH} To:     ${newWorkspace}`);
+      log(`  ${T.LAST} Action: move all data, update config, delete old`);
+      log();
+
       rl.close();
-      process.exit(0);
-    }
-  }
+      const confirmChoice = await selectMenu(
+        ["Proceed", "Cancel"],
+        "  ", 0, true,
+      );
+      rl = createInterface({ input: process.stdin, output: process.stderr });
+      ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 
-  // --- Confirm ---
-  log();
-  log(`  ${T.DOT} Plan`);
-  log(`  ${T.SIDE}`);
-  log(`  ${T.BRANCH} Copy  ${currentWorkspace}`);
-  log(`  ${T.BRANCH}    -> ${newWorkspace}`);
-  log(`  ${T.LAST} Delete ${currentWorkspace}`);
-  log();
-  const confirm = (await ask("  Proceed? [y/N]: ")).trim().toLowerCase();
-  rl.close();
+      if (confirmChoice === -2) { log(); step = 2; continue; }
+      if (confirmChoice === -1 || confirmChoice === 1) {
+        log("\n  Aborted.\n");
+        rl.close();
+        return;
+      }
 
-  if (confirm !== "y" && confirm !== "yes") {
-    log("\n  Aborted.\n");
-    process.exit(0);
-  }
+      // --- Execute move ---
+      log();
+      log(`  ${T.DOT} Moving workspace`);
+      log(`  ${T.SIDE}`);
 
-  log();
-  log(`  ${T.DOT} Moving workspace`);
-  log(`  ${T.SIDE}`);
-
-  // --- Step 1: Try rename first (fast, same-volume) ---
-  let moved = false;
-  if (!existsSync(newWorkspace)) {
-    try {
-      mkdirSync(dirname(newWorkspace), { recursive: true });
-      renameSync(currentWorkspace, newWorkspace);
-      moved = true;
-      log(`  ${T.BRANCH} ${T.OK} Renamed -> ${newWorkspace}`);
-    } catch {
-      // Cross-device or locked — fall through to copy
-    }
-  }
-
-  // --- Step 2: Fall back to copy + delete ---
-  if (!moved) {
-    // Copy
-    try {
-      mkdirSync(newWorkspace, { recursive: true });
-      cpSync(currentWorkspace, newWorkspace, { recursive: true });
-      moved = true;
-      log(`  ${T.BRANCH} ${T.OK} Copied -> ${newWorkspace}`);
-    } catch (err) {
-      log(`  ${T.BRANCH} ${T.WARN} Copy failed: ${err.message}`);
-      log(`\n  Migration aborted. Your original workspace is untouched.\n`);
-      process.exit(1);
-    }
-
-    // Delete old directory (best-effort)
-    try {
-      rmSync(currentWorkspace, { recursive: true, force: true });
-      log(`  ${T.BRANCH} ${T.OK} Deleted ${currentWorkspace}`);
-    } catch {
-      if (IS_WIN) {
+      // Try rename first (fast, same-volume)
+      let moved = false;
+      if (!existsSync(newWorkspace)) {
         try {
-          execSync(`rd /s /q "${currentWorkspace}"`, { stdio: "pipe", shell: true });
+          mkdirSync(dirname(newWorkspace), { recursive: true });
+          renameSync(currentWorkspace, newWorkspace);
+          moved = true;
+          log(`  ${T.BRANCH} ${T.OK} Renamed -> ${newWorkspace}`);
+        } catch {
+          // Cross-device or locked — fall through to copy
+        }
+      }
+
+      // Fall back to copy + delete
+      if (!moved) {
+        try {
+          mkdirSync(newWorkspace, { recursive: true });
+          cpSync(currentWorkspace, newWorkspace, { recursive: true });
+          moved = true;
+          log(`  ${T.BRANCH} ${T.OK} Copied -> ${newWorkspace}`);
+        } catch (err) {
+          log(`  ${T.BRANCH} ${T.WARN} Copy failed: ${err.message}`);
+          log(`\n  Migration aborted. Your original workspace is untouched.\n`);
+          rl.close();
+          process.exit(1);
+        }
+
+        // Delete old directory (best-effort)
+        try {
+          rmSync(currentWorkspace, { recursive: true, force: true });
           log(`  ${T.BRANCH} ${T.OK} Deleted ${currentWorkspace}`);
-        } catch { /* still locked */ }
+        } catch {
+          if (IS_WIN) {
+            try {
+              execSync(`rd /s /q "${currentWorkspace}"`, { stdio: "pipe", shell: true });
+              log(`  ${T.BRANCH} ${T.OK} Deleted ${currentWorkspace}`);
+            } catch { /* still locked */ }
+          }
+          if (existsSync(currentWorkspace)) {
+            log(`  ${T.BRANCH} ${T.WARN} Could not remove ${currentWorkspace} (may be locked). Please delete it manually.`);
+          }
+        }
       }
-      if (existsSync(currentWorkspace)) {
-        log(`  ${T.BRANCH} ${T.WARN} Could not remove ${currentWorkspace} (may be locked). Please delete it manually.`);
+
+      // Update .env
+      if (moved) {
+        const envVars = loadEnvFile();
+        envVars.CGB_WORKSPACE = newWorkspace;
+
+        if (currentWorkspace === WORKSPACE_DIR) {
+          mkdirSync(WORKSPACE_DIR, { recursive: true });
+          const movedEnv = join(newWorkspace, ".env");
+          if (existsSync(movedEnv)) {
+            copyFileSync(movedEnv, ENV_FILE);
+          }
+        }
+
+        saveEnvFile(envVars);
+        log(`  ${T.BRANCH} ${T.OK} Updated config: CGB_WORKSPACE=${newWorkspace}`);
       }
+
+      log(`  ${T.LAST} ${T.OK} Done`);
+      log();
+      break;
     }
   }
 
-  // --- Step 3: Update .env ---
-  if (moved) {
-    // Re-read .env (it may now live inside newWorkspace if currentWorkspace == WORKSPACE_DIR)
-    // The canonical .env is always at WORKSPACE_DIR/.env
-    const envVars = loadEnvFile();
-    envVars.CGB_WORKSPACE = newWorkspace;
-
-    // If the old workspace WAS the default ~/.terrain, the .env was just moved
-    // along with it. We need to ensure ~/.terrain still exists for ENV_FILE.
-    if (currentWorkspace === WORKSPACE_DIR) {
-      // .env was moved to newWorkspace — copy it back to ~/.terrain
-      mkdirSync(WORKSPACE_DIR, { recursive: true });
-      const movedEnv = join(newWorkspace, ".env");
-      if (existsSync(movedEnv)) {
-        copyFileSync(movedEnv, ENV_FILE);
-      }
-    }
-
-    saveEnvFile(envVars);
-    log(`  ${T.BRANCH} ${T.OK} Updated config: CGB_WORKSPACE=${newWorkspace}`);
-  }
-
-  log(`  ${T.LAST} ${T.OK} Done`);
-  log();
+  rl.close();
 }
 
 function startServer(extraArgs = []) {

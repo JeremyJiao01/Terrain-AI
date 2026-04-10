@@ -4,7 +4,7 @@
 This script:
 1. pip-installs the terrain package (editable or normal)
 2. Creates ~/.claude/commands/code-graph/
-3. Copies cgb_cli.py (the entry point) into that directory
+3. Copies terrain_cli.py (the entry point) into that directory
 4. Copies all .md command files into that directory
 5. (Optional) Interactively configures LLM/Embedding API keys in
    ~/.claude/settings.json
@@ -32,7 +32,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 COMMANDS_SRC = PROJECT_ROOT / ".claude" / "commands"
-CLI_WRAPPER = PROJECT_ROOT / "terrain" / "cgb_cli.py"
+CLI_WRAPPER = PROJECT_ROOT / "terrain" / "terrain_cli.py"
 
 TARGET_DIR = Path.home() / ".claude" / "commands" / "code-graph"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
@@ -130,9 +130,9 @@ def main():
     print(f"[3/{total_steps}] Copying command files...")
 
     # Copy cgb_cli.py
-    dest_cli = TARGET_DIR / "cgb_cli.py"
+    dest_cli = TARGET_DIR / "terrain_cli.py"
     shutil.copy2(CLI_WRAPPER, dest_cli)
-    print(f"  Copied cgb_cli.py -> {dest_cli}")
+    print(f"  Copied terrain_cli.py -> {dest_cli}")
 
     # Copy all .md command files
     count = 0

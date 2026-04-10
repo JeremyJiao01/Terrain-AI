@@ -33,17 +33,13 @@ jobs:
       - name: Run layer dependency check
         run: python tools/dep_check.py
 
-      - name: Run tests (unit tests — no LLM/external services required)
+      - name: Run tests (unit tests — no LLM/embedding required)
         run: |
           python -m pytest -v --tb=short \
             tests/foundation/ \
             --ignore=tests/foundation/test_call_resolution.py \
             tests/domains/core/test_graph_build.py \
-            tests/domains/core/test_vector_store.py \
             tests/domains/upper/calltrace/ \
             tests/domains/upper/test_api_docs.py \
             tests/domains/upper/test_api_find.py \
-            tests/domains/upper/test_client.py \
-            tests/domains/upper/test_camel_agent.py \
-            tests/domains/upper/test_config.py \
             tests/domains/upper/test_markdown_generator.py
