@@ -12,7 +12,7 @@
 
 import { spawn, execFileSync, execSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, copyFileSync, renameSync, cpSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -436,6 +436,57 @@ async function runSetup() {
 
   log(`  ${T.LAST} ${T.OK} Cache cleared`);
   log();
+
+  // --- Step 0.5: Migrate from code-graph-builder (legacy) ---
+  const OLD_WORKSPACE = join(homedir(), ".code-graph-builder");
+  if (existsSync(OLD_WORKSPACE)) {
+    log(`  ${T.DOT} Migrating from code-graph-builder`);
+    log(`  ${T.SIDE}`);
+
+    // Rename ~/.code-graph-builder -> ~/.terrain
+    if (!existsSync(WORKSPACE_DIR)) {
+      try {
+        renameSync(OLD_WORKSPACE, WORKSPACE_DIR);
+        log(`  ${T.BRANCH} ${T.OK} Renamed ${OLD_WORKSPACE} -> ${WORKSPACE_DIR}`);
+      } catch {
+        // renameSync can fail on Windows (cross-device, locked files, etc.)
+        // Fall back to recursive copy + delete
+        try {
+          cpSync(OLD_WORKSPACE, WORKSPACE_DIR, { recursive: true });
+          rmSync(OLD_WORKSPACE, { recursive: true, force: true });
+          log(`  ${T.BRANCH} ${T.OK} Migrated ${OLD_WORKSPACE} -> ${WORKSPACE_DIR}`);
+        } catch (err2) {
+          log(`  ${T.BRANCH} ${T.WARN} Migration failed: ${err2.message}`);
+        }
+      }
+    } else {
+      log(`  ${T.BRANCH} ${T.WARN} ${WORKSPACE_DIR} already exists, skipping rename`);
+    }
+
+    // Uninstall old code-graph-builder pip package
+    const pip = findPip();
+    if (pip) {
+      try {
+        const checkCmd = [...pip, "show", "code-graph-builder"].map(s => `"${s}"`).join(" ");
+        execSync(checkCmd, { stdio: "pipe", shell: true });
+        // If we reach here, the package is installed — uninstall it
+        try {
+          execSync(
+            [...pip, "uninstall", "-y", "code-graph-builder"].map(s => `"${s}"`).join(" "),
+            { stdio: "pipe", shell: true }
+          );
+          log(`  ${T.BRANCH} ${T.OK} Uninstalled code-graph-builder`);
+        } catch {
+          log(`  ${T.BRANCH} ${T.WARN} Failed to uninstall code-graph-builder (try: pip uninstall code-graph-builder)`);
+        }
+      } catch {
+        // pip show failed → package not installed, nothing to do
+      }
+    }
+
+    log(`  ${T.LAST} ${T.OK} Migration complete`);
+    log();
+  }
 
   // Load existing config
   const existing = loadEnvFile();

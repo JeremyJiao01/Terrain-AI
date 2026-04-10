@@ -1081,6 +1081,62 @@ def _strip_markdown(text: str) -> str:
     return "\n".join(out)
 
 
+def _checkpoint_path(vectors_path: Path) -> Path:
+    """Return the path used for incremental embedding checkpoints."""
+    return vectors_path.with_suffix(".checkpoint.pkl")
+
+
+def _load_checkpoint(
+    ckpt_path: Path,
+) -> tuple[list, dict[int, dict], set[str]]:
+    """Load an embedding checkpoint if it exists.
+
+    Returns ``(records_list, func_map, finished_qnames)``.
+    If no checkpoint exists, returns empty collections.
+    """
+    from terrain.domains.core.embedding.vector_store import VectorRecord  # noqa: F811
+
+    if not ckpt_path.exists():
+        return [], {}, set()
+    try:
+        with open(ckpt_path, "rb") as fh:
+            data = pickle.load(fh)
+        records: list[VectorRecord] = data.get("records", [])
+        func_map: dict[int, dict] = data.get("func_map", {})
+        finished: set[str] = data.get("finished_qnames", set())
+        return records, func_map, finished
+    except Exception as exc:
+        logger.warning("Corrupt checkpoint %s, starting fresh: %s", ckpt_path, exc)
+        return [], {}, set()
+
+
+def _save_checkpoint(
+    ckpt_path: Path,
+    records: list,
+    func_map: dict[int, dict],
+    finished_qnames: set[str],
+) -> None:
+    """Atomically persist the current embedding progress."""
+    tmp = ckpt_path.with_suffix(".tmp")
+    try:
+        with open(tmp, "wb") as fh:
+            pickle.dump(
+                {
+                    "records": records,
+                    "func_map": func_map,
+                    "finished_qnames": finished_qnames,
+                },
+                fh,
+            )
+        # Atomic rename — works on both POSIX and Windows (same volume).
+        # On Windows replace() is atomic since Python 3.3.
+        tmp.replace(ckpt_path)
+    except Exception:
+        # Best-effort: remove partial temp file
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def build_vector_index(
     builder: Any,
     repo_path: Path,
@@ -1092,6 +1148,11 @@ def build_vector_index(
 
     No graph database access needed — reads directly from api_docs/funcs/*.md.
     The ``builder`` parameter is kept for backward compatibility but is not used.
+
+    **Checkpoint / resume** — after every batch the progress is persisted to
+    ``vectors.checkpoint.pkl`` next to ``vectors_path``.  If the process is
+    interrupted, the next run automatically picks up where it left off instead
+    of re-embedding everything from scratch.
     """
     from terrain.domains.core.embedding.qwen3_embedder import create_embedder
     from terrain.domains.core.embedding.vector_store import MemoryVectorStore, VectorRecord
@@ -1127,42 +1188,58 @@ def build_vector_index(
             embeddable.append((i, func_info, text))
 
     total = len(embeddable)
-    if progress_cb:
+
+    # ---- Checkpoint / resume ----
+    ckpt_path = _checkpoint_path(vectors_path)
+    records: list[VectorRecord]
+    func_map: dict[int, dict]
+    finished_qnames: set[str]
+
+    if not rebuild:
+        records, func_map, finished_qnames = _load_checkpoint(ckpt_path)
+    else:
+        records, func_map, finished_qnames = [], {}, set()
+
+    # Filter out already-embedded items
+    remaining = [
+        (nid, func, txt)
+        for nid, func, txt in embeddable
+        if func["qualified_name"] not in finished_qnames
+    ]
+    already_done = total - len(remaining)
+
+    if already_done > 0 and progress_cb:
         progress_cb(
-            f"Embedding {total} functions "
+            f"Resumed from checkpoint — {already_done}/{total} already embedded, "
+            f"{len(remaining)} remaining.",
+            16.0 + (already_done / total) * 24.0 if total > 0 else 16.0,
+        )
+
+    if progress_cb:
+        api_calls = (len(remaining) + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE
+        progress_cb(
+            f"Embedding {len(remaining)} functions "
             f"(batch size {_EMBED_BATCH_SIZE}, "
-            f"{(total + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE} API calls)...",
-            16.0,
+            f"{api_calls} API calls)...",
+            16.0 + (already_done / total) * 24.0 if total > 0 else 16.0,
         )
 
     vector_store = MemoryVectorStore(dimension=embedder.get_embedding_dimension())
-    func_map: dict[int, dict] = {}
-    records: list[VectorRecord] = []
 
-    for batch_start in range(0, total, _EMBED_BATCH_SIZE):
-        batch = embeddable[batch_start : batch_start + _EMBED_BATCH_SIZE]
+    for batch_start in range(0, len(remaining), _EMBED_BATCH_SIZE):
+        batch = remaining[batch_start : batch_start + _EMBED_BATCH_SIZE]
         batch_texts = [t for _, _, t in batch]
 
         batch_embeddings = embedder.embed_batch(batch_texts)
 
         if batch_embeddings is None:
-            # logger.warning(
-            #     "embed_batch returned None for batch at offset {}. "
-            #     "Skipping {} texts.",
-            #     batch_start, len(batch_texts),
-            # )
             continue
 
         if len(batch_embeddings) != len(batch):
-            # logger.warning(
-            #     "embed_batch returned {} embeddings for {} inputs at offset {}. "
-            #     "Skipping mismatched batch.",
-            #     len(batch_embeddings), len(batch), batch_start,
-            # )
             continue
 
         for (node_id, func, _), embedding in zip(batch, batch_embeddings):
-            records.append(VectorRecord(
+            rec = VectorRecord(
                 node_id=node_id,
                 qualified_name=func["qualified_name"],
                 embedding=embedding,
@@ -1174,10 +1251,15 @@ def build_vector_index(
                     "visibility": func.get("visibility", ""),
                     "signature": func.get("signature", ""),
                 },
-            ))
+            )
+            records.append(rec)
             func_map[node_id] = func
+            finished_qnames.add(func["qualified_name"])
 
-        done = min(batch_start + _EMBED_BATCH_SIZE, total)
+        # Persist checkpoint after every batch
+        _save_checkpoint(ckpt_path, records, func_map, finished_qnames)
+
+        done = already_done + min(batch_start + _EMBED_BATCH_SIZE, len(remaining))
         if progress_cb and total > 0:
             overall_pct = 16.0 + (done / total) * 24.0
             progress_cb(
@@ -1189,6 +1271,9 @@ def build_vector_index(
 
     with open(vectors_path, "wb") as fh:
         pickle.dump({"vector_store": vector_store, "func_map": func_map}, fh)
+
+    # Clean up checkpoint — final vectors.pkl is complete
+    ckpt_path.unlink(missing_ok=True)
 
     if progress_cb:
         progress_cb(f"Done — {len(records)} embeddings saved.", 40.0)
