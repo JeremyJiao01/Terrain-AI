@@ -11,9 +11,13 @@
   - pip install command dynamically includes only selected packages
   - Setup complete summary lists installed parsers and reminds how to add more: re-run `--setup`
 - `cgb status` now shows a **parsers** line listing which tree-sitter language packages are installed, with a hint to run `--setup` for missing ones
+- **CLI LLM enhancement**: `cgb index`, `cgb rebuild`, `cgb index -u`, and `commands_cli init`/`api-doc-gen` now run LLM-powered description generation (`generate_descriptions_step`) and module summary enhancement (`enhance_api_docs_step`) after API docs — matching the MCP pipeline behavior
+- `--no-llm` flag on `cgb index`, `cgb rebuild`, and `commands_cli init`/`api-doc-gen` to skip LLM steps; gracefully skipped if no LLM is configured
 
 ### Changed
 - `npx code-graph-builder --server` (auto-install path) now installs `code-graph-builder[treesitter-full]` so all language parsers are available out of the box
+- **`find_api` context reduction (~55%)**: results now return a summarized API doc (header, metadata, call tree, callers) instead of the full L3 document; heavy sections (source code, usage examples, params, full description) are stripped; a hint directs the agent to `get_api_doc` for full details
+- Removed redundant `source_code` field from `find_api` results (already available via `get_api_doc`)
 
 ---
 
@@ -24,9 +28,13 @@
   - pip 安装命令根据选择动态拼接，只安装用户勾选的语言包
   - 安装完成摘要显示已安装的 parser 列表，并提示通过重新运行 `--setup` 添加更多语言
 - `cgb status` 新增 **parsers** 行，显示当前已安装的 tree-sitter 语言包，缺失时给出修复提示
+- **CLI LLM 增强**：`cgb index`、`cgb rebuild`、`cgb index -u` 以及 `commands_cli init`/`api-doc-gen` 现在在 API 文档生成后自动运行 LLM 描述生成（`generate_descriptions_step`）和模块摘要增强（`enhance_api_docs_step`），与 MCP pipeline 行为一致
+- `--no-llm` 参数支持：可跳过 LLM 步骤；未配置 LLM 时自动优雅跳过
 
 ### 变更
 - `npx code-graph-builder --server`（自动安装路径）改为安装 `code-graph-builder[treesitter-full]`，开箱即支持全部语言解析器
+- **`find_api` 上下文瘦身（~55%）**：返回精简版 API 文档（标题、元数据、调用树、被调用列表），移除源码、使用示例、参数表格、完整描述等重量级段落；末尾提示 agent 通过 `get_api_doc` 获取完整信息
+- 移除 `find_api` 结果中冗余的 `source_code` 字段（可通过 `get_api_doc` 获取）
 
 ---
 
