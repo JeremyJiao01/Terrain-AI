@@ -26,5 +26,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/JeremyJiao01/CodeGraphWiki"
+  },
+  "dependencies": {
+    "terrain-ai": "^2.1.2"
   }
 }
