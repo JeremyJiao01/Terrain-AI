@@ -81,12 +81,91 @@ class Workspace:
 
 
 # ---------------------------------------------------------------------------
-# Output helpers
+# Tree-style UI helpers (matching npx --setup visual style)
 # ---------------------------------------------------------------------------
 
-def _progress(msg: str) -> None:
-    """Print a progress line that will show in the conversation."""
+class T:
+    """Tree-drawing characters & status icons."""
+    # Box drawing
+    TOP    = "╭"
+    BOT    = "╰"
+    SIDE   = "│"
+    TEE    = "├"
+    BEND   = "╰"
+    DASH   = "─"
+    # Status
+    OK     = "✓"
+    FAIL   = "✗"
+    WARN   = "⚠"
+    WORK   = "…"
+    DOT    = "●"
+    # Indents
+    PIPE   = "│  "
+    SPACE  = "   "
+    BRANCH = "├─ "
+    LAST   = "╰─ "
+
+# ANSI colors
+_BOLD  = "\033[1m"
+_CYAN  = "\033[36m"
+_DIM   = "\033[2m"
+_GREEN = "\033[32m"
+_RED   = "\033[31m"
+_YELLOW = "\033[33m"
+_RESET = "\033[0m"
+
+
+def _supports_color() -> bool:
+    """Check if the terminal supports ANSI colors."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
+
+_USE_COLOR = _supports_color()
+
+
+def _c(code: str, text: str) -> str:
+    """Wrap text with ANSI color code if supported."""
+    if not _USE_COLOR:
+        return text
+    return f"{code}{text}{_RESET}"
+
+
+def _box(title: str) -> str:
+    """Render a centered box like the setup wizard."""
+    pad = 54
+    inner = f"  {title}  "
+    fill = pad - len(inner)
+    left = fill // 2
+    right = fill - left
+    lines = [
+        f"  {T.TOP}{'─' * pad}╮",
+        f"  {T.SIDE}{' ' * left}{_c(_BOLD, inner)}{' ' * right}{T.SIDE}",
+        f"  {T.BOT}{'─' * pad}╯",
+    ]
+    return "\n".join(lines)
+
+
+def _log(msg: str = "") -> None:
+    """Print a UI line to stdout (visible in conversation)."""
     print(msg, flush=True)
+
+
+def _progress(msg: str) -> None:
+    """Print a tree-style progress line."""
+    print(f"  {T.SIDE}  {_c(_DIM, T.WORK)} {msg}", flush=True)
+
+
+def _progress_pct(msg: str, pct: float = 0.0) -> None:
+    """Print a progress line with optional percentage."""
+    if pct > 0:
+        pct_str = _c(_CYAN, f"[{pct:.0f}%]")
+        print(f"  {T.SIDE}  {pct_str} {msg}", flush=True)
+    else:
+        print(f"  {T.SIDE}  {_c(_DIM, T.WORK)} {msg}", flush=True)
 
 
 def _result_json(data: dict | list) -> None:
@@ -95,7 +174,9 @@ def _result_json(data: dict | list) -> None:
 
 
 def _die(msg: str) -> None:
-    print(f"ERROR: {msg}", file=sys.stderr)
+    _log()
+    _log(f"  {_c(_RED, T.FAIL)} {_c(_RED, msg)}")
+    _log()
     sys.exit(1)
 
 
@@ -150,7 +231,9 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
         artifact_dir_for,
         build_graph,
         build_vector_index,
+        enhance_api_docs_step,
         generate_api_docs_step,
+        generate_descriptions_step,
         run_wiki_generation,
         save_meta,
     )
@@ -164,6 +247,7 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
     backend = args.backend
     skip_embed = args.no_embed
     skip_wiki = args.no_wiki or skip_embed  # wiki requires embeddings
+    skip_llm = args.no_llm
     comprehensive = wiki_mode != "concise"
     max_pages = MAX_PAGES_COMPREHENSIVE if comprehensive else MAX_PAGES_CONCISE
 
@@ -189,24 +273,73 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
     if not skip_wiki:
         step_names += " → wiki"
 
-    _progress(f"=== Initializing: {repo_path.name} ({step_names}) ===")
-    _progress(f"    Workspace: {artifact_dir}")
-    _progress(f"    Mode: {wiki_mode} | Backend: {backend} | Rebuild: {rebuild}")
-    _progress("")
+    _log()
+    _log(_box(f"cgb init  {repo_path.name}"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Configuration')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Pipeline:  {_c(_CYAN, step_names)}")
+    _log(f"  {T.BRANCH} Mode:      {wiki_mode}")
+    _log(f"  {T.BRANCH} Backend:   {backend}")
+    _log(f"  {T.BRANCH} Rebuild:   {rebuild}")
+    _log(f"  {T.LAST} Workspace: {_c(_DIM, str(artifact_dir))}")
+    _log()
 
     try:
         # Step 1: build graph
+        _log(f"  {T.DOT} {_c(_BOLD, f'Step 1/{total_steps}')}  Build Knowledge Graph")
+        _log(f"  {T.SIDE}")
         builder = build_graph(
             repo_path, db_path, rebuild,
-            progress_cb=lambda msg, pct: step_progress(1, msg, pct),
+            progress_cb=lambda msg, pct: _progress_pct(msg, pct),
             backend=backend,
         )
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Graph built")
+        _log()
 
         # Step 2: generate API docs
+        _log(f"  {T.DOT} {_c(_BOLD, f'Step 2/{total_steps}')}  Generate API Docs")
+        _log(f"  {T.SIDE}")
         generate_api_docs_step(
             builder, artifact_dir, rebuild,
-            progress_cb=lambda msg, pct: step_progress(2, msg, pct),
+            progress_cb=lambda msg, pct: _progress_pct(msg, pct),
         )
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} API docs generated")
+        _log()
+
+        # Step 2b: LLM description generation for undocumented functions
+        if not skip_llm:
+            _log(f"  {T.DOT} {_c(_BOLD, 'Step 2b')}  LLM Description Generation")
+            _log(f"  {T.SIDE}")
+            desc_result = generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
+                progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+            )
+            desc_count = desc_result.get("generated_count", 0)
+            if desc_count > 0:
+                _log(f"  {T.LAST} {_c(_GREEN, T.OK)} LLM descriptions generated ({desc_count} functions)")
+            else:
+                _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} LLM descriptions skipped (no LLM configured or no TODO functions)")
+            _log()
+
+            # Step 2c: LLM module summaries and usage workflows
+            _log(f"  {T.DOT} {_c(_BOLD, 'Step 2c')}  LLM Module Enhancement")
+            _log(f"  {T.SIDE}")
+            enhance_result = enhance_api_docs_step(
+                artifact_dir=artifact_dir,
+                progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+            )
+            enhance_count = enhance_result.get("generated_count", 0)
+            if enhance_count > 0:
+                _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Module summaries generated ({enhance_count} modules)")
+            else:
+                _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Module enhancement skipped (no LLM configured or no modules)")
+            _log()
+        else:
+            _log(f"  {T.DOT} {_c(_BOLD, 'Step 2b/2c')}  LLM Enhancement")
+            _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Skipped (--no-llm)")
+            _log()
 
         page_count = 0
         index_path = wiki_dir / "index.md"
@@ -214,13 +347,19 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
 
         if not skip_embed:
             # Step 3: build embeddings
+            _log(f"  {T.DOT} {_c(_BOLD, f'Step 3/{total_steps}')}  Build Embeddings")
+            _log(f"  {T.SIDE}")
             vector_store, embedder, func_map = build_vector_index(
                 builder, repo_path, vectors_path, rebuild,
-                progress_cb=lambda msg, pct: step_progress(3, msg, pct),
+                progress_cb=lambda msg, pct: _progress_pct(msg, pct),
             )
+            _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Embeddings built")
+            _log()
 
             if not skip_wiki:
                 # Step 4: generate wiki
+                _log(f"  {T.DOT} {_c(_BOLD, f'Step 4/{total_steps}')}  Generate Wiki")
+                _log(f"  {T.SIDE}")
                 index_path, page_count = run_wiki_generation(
                     builder=builder,
                     repo_path=repo_path,
@@ -231,22 +370,36 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
                     vector_store=vector_store,
                     embedder=embedder,
                     func_map=func_map,
-                    progress_cb=lambda msg, pct: step_progress(4, msg, pct),
+                    progress_cb=lambda msg, pct: _progress_pct(msg, pct),
                 )
+                _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Wiki generated ({page_count} pages)")
+                _log()
             else:
                 skipped.append("wiki")
-                step_progress(4, "Wiki generation skipped (--no-wiki).")
+                _log(f"  {T.DOT} {_c(_BOLD, f'Step 4/{total_steps}')}  Wiki Generation")
+                _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Skipped (--no-wiki)")
+                _log()
         else:
             skipped.extend(["embed", "wiki"])
-            step_progress(3, "Embedding generation skipped (--no-embed).")
-            step_progress(4, "Wiki generation skipped (requires embeddings).")
+            _log(f"  {T.DOT} {_c(_BOLD, f'Step 3/{total_steps}')}  Embeddings")
+            _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Skipped (--no-embed)")
+            _log()
+            _log(f"  {T.DOT} {_c(_BOLD, f'Step 4/{total_steps}')}  Wiki Generation")
+            _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Skipped (requires embeddings)")
+            _log()
 
         _head = _GCD().get_current_head(repo_path)
         save_meta(artifact_dir, repo_path, page_count, last_indexed_commit=_head)
         ws.set_active(artifact_dir)
 
-        _progress("")
-        _progress("=== Done ===")
+        _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Init complete')}")
+        _log(f"  {T.SIDE}")
+        _log(f"  {T.BRANCH} Repo:       {repo_path}")
+        _log(f"  {T.BRANCH} Wiki pages: {page_count}")
+        if skipped:
+            _log(f"  {T.BRANCH} Skipped:    {', '.join(skipped)}")
+        _log(f"  {T.LAST} Artifacts:  {_c(_DIM, str(artifact_dir))}")
+        _log()
         _result_json({
             "status": "success",
             "repo_path": str(repo_path),
@@ -257,7 +410,8 @@ def cmd_init(args: argparse.Namespace, ws: Workspace) -> None:
         })
 
     except Exception as exc:
-        _progress(f"\nERROR: Pipeline failed: {exc}")
+        _log(f"  {_c(_RED, T.FAIL)} {_c(_RED, f'Pipeline failed: {exc}')}")
+        _log()
         sys.exit(1)
 
 
@@ -280,35 +434,51 @@ def cmd_graph_build(args: argparse.Namespace, ws: Workspace) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     db_path = artifact_dir / "graph.db"
 
-    def progress_cb(msg: str, pct: float = 0.0) -> None:
-        prefix = f"[{pct:.0f}%] " if pct > 0 else ""
-        _progress(f"{prefix}{msg}")
-
-    _progress(f"=== Graph Build: {repo_path.name} ===")
-    _progress(f"    Workspace: {artifact_dir}")
-    _progress(f"    Backend: {backend} | Rebuild: {rebuild}")
-    _progress("")
+    _log()
+    _log(_box(f"cgb graph-build  {repo_path.name}"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Configuration')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Backend:   {backend}")
+    _log(f"  {T.BRANCH} Rebuild:   {rebuild}")
+    _log(f"  {T.LAST} Workspace: {_c(_DIM, str(artifact_dir))}")
+    _log()
 
     try:
-        builder = build_graph(repo_path, db_path, rebuild, progress_cb, backend=backend)
+        _log(f"  {T.DOT} {_c(_BOLD, 'Building Knowledge Graph')}")
+        _log(f"  {T.SIDE}")
+        builder = build_graph(
+            repo_path, db_path, rebuild,
+            progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+            backend=backend,
+        )
 
         stats = builder.get_statistics()
         _head = _GCD().get_current_head(repo_path)
         save_meta(artifact_dir, repo_path, 0, last_indexed_commit=_head)
         ws.set_active(artifact_dir)
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Graph built")
+        _log()
 
-        _progress("")
-        _progress("=== Done ===")
+        node_count = stats.get("node_count", 0)
+        rel_count = stats.get("relationship_count", 0)
+        _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Done')}")
+        _log(f"  {T.SIDE}")
+        _log(f"  {T.BRANCH} Nodes:         {_c(_CYAN, str(node_count))}")
+        _log(f"  {T.BRANCH} Relationships: {_c(_CYAN, str(rel_count))}")
+        _log(f"  {T.LAST} Artifacts:     {_c(_DIM, str(artifact_dir))}")
+        _log()
         _result_json({
             "status": "success",
             "repo_path": str(repo_path),
             "artifact_dir": str(artifact_dir),
-            "node_count": stats.get("node_count", 0),
-            "relationship_count": stats.get("relationship_count", 0),
+            "node_count": node_count,
+            "relationship_count": rel_count,
         })
 
     except Exception as exc:
-        _progress(f"\nERROR: Graph build failed: {exc}")
+        _log(f"  {_c(_RED, T.FAIL)} {_c(_RED, f'Graph build failed: {exc}')}")
+        _log()
         sys.exit(1)
 
 
@@ -318,7 +488,12 @@ def cmd_graph_build(args: argparse.Namespace, ws: Workspace) -> None:
 
 def cmd_api_doc_gen(args: argparse.Namespace, ws: Workspace) -> None:
     """Generate API docs from existing knowledge graph (step 2)."""
-    from code_graph_builder.entrypoints.mcp.pipeline import generate_api_docs_step, save_meta
+    from code_graph_builder.entrypoints.mcp.pipeline import (
+        enhance_api_docs_step,
+        generate_api_docs_step,
+        generate_descriptions_step,
+        save_meta,
+    )
 
     artifact_dir = ws.require_active()
     meta = ws.load_meta()
@@ -331,24 +506,69 @@ def cmd_api_doc_gen(args: argparse.Namespace, ws: Workspace) -> None:
         _die("Graph database not found. Run /graph-build or /repo-init first.")
 
     rebuild = args.rebuild
+    skip_llm = args.no_llm
 
-    def progress_cb(msg: str, pct: float = 0.0) -> None:
-        prefix = f"[{pct:.0f}%] " if pct > 0 else ""
-        _progress(f"{prefix}{msg}")
-
-    _progress(f"=== API Doc Generation: {repo_path.name} ===")
-    _progress(f"    Rebuild: {rebuild}")
-    _progress("")
+    _log()
+    _log(_box(f"cgb api-doc-gen  {repo_path.name}"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Configuration')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Rebuild: {rebuild}")
+    _log(f"  {T.LAST} LLM:     {_c(_CYAN, 'enabled') if not skip_llm else _c(_YELLOW, 'disabled')}")
+    _log()
 
     try:
+        _log(f"  {T.DOT} {_c(_BOLD, 'Generating API Docs')}")
+        _log(f"  {T.SIDE}")
         ingestor = _open_ingestor(artifact_dir)
 
-        result = generate_api_docs_step(ingestor, artifact_dir, rebuild, progress_cb)
+        result = generate_api_docs_step(
+            ingestor, artifact_dir, rebuild,
+            progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+        )
 
         ingestor.__exit__(None, None, None)
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} API docs generated")
+        _log()
 
-        _progress("")
-        _progress("=== Done ===")
+        # LLM description generation for undocumented functions
+        if not skip_llm:
+            _log(f"  {T.DOT} {_c(_BOLD, 'LLM Description Generation')}")
+            _log(f"  {T.SIDE}")
+            desc_result = generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
+                progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+            )
+            desc_count = desc_result.get("generated_count", 0)
+            if desc_count > 0:
+                _log(f"  {T.LAST} {_c(_GREEN, T.OK)} LLM descriptions generated ({desc_count} functions)")
+            else:
+                _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} LLM descriptions skipped (no LLM configured or no TODO functions)")
+            _log()
+
+            # LLM module summaries and usage workflows
+            _log(f"  {T.DOT} {_c(_BOLD, 'LLM Module Enhancement')}")
+            _log(f"  {T.SIDE}")
+            enhance_result = enhance_api_docs_step(
+                artifact_dir=artifact_dir,
+                progress_cb=lambda msg, pct: _progress_pct(msg, pct),
+            )
+            enhance_count = enhance_result.get("generated_count", 0)
+            if enhance_count > 0:
+                _log(f"  {T.LAST} {_c(_GREEN, T.OK)} Module summaries generated ({enhance_count} modules)")
+            else:
+                _log(f"  {T.LAST} {_c(_YELLOW, T.WARN)} Module enhancement skipped (no LLM configured or no modules)")
+            _log()
+
+            result["desc_stats"] = desc_result
+            result["enhance_stats"] = enhance_result
+
+        _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Done')}")
+        _log(f"  {T.SIDE}")
+        _log(f"  {T.BRANCH} Repo:      {repo_path}")
+        _log(f"  {T.LAST} Artifacts: {_c(_DIM, str(artifact_dir))}")
+        _log()
         _result_json({
             "status": result.get("status", "success"),
             "repo_path": str(repo_path),
@@ -357,7 +577,8 @@ def cmd_api_doc_gen(args: argparse.Namespace, ws: Workspace) -> None:
         })
 
     except Exception as exc:
-        _progress(f"\nERROR: API doc generation failed: {exc}")
+        _log(f"  {_c(_RED, T.FAIL)} {_c(_RED, f'API doc generation failed: {exc}')}")
+        _log()
         sys.exit(1)
 
 
@@ -394,6 +615,37 @@ def cmd_list_repos(_args: argparse.Namespace, ws: Workspace) -> None:
             "active": child.name == active_name,
         })
 
+    _log()
+    _log(_box("cgb list-repos"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Workspace')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Path:         {_c(_DIM, str(ws.root))}")
+    _log(f"  {T.LAST} Repositories: {_c(_CYAN, str(len(repos)))}")
+    _log()
+
+    if repos:
+        _log(f"  {T.DOT} {_c(_BOLD, 'Repositories')}")
+        _log(f"  {T.SIDE}")
+        for i, repo in enumerate(repos):
+            is_last = i == len(repos) - 1
+            prefix = T.LAST if is_last else T.BRANCH
+            active_marker = _c(_GREEN, " ◀ active") if repo["active"] else ""
+            name = _c(_CYAN + _BOLD, repo["repo_name"]) if repo["active"] else repo["repo_name"]
+            _log(f"  {prefix} {name}{active_marker}")
+            sub_prefix = T.SPACE if is_last else T.PIPE
+            _log(f"  {sub_prefix} Path:    {_c(_DIM, repo['repo_path'])}")
+            _log(f"  {sub_prefix} Indexed: {repo['indexed_at'] or 'unknown'}")
+            wiki_count = repo["wiki_page_count"]
+            if wiki_count:
+                _log(f"  {sub_prefix} Wiki:    {wiki_count} pages")
+            if not is_last:
+                _log(f"  {T.SIDE}")
+    else:
+        _log(f"  {T.DOT} {_c(_DIM, 'No repositories indexed yet')}")
+        _log(f"  {T.LAST} Run: cgb init <path>")
+
+    _log()
     _result_json({
         "workspace": str(ws.root),
         "repository_count": len(repos),
@@ -440,10 +692,19 @@ def cmd_switch_repo(args: argparse.Namespace, ws: Workspace) -> None:
     ws.set_active(target)
     meta = json.loads((target / "meta.json").read_text(encoding="utf-8", errors="replace"))
 
-    _progress(f"Switched to: {meta.get('repo_name', target.name)}")
+    repo_name = meta.get("repo_name", target.name)
+    _log()
+    _log(_box("cgb switch-repo"))
+    _log()
+    _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Switched')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} {_c(_GREEN, T.OK)} Active: {_c(_CYAN + _BOLD, repo_name)}")
+    _log(f"  {T.BRANCH} Path:   {_c(_DIM, meta.get('repo_path', 'unknown'))}")
+    _log(f"  {T.LAST} Dir:    {_c(_DIM, str(target))}")
+    _log()
     _result_json({
         "status": "success",
-        "active_repo": meta.get("repo_name", target.name),
+        "active_repo": repo_name,
         "repo_path": meta.get("repo_path"),
         "artifact_dir": str(target),
         "steps": meta.get("steps", {}),
@@ -472,19 +733,20 @@ def cmd_info(_args: argparse.Namespace, ws: Workspace) -> None:
 
     # Graph statistics + language extraction stats
     db_path = artifact_dir / "graph.db"
+    graph_stats = {}
+    lang_counts: dict[str, int] = {}
+    total_files = 0
     if db_path.exists():
         try:
             ingestor = _open_ingestor(artifact_dir)
-            result["graph_stats"] = ingestor.get_statistics()
+            graph_stats = ingestor.get_statistics()
+            result["graph_stats"] = graph_stats
 
-            # Language extraction stats: count files by extension
             try:
                 file_rows = ingestor.query(
                     "MATCH (f:File) RETURN f.path AS path"
                 )
                 from code_graph_builder.foundation.parsers.language_spec import get_language_for_extension
-                lang_counts: dict[str, int] = {}
-                total_files = 0
                 for row in file_rows:
                     raw = row.get("result", row)
                     fpath = raw[0] if isinstance(raw, (list, tuple)) else raw
@@ -500,7 +762,7 @@ def cmd_info(_args: argparse.Namespace, ws: Workspace) -> None:
                     "by_language": dict(sorted(lang_counts.items(), key=lambda x: -x[1])),
                 }
             except Exception:
-                pass  # language stats are optional
+                pass
 
             ingestor.__exit__(None, None, None)
         except Exception as exc:
@@ -521,7 +783,6 @@ def cmd_info(_args: argparse.Namespace, ws: Workspace) -> None:
     result["semantic_search_available"] = (artifact_dir / "vectors.pkl").exists()
     result["api_docs_available"] = (artifact_dir / "api_docs" / "index.md").exists()
 
-    # Warnings for missing services
     warnings = []
     if not llm.available:
         warnings.append("LLM not configured — set LLM_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY.")
@@ -529,6 +790,61 @@ def cmd_info(_args: argparse.Namespace, ws: Workspace) -> None:
         warnings.append("Embeddings not built — semantic search unavailable.")
     if warnings:
         result["warnings"] = warnings
+
+    # --- Tree-style output ---
+    repo_name = meta.get("repo_name", Path(meta.get("repo_path", "unknown")).name)
+    _log()
+    _log(_box(f"cgb info  {repo_name}"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Repository')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Name:      {_c(_CYAN + _BOLD, repo_name)}")
+    _log(f"  {T.BRANCH} Path:      {meta.get('repo_path', 'unknown')}")
+    _log(f"  {T.BRANCH} Indexed:   {meta.get('indexed_at', 'unknown')}")
+    _log(f"  {T.LAST} Artifacts: {_c(_DIM, str(artifact_dir))}")
+    _log()
+
+    # Graph stats
+    _log(f"  {T.DOT} {_c(_BOLD, 'Knowledge Graph')}")
+    _log(f"  {T.SIDE}")
+    if graph_stats and "error" not in graph_stats:
+        _log(f"  {T.BRANCH} Nodes:         {_c(_CYAN, str(graph_stats.get('node_count', 0)))}")
+        _log(f"  {T.BRANCH} Relationships: {_c(_CYAN, str(graph_stats.get('relationship_count', 0)))}")
+    else:
+        _log(f"  {T.BRANCH} {_c(_YELLOW, T.WARN)} Graph not available")
+
+    if lang_counts:
+        langs_str = ", ".join(f"{lang} ({cnt})" for lang, cnt in sorted(lang_counts.items(), key=lambda x: -x[1]))
+        _log(f"  {T.BRANCH} Languages:     {langs_str}")
+        _log(f"  {T.LAST} Code files:    {_c(_CYAN, str(total_files))}")
+    else:
+        _log(f"  {T.LAST} Languages:     {_c(_DIM, 'unknown')}")
+    _log()
+
+    # Services
+    _log(f"  {T.DOT} {_c(_BOLD, 'Services')}")
+    _log(f"  {T.SIDE}")
+    svc_cypher = _c(_GREEN, T.OK) if llm.available else _c(_RED, T.FAIL)
+    svc_search = _c(_GREEN, T.OK) if result["semantic_search_available"] else _c(_RED, T.FAIL)
+    svc_api = _c(_GREEN, T.OK) if result["api_docs_available"] else _c(_RED, T.FAIL)
+    _log(f"  {T.BRANCH} {svc_cypher} Cypher query (LLM)")
+    _log(f"  {T.BRANCH} {svc_search} Semantic search")
+    _log(f"  {T.LAST} {svc_api} API documentation")
+    _log()
+
+    if wiki_pages:
+        _log(f"  {T.DOT} {_c(_BOLD, 'Wiki')}  ({len(wiki_pages)} pages)")
+        _log(f"  {T.SIDE}")
+        for i, page in enumerate(wiki_pages):
+            prefix = T.LAST if i == len(wiki_pages) - 1 else T.BRANCH
+            _log(f"  {prefix} {page}")
+        _log()
+
+    if warnings:
+        _log(f"  {_c(_YELLOW, T.WARN)} {_c(_BOLD, 'Warnings')}")
+        for w in warnings:
+            _log(f"     {_c(_DIM, w)}")
+        _log()
 
     _result_json(result)
 
@@ -552,7 +868,6 @@ def cmd_reload(_args: argparse.Namespace, ws: Workspace) -> None:
         },
     }
 
-    # Re-check service availability with the new config
     from code_graph_builder.domains.upper.rag.llm_backend import create_llm_backend
 
     llm = create_llm_backend()
@@ -560,7 +875,6 @@ def cmd_reload(_args: argparse.Namespace, ws: Workspace) -> None:
         "llm": llm.available,
     }
 
-    # Check embedding service
     try:
         from code_graph_builder.domains.core.embedding.qwen3_embedder import create_embedder
         embedder = create_embedder()
@@ -568,7 +882,6 @@ def cmd_reload(_args: argparse.Namespace, ws: Workspace) -> None:
     except Exception:
         result["services"]["embedding"] = False
 
-    # Check active repo
     active_dir = ws.active_artifact_dir()
     if active_dir:
         result["active_repo"] = str(active_dir)
@@ -581,6 +894,32 @@ def cmd_reload(_args: argparse.Namespace, ws: Workspace) -> None:
         result["hint"] = f"{len(removed)} key(s) removed: {', '.join(removed)}"
     else:
         result["hint"] = "No changes detected — .env matches current environment."
+
+    # --- Tree-style output ---
+    _log()
+    _log(_box("cgb reload"))
+    _log()
+
+    if updated or removed:
+        _log(f"  {T.DOT} {_c(_BOLD, 'Environment Changes')}")
+        _log(f"  {T.SIDE}")
+        for key in updated:
+            _log(f"  {T.BRANCH} {_c(_GREEN, T.OK)} Updated: {_c(_CYAN, key)}")
+        for key in removed:
+            _log(f"  {T.BRANCH} {_c(_YELLOW, T.WARN)} Removed: {key}")
+        _log(f"  {T.LAST}")
+    else:
+        _log(f"  {T.DOT} {_c(_DIM, 'No changes detected')}")
+        _log(f"  {T.LAST} .env matches current environment")
+    _log()
+
+    _log(f"  {T.DOT} {_c(_BOLD, 'Services')}")
+    _log(f"  {T.SIDE}")
+    svc_llm = _c(_GREEN, T.OK) if result["services"]["llm"] else _c(_RED, T.FAIL)
+    svc_embed = _c(_GREEN, T.OK) if result["services"]["embedding"] else _c(_RED, T.FAIL)
+    _log(f"  {T.BRANCH} {svc_llm} LLM")
+    _log(f"  {T.LAST} {svc_embed} Embedding")
+    _log()
 
     _result_json(result)
 
@@ -606,15 +945,28 @@ def cmd_query(args: argparse.Namespace, ws: Workspace) -> None:
     cypher_gen = CypherGenerator(llm)
 
     question = args.question
-    _progress(f"Question: {question}")
 
+    _log()
+    _log(_box("cgb query"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Question')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.LAST} {_c(_CYAN, question)}")
+    _log()
+
+    _log(f"  {T.DOT} {_c(_BOLD, 'Generating Cypher')}")
+    _log(f"  {T.SIDE}")
     try:
         cypher = cypher_gen.generate(question)
-        _progress(f"Cypher:   {cypher}")
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} {_c(_DIM, cypher)}")
     except Exception as exc:
         ingestor.__exit__(None, None, None)
+        _log(f"  {T.LAST} {_c(_RED, T.FAIL)} Cypher generation failed")
         _die(f"Cypher generation failed: {exc}")
+    _log()
 
+    _log(f"  {T.DOT} {_c(_BOLD, 'Executing')}")
+    _log(f"  {T.SIDE}")
     try:
         rows = ingestor.query(cypher)
         serialisable = []
@@ -624,6 +976,8 @@ def cmd_query(args: argparse.Namespace, ws: Workspace) -> None:
                 serialisable.append(list(raw))
             else:
                 serialisable.append(raw)
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} {_c(_CYAN, str(len(serialisable)))} rows returned")
+        _log()
         _result_json({
             "question": question,
             "cypher": cypher,
@@ -631,6 +985,7 @@ def cmd_query(args: argparse.Namespace, ws: Workspace) -> None:
             "rows": serialisable,
         })
     except Exception as exc:
+        _log(f"  {T.LAST} {_c(_RED, T.FAIL)} Query execution failed")
         _die(f"Query execution failed: {exc}\nCypher: {cypher}")
     finally:
         ingestor.__exit__(None, None, None)
@@ -647,6 +1002,14 @@ def cmd_snippet(args: argparse.Namespace, ws: Workspace) -> None:
 
     ingestor = _open_ingestor(artifact_dir)
     qn = args.qualified_name
+
+    _log()
+    _log(_box("cgb snippet"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Lookup')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.LAST} {_c(_CYAN, qn)}")
+    _log()
 
     safe_qn = qn.replace("'", "\\'")
     cypher = (
@@ -687,6 +1050,17 @@ def cmd_snippet(args: argparse.Namespace, ws: Workspace) -> None:
             pass
 
     ingestor.__exit__(None, None, None)
+
+    _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Found')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Name:  {_c(_CYAN + _BOLD, name or qname)}")
+    if file_path:
+        loc = f"{file_path}:{start_line}-{end_line}" if start_line else str(file_path)
+        _log(f"  {T.LAST} File:  {_c(_DIM, loc)}")
+    else:
+        _log(f"  {T.LAST}")
+    _log()
+
     _result_json({
         "qualified_name": qname,
         "name": name,
@@ -726,10 +1100,37 @@ def cmd_search(args: argparse.Namespace, ws: Workspace) -> None:
 
     query = args.query
     top_k = args.top_k
-    _progress(f"Searching: \"{query}\" (top {top_k})")
 
+    _log()
+    _log(_box("cgb search"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Semantic Search')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Query: {_c(_CYAN, query)}")
+    _log(f"  {T.LAST} Top K: {top_k}")
+    _log()
+
+    _log(f"  {T.DOT} {_c(_BOLD, 'Searching')}")
+    _log(f"  {T.SIDE}")
     try:
         results = service.search(query, top_k=top_k)
+        _log(f"  {T.LAST} {_c(_GREEN, T.OK)} {_c(_CYAN, str(len(results)))} results found")
+        _log()
+
+        if results:
+            _log(f"  {T.DOT} {_c(_BOLD, 'Results')}")
+            _log(f"  {T.SIDE}")
+            for i, r in enumerate(results):
+                is_last = i == len(results) - 1
+                prefix = T.LAST if is_last else T.BRANCH
+                score_str = f"{r.score:.3f}" if r.score else "?"
+                _log(f"  {prefix} {_c(_CYAN, r.name or r.qualified_name)}  {_c(_DIM, f'score={score_str}')}")
+                sub = T.SPACE if is_last else T.PIPE
+                if r.file_path:
+                    loc = f"{r.file_path}:{r.start_line}" if r.start_line else r.file_path
+                    _log(f"  {sub} {_c(_DIM, loc)}")
+            _log()
+
         _result_json({
             "query": query,
             "result_count": len(results),
@@ -748,6 +1149,7 @@ def cmd_search(args: argparse.Namespace, ws: Workspace) -> None:
             ],
         })
     except Exception as exc:
+        _log(f"  {T.LAST} {_c(_RED, T.FAIL)} Search failed")
         _die(f"Semantic search failed: {exc}")
     finally:
         ingestor.__exit__(None, None, None)
@@ -771,6 +1173,24 @@ def cmd_list_wiki(_args: argparse.Namespace, ws: Workspace) -> None:
             pages.append({"page_id": p.stem, "file": f"wiki/{p.name}"})
 
     index_path = wiki_dir / "index.md"
+
+    _log()
+    _log(_box("cgb list-wiki"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Wiki Pages')}  ({len(pages)} pages)")
+    _log(f"  {T.SIDE}")
+    if index_path.exists():
+        _log(f"  {T.BRANCH} {_c(_GREEN, T.OK)} index")
+    for i, page in enumerate(pages):
+        is_last = i == len(pages) - 1
+        prefix = T.LAST if is_last else T.BRANCH
+        _log(f"  {prefix} {page['page_id']}")
+    if not pages and not index_path.exists():
+        _log(f"  {T.LAST} {_c(_DIM, 'No pages found')}")
+    _log()
+    _log(f"  {_c(_DIM, '  Hint: cgb get-wiki index  or  cgb get-wiki page-1')}")
+    _log()
+
     _result_json({
         "index_available": index_path.exists(),
         "page_count": len(pages),
@@ -800,6 +1220,16 @@ def cmd_get_wiki(args: argparse.Namespace, ws: Workspace) -> None:
         _die(f"Wiki page not found: {page_id}")
 
     content = target.read_text(encoding="utf-8", errors="ignore")
+
+    _log()
+    _log(_box(f"cgb get-wiki  {page_id}"))
+    _log()
+    _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Page loaded')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Page: {_c(_CYAN, page_id)}")
+    _log(f"  {T.LAST} File: {_c(_DIM, str(target))}")
+    _log()
+
     _result_json({
         "page_id": page_id,
         "file_path": str(target),
@@ -834,10 +1264,27 @@ def cmd_locate(args: argparse.Namespace, ws: Workspace) -> None:
     if not target.exists():
         _die(f"File not found: {file_path}")
 
+    _log()
+    _log(_box("cgb locate"))
+    _log()
+    _log(f"  {T.DOT} {_c(_BOLD, 'Locating')}")
+    _log(f"  {T.SIDE}")
+    _log(f"  {T.BRANCH} Function: {_c(_CYAN, args.function_name)}")
+    _log(f"  {T.LAST} File:     {_c(_DIM, file_path)}")
+    _log()
+
     line_number = args.line if hasattr(args, "line") else None
     result = editor.locate_function(target, args.function_name, line_number)
     if result is None:
         _die(f"Function '{args.function_name}' not found in {file_path}")
+
+    _log(f"  {_c(_GREEN, T.DOT)} {_c(_BOLD, 'Found')}")
+    _log(f"  {T.SIDE}")
+    start = result.get("start_line", "?")
+    end = result.get("end_line", "?")
+    _log(f"  {T.BRANCH} {_c(_GREEN, T.OK)} {_c(_CYAN + _BOLD, args.function_name)}")
+    _log(f"  {T.LAST} Lines: {start}-{end}")
+    _log()
 
     _result_json(result)
 
@@ -1015,6 +1462,8 @@ def cmd_api_find(args: argparse.Namespace, ws: Workspace) -> None:
     funcs_dir = api_dir / "funcs"
     has_api_docs = funcs_dir.exists()
 
+    from code_graph_builder.entrypoints.mcp.tools import summarize_api_doc
+
     combined = []
     for r in results:
         entry: dict = {
@@ -1025,15 +1474,15 @@ def cmd_api_find(args: argparse.Namespace, ws: Workspace) -> None:
             "file_path": r.file_path,
             "start_line": r.start_line,
             "end_line": r.end_line,
-            "source_code": r.source_code,
         }
 
-        # Try to attach API doc content
+        # Try to attach summarized API doc content
         if has_api_docs and r.qualified_name:
             safe_qn = r.qualified_name.replace("/", "_").replace("\\", "_")
             doc_file = funcs_dir / f"{safe_qn}.md"
             if doc_file.exists():
-                entry["api_doc"] = doc_file.read_text(encoding="utf-8", errors="ignore")
+                full_doc = doc_file.read_text(encoding="utf-8", errors="ignore")
+                entry["api_doc"] = summarize_api_doc(full_doc)
             else:
                 entry["api_doc"] = None
         else:
@@ -1224,6 +1673,8 @@ def main() -> None:
                    help="Skip wiki generation (graph + api-docs + embeddings only)")
     p.add_argument("--no-embed", action="store_true",
                    help="Skip embeddings and wiki (graph + api-docs only, fastest)")
+    p.add_argument("--no-llm", action="store_true",
+                   help="Skip LLM-powered description generation and module enhancement")
 
     # graph-build (step 1: standalone)
     p = subparsers.add_parser("graph-build", help="Build knowledge graph only (step 1)")
@@ -1235,6 +1686,8 @@ def main() -> None:
     # api-doc-gen (step 2: standalone)
     p = subparsers.add_parser("api-doc-gen", help="Generate API docs from existing graph (step 2)")
     p.add_argument("--rebuild", action="store_true", help="Force regenerate API docs")
+    p.add_argument("--no-llm", action="store_true",
+                   help="Skip LLM-powered description generation and module enhancement")
 
     # list-repos
     subparsers.add_parser("list-repos", help="List all indexed repositories in the workspace")

@@ -1387,7 +1387,9 @@ def _run_incremental_index(args: argparse.Namespace, repo_path: Path, ws: Path) 
     from code_graph_builder.entrypoints.mcp.pipeline import (
         artifact_dir_for,
         build_vector_index,
+        enhance_api_docs_step,
         generate_api_docs_step,
+        generate_descriptions_step,
         save_meta,
     )
     from code_graph_builder.foundation.services.git_service import GitChangeDetector
@@ -1434,6 +1436,7 @@ def _run_incremental_index(args: argparse.Namespace, repo_path: Path, ws: Path) 
         args.update = False
         return cmd_index(args)
 
+    skip_llm = getattr(args, "no_llm", False)
     print(f"  {_c('36', 'incremental')} {len(changed_files)} changed file(s)")
 
     try:
@@ -1450,6 +1453,23 @@ def _run_incremental_index(args: argparse.Namespace, repo_path: Path, ws: Path) 
                 ro_ingestor, artifact_dir, rebuild=True, repo_path=repo_path,
             )
         print(f"  {_c('32', '✓')} API docs regenerated")
+
+        # Cascade: LLM enhancement
+        if not skip_llm:
+            desc_result = generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
+            )
+            desc_count = desc_result.get("generated_count", 0)
+            if desc_count > 0:
+                print(f"  {_c('32', '✓')} LLM descriptions generated ({desc_count} functions)")
+
+            enhance_result = enhance_api_docs_step(
+                artifact_dir=artifact_dir,
+            )
+            enhance_count = enhance_result.get("generated_count", 0)
+            if enhance_count > 0:
+                print(f"  {_c('32', '✓')} Module summaries generated ({enhance_count} modules)")
 
         # Cascade: rebuild embeddings
         if not args.no_embed and vectors_path.exists():
@@ -1521,7 +1541,9 @@ def cmd_index(args: argparse.Namespace) -> int:
         artifact_dir_for,
         build_graph,
         build_vector_index,
+        enhance_api_docs_step,
         generate_api_docs_step,
+        generate_descriptions_step,
         run_wiki_generation,
         save_meta,
     )
@@ -1549,6 +1571,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 
     skip_embed = args.no_embed
     skip_wiki = not getattr(args, "wiki", False) or skip_embed
+    skip_llm = getattr(args, "no_llm", False)
     rebuild = True  # Default: always rebuild
     backend = args.backend
     comprehensive = args.mode != "concise"
@@ -1559,8 +1582,11 @@ def cmd_index(args: argparse.Namespace) -> int:
         total_steps = 2
     elif skip_wiki:
         total_steps = 3
+    # LLM steps (2b/2c) are sub-steps, don't change total_steps count
 
     step_label = "graph -> api-docs"
+    if not skip_llm:
+        step_label += " (+ LLM)"
     if not skip_embed:
         step_label += " -> embeddings"
     if not skip_wiki:
@@ -1613,6 +1639,31 @@ def cmd_index(args: argparse.Namespace) -> int:
             (ws_root / "active.txt").write_text(ws_stub.name, encoding="utf-8")
         else:
             (ws_root / "active.txt").write_text(artifact_dir.name, encoding="utf-8")
+
+        # LLM enhancement steps (2b/2c)
+        if not skip_llm:
+            bar.update(2, "LLM description generation...", 0.0)
+            desc_result = generate_descriptions_step(
+                artifact_dir=artifact_dir,
+                repo_path=repo_path,
+                progress_cb=lambda msg, pct: progress(2, msg, pct),
+            )
+            desc_count = desc_result.get("generated_count", 0)
+            if desc_count > 0:
+                bar.done(2, f"LLM descriptions: {desc_count} functions")
+            else:
+                bar.done(2, "LLM descriptions: skipped (no LLM or no TODOs)")
+
+            bar.update(2, "LLM module enhancement...", 0.0)
+            enhance_result = enhance_api_docs_step(
+                artifact_dir=artifact_dir,
+                progress_cb=lambda msg, pct: progress(2, msg, pct),
+            )
+            enhance_count = enhance_result.get("generated_count", 0)
+            if enhance_count > 0:
+                bar.done(2, f"Module enhancement: {enhance_count} modules")
+            else:
+                bar.done(2, "Module enhancement: skipped (no LLM or no modules)")
 
         page_count = 0
         if not skip_embed:
@@ -1729,7 +1780,9 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
     from code_graph_builder.entrypoints.mcp.pipeline import (
         build_graph,
         build_vector_index,
+        enhance_api_docs_step,
         generate_api_docs_step,
+        generate_descriptions_step,
         run_wiki_generation,
         save_meta,
     )
@@ -1755,6 +1808,7 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
 
     step = args.step  # graph | api | embed | wiki | None (all)
     run_all = step is None
+    skip_llm = getattr(args, "no_llm", False)
     backend = args.backend
 
     include_wiki = getattr(args, "wiki", False) or step == "wiki"
@@ -1796,6 +1850,25 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
                 progress_cb=lambda msg, pct: progress("api", msg, pct),
             )
             bar.done(steps_to_run.index("api") + 1, last_msg[0] or "API docs generated")
+
+            # LLM enhancement after API docs
+            if not skip_llm:
+                desc_result = generate_descriptions_step(
+                    artifact_dir=artifact_dir,
+                    repo_path=repo_path,
+                    progress_cb=lambda msg, pct: progress("api", msg, pct),
+                )
+                desc_count = desc_result.get("generated_count", 0)
+                if desc_count > 0:
+                    bar.done(steps_to_run.index("api") + 1, f"LLM descriptions: {desc_count} functions")
+
+                enhance_result = enhance_api_docs_step(
+                    artifact_dir=artifact_dir,
+                    progress_cb=lambda msg, pct: progress("api", msg, pct),
+                )
+                enhance_count = enhance_result.get("generated_count", 0)
+                if enhance_count > 0:
+                    bar.done(steps_to_run.index("api") + 1, f"Module enhancement: {enhance_count} modules")
 
         vector_store = embedder = func_map = None
 
@@ -2317,6 +2390,11 @@ Windows:
         default=None,
         help="Output destination: 'local' for .cgb/ in repo, 'workspace' for ~/.code-graph-builder/",
     )
+    index_parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM-powered description generation and module enhancement",
+    )
     index_parser.set_defaults(func=cmd_index)
 
     # link command
@@ -2383,6 +2461,11 @@ Windows:
         choices=["kuzu", "memgraph", "memory"],
         default="kuzu",
         help="Storage backend (default: kuzu)",
+    )
+    rebuild_parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM-powered description generation and module enhancement",
     )
     rebuild_parser.set_defaults(func=cmd_rebuild)
 

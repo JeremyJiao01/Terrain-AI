@@ -54,6 +54,50 @@ from code_graph_builder.entrypoints.mcp.pipeline import (
 )
 
 
+def summarize_api_doc(full_doc: str) -> str:
+    """Produce a compact summary of an L3 API doc for find_api results.
+
+    Keeps:  header (title, description, metadata), call tree, callers list
+    Strips: ## 使用示例 (usage examples), ## 实现 (source code), ## 参数与内存,
+            ## 描述 (full description — already captured in header blockquote)
+
+    The caller can still retrieve the full doc via ``get_api_doc`` when
+    they need the complete source code or usage examples.
+    """
+    # Section headers that should be REMOVED to save context
+    _HEAVY_SECTIONS = {"## 使用示例", "## 实现", "## 参数与内存", "## 描述"}
+
+    output_lines: list[str] = []
+    skip = False
+
+    for line in full_doc.splitlines():
+        # Detect section boundary
+        if line.startswith("## "):
+            # Check if this section should be skipped
+            section_prefix = line.split("(")[0].strip()  # "## 被调用 (3)" → "## 被调用"
+            if any(section_prefix.startswith(h) for h in _HEAVY_SECTIONS):
+                skip = True
+                continue
+            else:
+                skip = False
+
+        if not skip:
+            output_lines.append(line)
+
+    # Strip trailing blank lines
+    while output_lines and not output_lines[-1].strip():
+        output_lines.pop()
+
+    summary = "\n".join(output_lines)
+
+    # Append a hint for the agent
+    summary += (
+        "\n\n> 💡 Use `get_api_doc` with this function's qualified name "
+        "to see full source code, usage examples, and parameter details."
+    )
+    return summary
+
+
 @dataclass
 class ToolDefinition:
     name: str
@@ -1656,11 +1700,12 @@ class MCPToolsRegistry:
             combined = []
             for _, md_file in scored[:top_k]:
                 qn = md_file.stem
+                full_doc = md_file.read_text(encoding="utf-8", errors="ignore")
                 combined.append({
                     "qualified_name": qn,
                     "name": qn.split(".")[-1],
                     "score": None,
-                    "api_doc": md_file.read_text(encoding="utf-8", errors="ignore"),
+                    "api_doc": summarize_api_doc(full_doc),
                 })
             return {
                 "query": query,
@@ -1687,7 +1732,6 @@ class MCPToolsRegistry:
                 "file_path": r.file_path,
                 "start_line": r.start_line,
                 "end_line": r.end_line,
-                "source_code": r.source_code,
                 "api_doc": None,
             }
 
@@ -1695,9 +1739,10 @@ class MCPToolsRegistry:
                 safe_qn = r.qualified_name.replace("/", "_").replace("\\", "_")
                 doc_file = funcs_dir / f"{safe_qn}.md"
                 if doc_file.exists():
-                    entry["api_doc"] = doc_file.read_text(
+                    full_doc = doc_file.read_text(
                         encoding="utf-8", errors="ignore"
                     )
+                    entry["api_doc"] = summarize_api_doc(full_doc)
 
             combined.append(entry)
 
