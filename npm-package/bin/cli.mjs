@@ -19,7 +19,7 @@ import { homedir, platform, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PYTHON_PACKAGE = "terrain";
+const PYTHON_PACKAGE = "terrain-ai";
 const MODULE_PATH = "terrain.entrypoints.mcp.server";
 const WORKSPACE_DIR = join(homedir(), ".terrain");
 const ENV_FILE = join(WORKSPACE_DIR, ".env");
