@@ -183,14 +183,23 @@ def check_import(file_path: str, imported_module: str) -> str | None:
 
     # Same-layer imports
     if imported_layer == file_layer:
-        # L1 modules (parsers, services, utils) are all within foundation/
-        # and may depend on each other — allow freely.
+        # L1 modules (parsers, services, utils) are fully independent —
+        # no cross-module imports allowed within L1.
         if file_layer == "L1":
-            return None
-        # L2/L3/L4: allow cross-domain within the same parent tier
-        # (e.g. graph <-> embedding within domains/core is OK)
+            return (
+                f"{file_path}: L1 cannot import another L1 module '{imported_module}'"
+            )
+        # L2/L3/L4: only allowed within the same domain.
+        # Cross-domain imports at the same layer are forbidden.
         if file_layer in ("L2", "L3", "L4"):
-            return None
+            file_domain = _get_domain(file_path)
+            imported_domain = _get_module_domain(imported_module)
+            if file_domain is None or imported_domain is None or file_domain != imported_domain:
+                return (
+                    f"{file_path}: {file_layer} cross-domain import forbidden "
+                    f"(module '{imported_module}')"
+                )
+            return None  # Same domain — OK
 
     # Check layer ordering
     allowed = ALLOWED_IMPORTS[file_layer]
