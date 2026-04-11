@@ -59,6 +59,10 @@ tinycc_analysis/
 tinycc_kuzu/
 tinycc_memory/
 extracted_prompts/
+dist/
+
+# Internal acceptance criteria docs
+tests/ACCEPTANCE_CRITERIA_PHASE2.md
 
 # Generated HTML documentation (build artifacts)
 docs/*.html
@@ -70,6 +74,11 @@ docs/*.md
 **/review_report.md
 **/analysis_report.md
 
+# Internal planning and product docs
+contributing/p0-reliability.md
+contributing/product-maintenance-guide.md
+contributing/roadmap.md
+
 # Development-only directories (not needed in production)
 # code_graph_builder/examples/ — kept in repo (runtime dependency for wiki generation)
 code_graph_builder/tests/
@@ -78,7 +87,6 @@ code_graph_builder/rag/review_report.md
 
 #claude
 .claude/*
-!.claude/commands/
 CLAUDE.md
 
 #superpowers
