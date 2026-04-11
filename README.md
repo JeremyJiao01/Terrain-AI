@@ -2,6 +2,12 @@
 
 English | [Chinese / CN](README_CN.md)
 
+[![CI](https://github.com/JeremyJiao01/Terrain-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/JeremyJiao01/Terrain-AI/actions)
+[![PyPI](https://img.shields.io/pypi/v/terrain-ai)](https://pypi.org/project/terrain-ai/)
+[![npm](https://img.shields.io/npm/v/terrain-ai)](https://www.npmjs.com/package/terrain-ai)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org)
+
 Give your AI coding assistant a complete map of any codebase — function signatures, call graphs, and semantic search across every line of code.
 
 ## The Problem
@@ -394,4 +400,4 @@ python3 -m pytest tests/domains/upper/test_api_find_integration.py -v  # ~47 min
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE) for details.

@@ -2,6 +2,12 @@
 
 [English](README.md) | 中文
 
+[![CI](https://github.com/JeremyJiao01/Terrain-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/JeremyJiao01/Terrain-AI/actions)
+[![PyPI](https://img.shields.io/pypi/v/terrain-ai)](https://pypi.org/project/terrain-ai/)
+[![npm](https://img.shields.io/npm/v/terrain-ai)](https://www.npmjs.com/package/terrain-ai)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org)
+
 让你的 AI 编程助手真正读懂任意代码库 —— 函数签名、调用图谱、全库语义搜索，一次索引，随时查询。
 
 ## 问题
@@ -393,4 +399,4 @@ python3 -m pytest tests/domains/upper/test_api_find_integration.py -v  # ~47 分
 
 ## 许可证
 
-MIT
+Apache License 2.0 — 详见 [LICENSE](LICENSE)。
