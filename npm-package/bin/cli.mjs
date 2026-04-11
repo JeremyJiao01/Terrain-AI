@@ -299,15 +299,30 @@ function commandExists(cmd) {
 
 function findPython() {
   const candidates = IS_WIN
-    ? ["python", "python3", "py"]
-    : ["python3", "python"];
+    ? ["python", "python3", "py", "python3.13", "python3.12", "python3.11"]
+    : ["python3.13", "python3.12", "python3.11", "python3", "python"];
+
+  const valid = [];
   for (const cmd of candidates) {
     try {
-      const ver = execFileSync(cmd, ["--version"], { stdio: "pipe" }).toString().trim();
-      if (ver.includes("3.")) return { cmd, ver };
-    } catch { /* skip */ }
+      const out = execFileSync(cmd, ["--version"], { stdio: "pipe" }).toString().trim();
+      // Parse "Python X.Y.Z"
+      const m = out.match(/Python (\d+)\.(\d+)\.(\d+)/);
+      if (!m) continue;
+      const [, major, minor, patch] = m.map(Number);
+      if (major === 3 && minor >= 11) {
+        valid.push({ cmd, ver: out, major, minor, patch });
+      }
+    } catch { /* not found or not runnable */ }
   }
-  return null;
+
+  if (valid.length === 0) return null;
+
+  // Pick the highest version among valid candidates
+  valid.sort((a, b) =>
+    b.major - a.major || b.minor - a.minor || b.patch - a.patch
+  );
+  return valid[0];
 }
 
 const pythonInfo = findPython();
@@ -689,14 +704,16 @@ function mask(s) {
 }
 
 function findPip() {
-  for (const cmd of IS_WIN ? ["pip", "pip3"] : ["pip3", "pip"]) {
-    if (commandExists(cmd)) return [cmd];
-  }
+  // Prefer pip that belongs to the selected Python (PYTHON_CMD >= 3.11)
   if (PYTHON_CMD) {
     try {
       execFileSync(PYTHON_CMD, ["-m", "pip", "--version"], { stdio: "pipe" });
       return [PYTHON_CMD, "-m", "pip"];
-    } catch { /* skip */ }
+    } catch { /* pip not available for this python */ }
+  }
+  // Fallback: look for a standalone pip/pip3 in PATH
+  for (const cmd of IS_WIN ? ["pip", "pip3"] : ["pip3", "pip"]) {
+    if (commandExists(cmd)) return [cmd];
   }
   return null;
 }
@@ -1143,14 +1160,15 @@ async function runSetup() {
   log(`  ${T.DOT} Verification`);
   log(`  ${T.SIDE}`);
 
-  // 1. Python
+  // 1. Python (requires 3.11+)
   if (!PYTHON_CMD) {
-    log(`  ${T.BRANCH} ${T.FAIL} Python 3 not found`);
-    log(`  ${T.LAST}   Install Python 3.10+ and re-run: terrain setup`);
+    log(`  ${T.BRANCH} ${T.FAIL} Python 3.11+ not found`);
+    log(`  ${T.PIPE}   Terrain requires Python 3.11 or higher.`);
+    log(`  ${T.LAST}   Install Python 3.11+ from https://python.org and re-run: npx terrain-ai@latest --setup`);
     log();
-    return;
+    process.exit(1);
   }
-  log(`  ${T.BRANCH} ${T.OK} ${PYTHON_VER}`);
+  log(`  ${T.BRANCH} ${T.OK} ${PYTHON_VER} (${PYTHON_CMD})`);
 
   // 2. Package — auto-install or upgrade
   const pip = findPip();

@@ -1,6 +1,6 @@
 {
   "name": "terrain-dev",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "private": true,
   "description": "Local development wrapper for terrain",
   "bin": {
@@ -16,6 +16,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/JeremyJiao01/CodeGraphWiki"
+    "url": "https://github.com/JeremyJiao01/Terrain-AI"
   }
 }
