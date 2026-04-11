@@ -344,8 +344,10 @@ function pythonPackageInstalled() {
 function getPackageVersion() {
   if (!PYTHON_CMD) return null;
   try {
+    // Use importlib.metadata to read the installed package version by name.
+    // Avoids false reads from an unrelated `terrain` package on PyPI.
     return execFileSync(PYTHON_CMD, ["-c",
-      `import terrain; print(getattr(terrain, '__version__', 'unknown'))`
+      `import importlib.metadata; print(importlib.metadata.version('terrain-ai'))`
     ], { stdio: "pipe" }).toString().trim();
   } catch {
     return null;
@@ -587,7 +589,7 @@ try {
   if (PYTHON) {
     let localPy = null, latestPy = null;
     try {
-      localPy = pyEval("import terrain; print(getattr(terrain, '__version__', ''))") || null;
+      localPy = pyEval("import importlib.metadata; print(importlib.metadata.version('terrain-ai'))") || null;
     } catch {}
     try {
       latestPy = pyEval(
@@ -618,7 +620,7 @@ try {
 
       if (pip) {
         try {
-          const args = [...pip.slice(1), "install", "--upgrade", "--prefer-binary", "terrain-ai[treesitter-full]"];
+          const args = [...pip.slice(1), "install", "--upgrade", "--prefer-binary", "--no-cache-dir", "terrain-ai[treesitter-full]"];
           execFileSync(pip[0], args, { stdio: "pipe", timeout: 300000 });
           info.py = { from: localPy, to: latestPy };
           log("Python updated to " + latestPy);
@@ -1184,7 +1186,7 @@ async function runSetup() {
     process.stderr.write(`${spinPrefix}${T.WORK} Installing ${installDesc}...\n`);
     await new Promise((resolve) => {
       const [pipExe, ...pipExtraArgs] = pip;
-      const child = spawn(pipExe, [...pipExtraArgs, "install", "--prefer-binary", "--force-reinstall", "--upgrade", ...installTargets], {
+      const child = spawn(pipExe, [...pipExtraArgs, "install", "--prefer-binary", "--no-cache-dir", "--upgrade", ...installTargets], {
         stdio: ["ignore", "pipe", "pipe"],
         shell: IS_WIN,
       });
@@ -1229,32 +1231,40 @@ async function runSetup() {
       const spinFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
       let spinIdx = 0;
       const spinPrefix = `  ${T.SIDE}  `;
-      process.stderr.write(`${spinPrefix}${T.WORK} Updating terrain CLI...\n`);
-      // Prefer installing from the directory containing this script (works even
-      // before npm publish — npx caches the package locally first).
-      // Fall back to registry when self-dir can't be detected.
-      const selfDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-      const installTarget = existsSync(join(selfDir, "package.json"))
-        ? selfDir
-        : (currentVer ? `terrain-ai@${currentVer}` : "terrain-ai@latest");
+      process.stderr.write(`${spinPrefix}${T.WORK} Installing terrain CLI globally...\n`);
 
-      let updateOk = false;
-      await new Promise((resolve) => {
-        const child = spawn("npm", ["install", "-g", installTarget], {
+      // Always prefer the registry — it is the only source guaranteed to work
+      // from an npx context (the selfDir points to a temp npx cache that npm
+      // cannot reliably install from). Fall back to selfDir only when running
+      // locally (development workflow where the package isn't published yet).
+      const registryTarget = currentVer ? `terrain-ai@${currentVer}` : "terrain-ai@latest";
+      const selfDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const hasSelfDir = existsSync(join(selfDir, "package.json"));
+
+      const tryInstall = (target) => new Promise((resolve) => {
+        const child = spawn("npm", ["install", "-g", target], {
           stdio: ["ignore", "pipe", "pipe"],
           shell: IS_WIN,
         });
         const iv = setInterval(() => {
-          process.stderr.write(`\r${spinPrefix}${spinFrames[spinIdx++ % spinFrames.length]} Updating terrain CLI...`);
+          process.stderr.write(`\r${spinPrefix}${spinFrames[spinIdx++ % spinFrames.length]} Installing terrain CLI globally...`);
         }, 120);
-        child.on("close", (code) => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); updateOk = code === 0; resolve(); });
-        child.on("error", () => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); resolve(); });
+        child.on("close", (code) => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); resolve(code === 0); });
+        child.on("error", () => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); resolve(false); });
       });
 
+      // 1st attempt: registry (reliable in npx context)
+      let updateOk = await tryInstall(registryTarget);
+
+      // 2nd attempt: selfDir (local dev fallback, when registry isn't available yet)
+      if (!updateOk && hasSelfDir) {
+        updateOk = await tryInstall(selfDir);
+      }
+
       if (updateOk) {
-        log(`  ${T.BRANCH} ${T.OK} terrain CLI updated to ${currentVer || "latest"}`);
+        log(`  ${T.BRANCH} ${T.OK} terrain CLI installed globally (${currentVer || "latest"})`);
       } else {
-        log(`  ${T.BRANCH} ${T.WARN} CLI auto-update failed (sudo may be required)`);
+        log(`  ${T.BRANCH} ${T.WARN} Global CLI install failed (sudo may be required)`);
         log(`  ${T.SIDE}       Run manually: sudo npm install -g terrain-ai@${currentVer || "latest"}`);
       }
     }
@@ -1991,7 +2001,7 @@ async function runUpdate() {
       try {
         const target = `${PYTHON_PACKAGE}[treesitter-full]`;
         execSync(
-          [...pip, "install", "--upgrade", "--prefer-binary", target].map(s => `"${s}"`).join(" "),
+          [...pip, "install", "--upgrade", "--prefer-binary", "--no-cache-dir", target].map(s => `"${s}"`).join(" "),
           { stdio: "inherit", shell: true, timeout: 300_000 }
         );
         const newVer = getPackageVersion();

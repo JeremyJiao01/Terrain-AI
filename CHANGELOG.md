@@ -6,6 +6,56 @@
 
 ---
 
+## [2.1.8] — 2026-04-11
+
+### Added
+- Require Python 3.11+ and auto-select the highest available Python version during setup
+- Spinner progress indicator during pip install in setup wizard
+- Open source: switch license to Apache 2.0, add badges, CONTRIBUTING and open source docs
+
+### Fixed
+- Use `importlib.metadata.version('terrain-ai')` for version detection instead of `import terrain` — avoids false reads from unrelated packages
+- Add `--no-cache-dir` to all pip install commands for reliable upgrades
+- Setup wizard npm global install now prefers registry over selfDir (fixes npx temp cache issue), with selfDir as local dev fallback
+- Remove `--force-reinstall` from setup install — unnecessary churn
+- Proxy unknown subcommands to Python CLI instead of hanging
+- Use correct PyPI package name `terrain-ai` for pip install
+- Remove legacy MCP tool from all scopes during setup
+- `terrain setup` now runs the npm setup wizard on all platforms
+- Setup wizard auto-updates stale global npm binary
+- Three correctness bugs fixed: pickle compat, DB cleanup, and build stats
+- `dep_check`: enforce L1 isolation and cross-domain rules correctly
+
+### Changed
+- Rebrand docs: CodeGraphWiki → Terrain AI
+- CI: set dep_check to warn-only until pre-existing violations are resolved
+
+---
+
+### 新增
+- 要求 Python 3.11+，setup 时自动选择系统中最高版本的 Python
+- setup 向导中 pip install 添加 spinner 进度指示器
+- 开源化：切换为 Apache 2.0 协议，添加 badges、CONTRIBUTING 等开源文件
+
+### 修复
+- 版本检测改用 `importlib.metadata.version('terrain-ai')`，避免与 PyPI 上同名无关包冲突
+- 所有 pip install 命令添加 `--no-cache-dir`，确保升级可靠
+- setup 向导 npm 全局安装优先使用 registry（修复 npx 临时缓存问题），selfDir 作为本地开发回退
+- 移除 setup 中不必要的 `--force-reinstall`
+- 未知子命令现在代理到 Python CLI 而非挂起
+- pip install 使用正确的 PyPI 包名 `terrain-ai`
+- setup 时从所有 scope 移除旧版 MCP 工具
+- `terrain setup` 在所有平台运行 npm setup 向导
+- setup 向导自动更新过期的全局 npm 二进制
+- 修复三个正确性 bug：pickle 兼容、DB 清理、构建统计
+- `dep_check` 正确执行 L1 隔离和跨域规则
+
+### 变更
+- 文档品牌重命名：CodeGraphWiki → Terrain AI
+- CI：dep_check 设为 warn-only 直到已有违规修复完毕
+
+---
+
 ## [2.1.1] — 2026-04-11
 
 ### Fixed
