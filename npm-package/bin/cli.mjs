@@ -1192,7 +1192,57 @@ async function runSetup() {
     return;
   }
 
-  // 2b. Windows: ensure Python Scripts dir is on user PATH so `terrain` works
+  // 2b. Self-update global npm binary if an older version is installed
+  //     This ensures `terrain index` / `terrain scan` etc. don't hang on old
+  //     npm CLI versions that lack the Python-proxy for unknown subcommands.
+  {
+    const currentVer = getLocalNpmVersion();
+    let globalVer = null;
+    try {
+      globalVer = execSync(`npm list -g --depth=0 --json terrain-ai 2>/dev/null || echo {}`, {
+        encoding: "utf-8", shell: true,
+      });
+      const parsed = JSON.parse(globalVer || "{}");
+      globalVer = parsed?.dependencies?.["terrain-ai"]?.version || null;
+    } catch { globalVer = null; }
+
+    const needsUpdate = !globalVer || (currentVer && globalVer !== currentVer);
+    if (needsUpdate && commandExists("npm")) {
+      const spinFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+      let spinIdx = 0;
+      const spinPrefix = `  ${T.SIDE}  `;
+      process.stderr.write(`${spinPrefix}${T.WORK} Updating terrain CLI...\n`);
+      // Prefer installing from the directory containing this script (works even
+      // before npm publish — npx caches the package locally first).
+      // Fall back to registry when self-dir can't be detected.
+      const selfDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+      const installTarget = existsSync(join(selfDir, "package.json"))
+        ? selfDir
+        : (currentVer ? `terrain-ai@${currentVer}` : "terrain-ai@latest");
+
+      let updateOk = false;
+      await new Promise((resolve) => {
+        const child = spawn("npm", ["install", "-g", installTarget], {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: IS_WIN,
+        });
+        const iv = setInterval(() => {
+          process.stderr.write(`\r${spinPrefix}${spinFrames[spinIdx++ % spinFrames.length]} Updating terrain CLI...`);
+        }, 120);
+        child.on("close", (code) => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); updateOk = code === 0; resolve(); });
+        child.on("error", () => { clearInterval(iv); process.stderr.write("\r\x1b[2K"); resolve(); });
+      });
+
+      if (updateOk) {
+        log(`  ${T.BRANCH} ${T.OK} terrain CLI updated to ${currentVer || "latest"}`);
+      } else {
+        log(`  ${T.BRANCH} ${T.WARN} CLI auto-update failed (sudo may be required)`);
+        log(`  ${T.SIDE}       Run manually: sudo npm install -g terrain-ai@${currentVer || "latest"}`);
+      }
+    }
+  }
+
+  // 2c. Windows: ensure Python Scripts dir is on user PATH so `terrain` works
   if (IS_WIN && PYTHON_CMD) {
     try {
       const scriptsDir = execSync(
