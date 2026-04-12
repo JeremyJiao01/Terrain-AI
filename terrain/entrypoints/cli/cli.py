@@ -1792,7 +1792,7 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
         run_wiki_generation,
         save_meta,
     )
-    from terrain.examples.generate_wiki import MAX_PAGES_COMPREHENSIVE
+    from terrain.examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
 
     ws = _get_workspace_root()
     active_file = ws / "active.txt"
@@ -1816,6 +1816,7 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
     run_all = step is None
     skip_llm = getattr(args, "no_llm", False)
     backend = args.backend
+    wiki_mode = getattr(args, "mode", "comprehensive")
 
     include_wiki = getattr(args, "wiki", False) or step == "wiki"
     steps_to_run = (
@@ -1906,13 +1907,14 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
                 embedder = create_embedder()
             if func_map is None:
                 func_map = {}
+            is_comprehensive = wiki_mode == "comprehensive"
             _, page_count = run_wiki_generation(
                 builder=builder,
                 repo_path=repo_path,
                 output_dir=wiki_dir,
-                max_pages=MAX_PAGES_COMPREHENSIVE,
+                max_pages=MAX_PAGES_COMPREHENSIVE if is_comprehensive else MAX_PAGES_CONCISE,
                 rebuild=True,
-                comprehensive=True,
+                comprehensive=is_comprehensive,
                 vector_store=vector_store,
                 embedder=embedder,
                 func_map=func_map,
@@ -2474,12 +2476,24 @@ Windows:
         "--step",
         choices=["graph", "api", "embed", "wiki"],
         default=None,
-        help="Specific step to rebuild (default: all steps)",
+        help=(
+            "Specific step to rebuild (default: all steps). "
+            "graph: rebuild code graph and API docs; "
+            "api: regenerate API docs only (no graph rebuild); "
+            "embed: rebuild vector embeddings; "
+            "wiki: regenerate wiki pages"
+        ),
     )
     rebuild_parser.add_argument(
         "--wiki",
         action="store_true",
         help="Include wiki generation (disabled by default)",
+    )
+    rebuild_parser.add_argument(
+        "--mode",
+        choices=["comprehensive", "concise"],
+        default="comprehensive",
+        help="Wiki generation mode (default: comprehensive)",
     )
     rebuild_parser.add_argument(
         "--backend",
