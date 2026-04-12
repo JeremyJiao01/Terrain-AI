@@ -620,7 +620,7 @@ try {
 
       if (pip) {
         try {
-          const args = [...pip.slice(1), "install", "--upgrade", "--prefer-binary", "--no-cache-dir", "terrain-ai[treesitter-full]"];
+          const args = [...pip.slice(1), "install", "--upgrade", "--prefer-binary", "--no-cache-dir", "--force-reinstall", "terrain-ai[treesitter-full]"];
           execFileSync(pip[0], args, { stdio: "pipe", timeout: 300000 });
           info.py = { from: localPy, to: latestPy };
           log("Python updated to " + latestPy);
@@ -1186,7 +1186,7 @@ async function runSetup() {
     process.stderr.write(`${spinPrefix}${T.WORK} Installing ${installDesc}...\n`);
     await new Promise((resolve) => {
       const [pipExe, ...pipExtraArgs] = pip;
-      const child = spawn(pipExe, [...pipExtraArgs, "install", "--prefer-binary", "--no-cache-dir", "--upgrade", ...installTargets], {
+      const child = spawn(pipExe, [...pipExtraArgs, "install", "--prefer-binary", "--no-cache-dir", "--force-reinstall", "--upgrade", ...installTargets], {
         stdio: ["ignore", "pipe", "pipe"],
         shell: IS_WIN,
       });
@@ -1205,6 +1205,25 @@ async function runSetup() {
     if (selectedLangPkgs.length > 0) {
       log(`  ${T.SIDE}       Language extras: ${selectedLangPkgs.join(", ")}`);
     }
+    // Verify runtime version matches installed metadata version
+    try {
+      const runtimeVer = execFileSync(PYTHON_CMD, ["-c",
+        `from terrain import __version__; print(__version__)`
+      ], { stdio: "pipe" }).toString().trim();
+      if (ver && runtimeVer !== ver) {
+        log(`  ${T.SIDE} ${T.WARN} Version mismatch: runtime=${runtimeVer}, metadata=${ver}`);
+        log(`  ${T.SIDE}       Fixing: removing stale package files...`);
+        try {
+          execSync(
+            [...(pip || findPip()), "install", "--force-reinstall", "--no-cache-dir", PYTHON_PACKAGE].map(s => `"${s}"`).join(" "),
+            { stdio: "pipe", shell: true, timeout: 120_000 }
+          );
+          log(`  ${T.SIDE}       ${T.OK} Fixed — version now: ${getPackageVersion() || ver}`);
+        } catch {
+          log(`  ${T.SIDE}       ${T.FAIL} Auto-fix failed. Try: pip install --force-reinstall ${PYTHON_PACKAGE}`);
+        }
+      }
+    } catch {}
   } else {
     log(`  ${T.BRANCH} ${T.FAIL} Package not installed`);
     log(`  ${T.LAST}   Run manually: pip install ${PYTHON_PACKAGE}`);
@@ -2001,11 +2020,25 @@ async function runUpdate() {
       try {
         const target = `${PYTHON_PACKAGE}[treesitter-full]`;
         execSync(
-          [...pip, "install", "--upgrade", "--prefer-binary", "--no-cache-dir", target].map(s => `"${s}"`).join(" "),
+          [...pip, "install", "--upgrade", "--prefer-binary", "--no-cache-dir", "--force-reinstall", target].map(s => `"${s}"`).join(" "),
           { stdio: "inherit", shell: true, timeout: 300_000 }
         );
         const newVer = getPackageVersion();
         log(`  ${T.PIPE} ${T.OK} Python package updated to ${newVer || latestPy}`);
+        // Verify runtime version matches
+        try {
+          const runtimeVer = execFileSync(PYTHON_CMD, ["-c",
+            `from terrain import __version__; print(__version__)`
+          ], { stdio: "pipe" }).toString().trim();
+          if (newVer && runtimeVer !== newVer) {
+            log(`  ${T.PIPE} ${T.WARN} Runtime version mismatch (${runtimeVer} vs ${newVer}), reinstalling...`);
+            execSync(
+              [...pip, "install", "--force-reinstall", "--no-cache-dir", target].map(s => `"${s}"`).join(" "),
+              { stdio: "pipe", shell: true, timeout: 300_000 }
+            );
+            log(`  ${T.PIPE} ${T.OK} Fixed`);
+          }
+        } catch {}
       } catch {
         log(`  ${T.PIPE} ${T.FAIL} Python update failed. Try manually:`);
         log(`  ${T.PIPE}   ${pip.join(" ")} install --upgrade terrain-ai`);
