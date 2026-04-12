@@ -625,6 +625,14 @@ class MCPToolsRegistry:
                                 "Defaults to the most-recent merge commit."
                             ),
                         },
+                        "branch": {
+                            "type": "string",
+                            "description": (
+                                "Branch name to search for merge commits "
+                                "(e.g. 'main', 'origin/main'). "
+                                "Defaults to HEAD (current branch)."
+                            ),
+                        },
                     },
                     "required": [],
                 },
@@ -2502,6 +2510,7 @@ class MCPToolsRegistry:
         self,
         from_merge: str | None = None,
         to_merge: str | None = None,
+        branch: str | None = None,
     ) -> dict[str, Any]:
         """Return functions that changed between two merge commits."""
         self._require_active()
@@ -2513,7 +2522,7 @@ class MCPToolsRegistry:
         # Auto-discover merge commits when not supplied
         if from_merge is None or to_merge is None:
             merges = await asyncio.to_thread(
-                detector.get_merge_commits, repo_path, 2
+                detector.get_merge_commits, repo_path, 2, branch
             )
             if len(merges) < 2:
                 raise ToolError(
