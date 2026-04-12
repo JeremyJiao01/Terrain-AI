@@ -78,6 +78,8 @@ docs/*.md
 contributing/p0-reliability.md
 contributing/product-maintenance-guide.md
 contributing/roadmap.md
+AGENTS.md
+scripts/daily_planning.sh
 
 # Development-only directories (not needed in production)
 # code_graph_builder/examples/ — kept in repo (runtime dependency for wiki generation)

@@ -972,6 +972,9 @@ def cmd_config(args: argparse.Namespace) -> int:
             if new_key == _mask(cur_key):
                 new_key = cur_key
 
+            if not purl:
+                print(f"  {_T_SIDE}  {_c('2', 'Use an OpenAI-compatible base URL ending in /v1')}")
+                print(f"  {_T_SIDE}  {_c('2', 'e.g. https://your-api-host.com/v1')}")
             new_url = _prompt("Base URL", cur_url if purl else "")
             new_model = _prompt("Model", cur_model if pmodel else "")
 
@@ -1022,6 +1025,9 @@ def cmd_config(args: argparse.Namespace) -> int:
             if new_key == _mask(cur_key):
                 new_key = cur_key
 
+            if not eurl:
+                print(f"  {_T_SIDE}  {_c('2', 'Use an OpenAI-compatible base URL ending in /v1')}")
+                print(f"  {_T_SIDE}  {_c('2', 'e.g. https://your-api-host.com/v1')}")
             new_url = _prompt("Base URL", cur_url if eurl else "")
             new_model = _prompt("Model", cur_model if emodel else "")
 
