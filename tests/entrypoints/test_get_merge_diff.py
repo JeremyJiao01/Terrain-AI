@@ -28,9 +28,8 @@ from terrain.foundation.services.git_service import GitChangeDetector
 class TestGetMergeCommits:
     """Tests for GitChangeDetector.get_merge_commits."""
 
-    def test_returns_merge_shas_in_order(self, tmp_path):
-        """Returns the most-recent merge commits, newest first."""
-        # Bootstrap a real git repo with two merge commits
+    def _make_repo_with_branch_merges(self, tmp_path):
+        """Helper: create a repo with merges on main and a feature branch."""
         subprocess.run(["git", "init", "--initial-branch=main"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
@@ -40,7 +39,7 @@ class TestGetMergeCommits:
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True)
 
-        # Feature branch 1 → merge
+        # Feature branch 1 → merge into main
         subprocess.run(["git", "checkout", "-b", "feat1"], cwd=tmp_path, check=True, capture_output=True)
         (tmp_path / "feat1.txt").write_text("feat1")
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
@@ -48,13 +47,19 @@ class TestGetMergeCommits:
         subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "merge", "--no-ff", "feat1", "-m", "merge feat1"], cwd=tmp_path, check=True, capture_output=True)
 
-        # Feature branch 2 → merge
+        # Feature branch 2 → merge into main
         subprocess.run(["git", "checkout", "-b", "feat2"], cwd=tmp_path, check=True, capture_output=True)
         (tmp_path / "feat2.txt").write_text("feat2")
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-m", "feat2 work"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(["git", "merge", "--no-ff", "feat2", "-m", "merge feat2"], cwd=tmp_path, check=True, capture_output=True)
+
+        return tmp_path
+
+    def test_returns_merge_shas_in_order(self, tmp_path):
+        """Returns the most-recent merge commits, newest first."""
+        self._make_repo_with_branch_merges(tmp_path)
 
         detector = GitChangeDetector()
         merges = detector.get_merge_commits(tmp_path, limit=2)
@@ -83,6 +88,35 @@ class TestGetMergeCommits:
         detector = GitChangeDetector()
         merges = detector.get_merge_commits(tmp_path, limit=2)
         assert merges == []
+
+    def test_branch_param_searches_specified_branch(self, tmp_path):
+        """When branch is given, returns merges from that branch's history."""
+        self._make_repo_with_branch_merges(tmp_path)
+
+        # Create a new branch with NO merge commits (diverges before merges)
+        subprocess.run(["git", "checkout", "-b", "no-merges", "HEAD~2"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / "other.txt").write_text("other")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "no-merge work"], cwd=tmp_path, check=True, capture_output=True)
+
+        detector = GitChangeDetector()
+
+        # From no-merges branch (HEAD), no merges visible
+        merges_head = detector.get_merge_commits(tmp_path, limit=2)
+        assert merges_head == []
+
+        # But specifying branch=main should still find merges
+        merges_main = detector.get_merge_commits(tmp_path, limit=2, branch="main")
+        assert len(merges_main) == 2
+
+    def test_branch_param_none_defaults_to_head(self, tmp_path):
+        """When branch is None, behaves the same as before (uses HEAD)."""
+        self._make_repo_with_branch_merges(tmp_path)
+
+        detector = GitChangeDetector()
+        merges_default = detector.get_merge_commits(tmp_path, limit=2)
+        merges_none = detector.get_merge_commits(tmp_path, limit=2, branch=None)
+        assert merges_default == merges_none
 
 
 class TestGetChangedFilesBetween:
@@ -277,3 +311,28 @@ class TestHandleGetMergeDiff:
 
         assert result["changed_files"] == 0
         assert result["functions"] == []
+
+    def test_branch_param_passed_to_detector(self, tmp_path):
+        """Branch parameter is forwarded to get_merge_commits."""
+        from terrain.entrypoints.mcp.tools import MCPToolsRegistry
+
+        registry = self._make_registry(tmp_path)
+        repo_path = registry._active_repo_path
+
+        merge1 = "e" * 40
+        merge2 = "f" * 40
+
+        with (
+            patch("terrain.entrypoints.mcp.tools._GCD.get_merge_commits", return_value=[merge2, merge1]) as mock_gmc,
+            patch("terrain.entrypoints.mcp.tools._GCD.get_changed_files_between", return_value=[]),
+            patch.object(registry, "_temporary_ingestor") as mock_ctx,
+        ):
+            mock_ingestor = MagicMock()
+            mock_ingestor.query.return_value = []
+            mock_ctx.return_value.__enter__ = MagicMock(return_value=mock_ingestor)
+            mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+
+            asyncio.run(registry._handle_get_merge_diff(branch="origin/main"))
+
+        # Verify branch was passed through to get_merge_commits
+        mock_gmc.assert_called_once_with(repo_path, 2, "origin/main")

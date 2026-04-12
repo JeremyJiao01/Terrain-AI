@@ -80,15 +80,19 @@ class GitChangeDetector:
             logger.warning("git diff failed: {}", e)
             return None, current_head
 
-    def get_merge_commits(self, repo_path: Path, limit: int = 2) -> list[str]:
+    def get_merge_commits(self, repo_path: Path, limit: int = 2, branch: str | None = None) -> list[str]:
         """Return the last *limit* merge commit SHAs (most recent first).
 
+        If *branch* is given, look at that branch's history instead of HEAD.
         Returns an empty list if the repo has no merge commits or is not a
         git repository.
         """
         try:
+            cmd = ["git", "log", "--merges", f"-{limit}", "--format=%H"]
+            if branch:
+                cmd.append(branch)
             result = subprocess.run(
-                ["git", "log", "--merges", f"-{limit}", "--format=%H"],
+                cmd,
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
