@@ -678,7 +678,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  debug      {_c('2', 'OFF')}   — terrain status --debug on to enable")
 
     # ── Version ──
-    print(f"  version    terrain {__version__}")
+    print(f"  version    terrain-ai {__version__}")
     print()
 
     return 0
@@ -2149,7 +2149,7 @@ Windows:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {__version__}",
+        version=f"terrain-ai {__version__}",
     )
     parser.add_argument(
         "-v",
