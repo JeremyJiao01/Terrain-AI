@@ -6,6 +6,62 @@
 
 ---
 
+## [2.1.9] — 2026-04-13
+
+### Added
+- **`get_merge_diff` MCP tool** — query functions changed between merge commits; supports `branch` parameter for targeting specific branches
+- **Background auto-updater** — Claude Code-style silent updates: checks every 4h, downloads in a detached process, notifies on next startup; `DISABLE_AUTOUPDATER=1` to opt out
+- **`terrain update` command** — manually check & install updates for both CLI (npm) and Python package
+- **Subcommand-style CLI** — `terrain move/setup/server/update/help` replaces `--flag` style (backward compatible)
+- `rebuild -h` now shows step descriptions and supports `--mode` parameter
+
+### Fixed
+- Guard embed/api rebuild steps against missing `graph.db` — no longer crashes on partial workspaces
+- Refresh semantic service after incremental vector rebuild — new embeddings are immediately searchable
+- Setup wizard always installs the latest `terrain-ai` and activates it correctly
+- Use correct package name `terrain-ai` for CLI version lookup
+- Resolve L1 layer violations in `foundation/parsers` (dep_check clean)
+- Fix tree-sitter `query()` deprecation warnings and register pytest custom marks
+- GitHub Pages redirect: `docs/index.html` → `docs/site/`
+
+### Changed
+- Remove internal planning docs and build artifacts (`dist/`, `docs/cgb-course/`, `docs/superpowers/`) from tracking
+- Update `.gitignore` and add custom URL hint in setup wizard
+
+### Windows Compatibility
+- Auto-updater uses temp `.cjs`/`.py` files instead of inline `node -e`/`python -c` to avoid `cmd.exe` 8191-char limit and quote escaping issues
+- `windowsHide: true` prevents console window flash during background updates
+- Python commands use `execFileSync` with temp files instead of shell string concatenation
+
+---
+
+### 新增
+- **`get_merge_diff` MCP 工具** — 查询合并提交之间变更的函数；支持 `branch` 参数指定目标分支
+- **后台静默自动更新** — Claude Code 同款机制：每 4 小时检查一次，后台下载安装，下次启动时通知；`DISABLE_AUTOUPDATER=1` 可禁用
+- **`terrain update` 命令** — 手动检查并安装 CLI（npm）和 Python 包的更新
+- **子命令风格 CLI** — `terrain move/setup/server/update/help` 替代 `--flag` 风格（向后兼容）
+- `rebuild -h` 显示步骤描述并支持 `--mode` 参数
+
+### 修复
+- embed/api 重建步骤在缺少 `graph.db` 时不再崩溃
+- 增量向量重建后刷新语义服务，新 embedding 可立即搜索
+- setup 向导始终安装最新 `terrain-ai` 并正确激活
+- CLI 版本查询使用正确的包名 `terrain-ai`
+- 解决 `foundation/parsers` 中的 L1 层级违规（dep_check 通过）
+- 修复 tree-sitter `query()` 弃用警告并注册 pytest 自定义标记
+- GitHub Pages 重定向：`docs/index.html` → `docs/site/`
+
+### 变更
+- 从版本跟踪中移除内部设计文档和构建产物（`dist/`、`docs/cgb-course/`、`docs/superpowers/`）
+- 更新 `.gitignore`，setup 向导中添加自定义 URL 提示
+
+### Windows 兼容性
+- 自动更新使用临时 `.cjs`/`.py` 文件替代内联 `node -e`/`python -c`，避免 `cmd.exe` 8191 字符限制和引号转义问题
+- `windowsHide: true` 防止后台更新时弹出控制台窗口
+- Python 命令使用 `execFileSync` + 临时文件替代 shell 字符串拼接
+
+---
+
 ## [2.1.8] — 2026-04-11
 
 ### Added
