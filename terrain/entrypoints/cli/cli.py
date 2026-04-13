@@ -1848,6 +1848,9 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
 
         if run_all or step in ("api", "graph"):
             if builder is None:
+                if not db_path.exists():
+                    print(f"{_c('31', 'ERROR')} No graph found. Run first: terrain rebuild --step graph")
+                    return 1
                 from terrain.foundation.services.kuzu_service import KuzuIngestor
                 ingestor = KuzuIngestor(db_path)
                 ingestor.__enter__()
@@ -1881,6 +1884,9 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
 
         if run_all or step == "embed":
             if builder is None:
+                if not db_path.exists():
+                    print(f"{_c('31', 'ERROR')} No graph found. Run first: terrain rebuild --step graph")
+                    return 1
                 from terrain.foundation.services.kuzu_service import KuzuIngestor
                 ingestor = KuzuIngestor(db_path)
                 ingestor.__enter__()
