@@ -1,6 +1,6 @@
 {
   "name": "terrain-dev",
-  "version": "2.1.9",
+  "version": "2.1.10",
   "private": true,
   "description": "Local development wrapper for terrain",
   "bin": {
