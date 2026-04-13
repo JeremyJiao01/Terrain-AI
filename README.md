@@ -40,23 +40,10 @@ Precise. Complete. Instant.
 
 ---
 
-## Prerequisites
-
-Before installing Terrain, ensure you have the following:
-
-| Requirement | Minimum Version | Check Command |
-|---|---|---|
-| Python | 3.11+ | `python3 --version` |
-| pip | 20.0+ | `pip3 --version` |
-| Node.js | 18+ | `node --version` |
-| npm | 8+ | `npm --version` |
-| Git | 2.0+ | `git --version` |
-
----
 
 ## Full Installation
 
-### Step 1: Install the npm package
+### Install the npm package
 
 The npm package provides the CLI wrapper and MCP server launcher:
 
@@ -64,13 +51,7 @@ The npm package provides the CLI wrapper and MCP server launcher:
 npm install -g terrain-ai@latest
 ```
 
-Verify installation:
-
-```bash
-npx terrain-ai@latest --version
-```
-
-### Step 2: Install the Python package (PyPI)
+### Install the Python package (PyPI)
 
 The Python package provides the core indexing engine, graph database, and all language parsers.
 
@@ -79,84 +60,6 @@ The Python package provides the core indexing engine, graph database, and all la
 ```bash
 pip install terrain-ai
 ```
-
-**Full installation** (adds Rust, Go, Java, Scala, Lua grammars):
-
-```bash
-pip install "terrain-ai[treesitter-full]"
-```
-
-Verify installation:
-
-```bash
-terrain --version
-```
-
-### Step 3: Configure MCP server
-
-Register Terrain as a global MCP server for your AI coding assistant.
-
-**Option A: Automatic setup (recommended)**
-
-```bash
-npx terrain-ai@latest --setup
-```
-
-The setup wizard will:
-- Verify the Python package is installed (installs if missing)
-- Configure your LLM and embedding provider
-- Register Terrain as a global MCP server for Claude Code
-
-**Option B: Paste this into Claude Code**
-
-Copy the following text and send it to Claude Code, the agent will handle the rest:
-
-```
-Help me install Terrain (a code indexing MCP server). Please do the following: 1) Check that Python >= 3.11 and Node.js >= 18 are installed, if not tell me how to install them. 2) Run `npm install -g terrain-ai@latest` to install the CLI. 3) Run `pip install terrain-ai` to install the Python core. 4) Run `claude mcp add terrain -- npx -y terrain-ai@latest --server` to register the MCP server. 5) Verify with `terrain --version`.
-```
-
-### Step 4: Configure environment variables
-
-Copy the example environment file and fill in your API keys:
-
-```bash
-cp .env.example ~/.terrain/.env
-```
-
-Edit `~/.terrain/.env`:
-
-```bash
-# LLM Configuration (for API doc generation, description enhancement)
-# Priority: LLM_API_KEY > OPENAI_API_KEY > MOONSHOT_API_KEY (first match wins)
-LLM_API_KEY=sk-your-key-here
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o
-
-# Embedding (for semantic search - Alibaba Cloud DashScope / Qwen3)
-DASHSCOPE_API_KEY=sk-your-key-here
-DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1
-```
-
-Or run the interactive configuration wizard:
-
-```bash
-terrain config
-```
-
-### Step 5: Verify everything works
-
-```bash
-# Check version
-terrain --version
-
-# Check status (shows LLM, embedding, workspace info)
-terrain status
-
-# Start MCP server (test mode)
-terrain-mcp
-```
-
----
 
 ## Quick Start
 
