@@ -1,6 +1,6 @@
 {
   "name": "terrain-ai",
-  "version": "2.1.10",
+  "version": "2.1.11",
   "description": "Give your AI a complete map of any codebase — function signatures, call graphs, and semantic search",
   "license": "Apache-2.0",
   "bin": {

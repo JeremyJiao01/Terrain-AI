@@ -6,6 +6,26 @@
 
 ---
 
+## [2.1.11] — 2026-04-14
+
+### Added
+- **`find_symbol_in_docs` MCP tool** — find all functions that reference a global variable / constant / macro by searching the `## 全局变量引用` sections in L3 API docs; supports Python `global` declarations, UPPERCASE constants, and C/C++ lowercase globals (struct pointer bases, common naming prefixes, statement-level mutations)
+- **Global variable reference extraction** — `api_doc_generator` now scans each function's source code at index time and writes a `## 全局变量引用` section listing referenced globals (comments stripped to avoid false positives)
+
+### Fixed
+- **`get_merge_diff` now queries all symbol types** — previously only `Function` nodes were queried, causing `Method`, `Class`, `Interface`, `Enum`, `Type`, and `Union` symbols in changed files to be silently omitted; each label is now queried separately and includes a `node_type` field in the result
+
+---
+
+### 新增
+- **`find_symbol_in_docs` MCP 工具** — 在 L3 API 文档的 `## 全局变量引用` 章节中查找所有引用指定全局变量/常量/宏的函数；支持 Python `global` 声明、大写常量、C/C++ 小写全局变量（结构体指针基址、常见命名前缀、语句级修改）
+- **全局变量引用提取** — `api_doc_generator` 在索引阶段扫描每个函数的源代码，生成 `## 全局变量引用` 章节（扫描前剔除注释以避免误匹配）
+
+### 修复
+- **`get_merge_diff` 现在查询所有符号类型** — 之前仅查询 `Function` 节点，导致变更文件中的 `Method`、`Class`、`Interface`、`Enum`、`Type`、`Union` 符号被静默遗漏；现在分别查询每种标签并在结果中包含 `node_type` 字段
+
+---
+
 ## [2.1.9] — 2026-04-13
 
 ### Added
