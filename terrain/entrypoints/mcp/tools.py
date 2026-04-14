@@ -639,6 +639,44 @@ class MCPToolsRegistry:
             ),
             # rebuild_embeddings: handler preserved, use `terrain index` instead.
             # -----------------------------------------------------------------
+            # Symbol / global-variable lookup
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="find_symbol_in_docs",
+                description=(
+                    "Find all functions that reference a specific global variable, "
+                    "constant, or symbol. Searches the pre-built API docs for "
+                    "'## 全局变量引用' entries — i.e. UPPER_CASE identifiers and "
+                    "explicit `global` declarations extracted from each function's "
+                    "source code at index time.\n\n"
+                    "Use this when the user asks:\n"
+                    "- 'Where is CONFIG_FILE used?'\n"
+                    "- 'Which functions read MAX_RETRY?'\n"
+                    "- 'What touches the DB_URL constant?'\n\n"
+                    "Returns a list of matching functions with their module, file "
+                    "location, and the full '## 全局变量引用' section of each match "
+                    "so the user can see all globals alongside the target symbol. "
+                    "Use get_api_doc on any result for full source and call graph details."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": (
+                                "Name of the symbol to look up "
+                                "(e.g. 'CONFIG_FILE', 'MAX_RETRY', 'DB_URL')."
+                            ),
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return. Default: 30.",
+                        },
+                    },
+                    "required": ["symbol"],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Hidden tools — handlers preserved, not exposed to MCP clients.
             # Superseded by API-doc-based workflows above.
             #   query_code_graph, get_code_snippet, semantic_search,
@@ -677,6 +715,7 @@ class MCPToolsRegistry:
             "reload_config": self._handle_reload_config,
             "trace_call_chain": self._handle_trace_call_chain,
             "get_merge_diff": self._handle_get_merge_diff,
+            "find_symbol_in_docs": self._handle_find_symbol_in_docs,
         }
         return handlers.get(name)
 
@@ -908,7 +947,8 @@ class MCPToolsRegistry:
                 "- `list_api_docs` -- browse all modules and their functions\n"
                 "- `get_api_doc` -- read detailed docs for any function (signature, call tree, source)\n"
                 "- `find_callers` -- find every function that calls a given function\n"
-                "- `trace_call_chain` -- trace the full call chain from entry points to a target\n\n"
+                "- `trace_call_chain` -- trace the full call chain from entry points to a target\n"
+                "- `find_symbol_in_docs` -- find all functions that reference a global variable or constant\n\n"
                 "Tell the user what was indexed and ask what they would like to explore."
             )
             return result
@@ -2215,6 +2255,113 @@ class MCPToolsRegistry:
             "function": matched_qn,
             "caller_count": len(unique),
             "callers": unique,
+        }
+
+    # -------------------------------------------------------------------------
+    # find_symbol_in_docs — search pre-built API docs for global variable refs
+    # -------------------------------------------------------------------------
+
+    async def _handle_find_symbol_in_docs(
+        self,
+        symbol: str,
+        max_results: int = 30,
+    ) -> dict[str, Any]:
+        """Find all functions that reference *symbol* in their '全局变量引用' section.
+
+        At index time, ``_render_func_detail`` writes a ``## 全局变量引用`` section
+        listing UPPER_CASE identifiers and ``global`` declarations found in each
+        function's source code.  This handler scans those pre-built markdown files
+        for the target symbol and returns matching functions.
+        """
+        self._require_active()
+
+        api_docs_dir = self._active_artifact_dir / "api_docs" / "funcs"
+        if not api_docs_dir.exists():
+            raise ToolError(
+                "API docs not found. Re-run `terrain index <path>` to rebuild them "
+                "with global variable extraction enabled."
+            )
+
+        import re
+
+        # Pattern: inside a `## 全局变量引用` section, find "`SYMBOL`"
+        # We scan every .md file; the section may be absent for older docs.
+        sym_escaped = re.escape(symbol)
+        # Matches a list item exactly like "- `SYMBOL`" (with optional trailing whitespace)
+        line_pattern = re.compile(r"^- `" + sym_escaped + r"`\s*$", re.MULTILINE)
+
+        results: list[dict[str, Any]] = []
+        max_results = max(1, min(max_results, 200))
+
+        for doc_path in sorted(api_docs_dir.glob("*.md")):
+            if len(results) >= max_results:
+                break
+            try:
+                content = doc_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            if not line_pattern.search(content):
+                continue
+
+            # Parse key fields from the doc header
+            func_name = ""
+            location = ""
+            module_qn = ""
+            global_vars_section = ""
+
+            # Title line: "# FunctionName"
+            title_m = re.search(r"^# (.+)$", content, re.MULTILINE)
+            if title_m:
+                func_name = title_m.group(1).strip()
+
+            # Location: "- 位置: path:start-end"
+            loc_m = re.search(r"^- 位置: (.+)$", content, re.MULTILINE)
+            if loc_m:
+                location = loc_m.group(1).strip()
+
+            # Module: "- 模块: module.qn"
+            mod_m = re.search(r"^- 模块: ([^\n—]+)", content, re.MULTILINE)
+            if mod_m:
+                module_qn = mod_m.group(1).strip()
+
+            # Extract the full 全局变量引用 section for context
+            gv_m = re.search(
+                r"^## 全局变量引用\n(.*?)(?=^## |\Z)",
+                content,
+                re.MULTILINE | re.DOTALL,
+            )
+            if gv_m:
+                global_vars_section = gv_m.group(1).strip()
+
+            # Derive qualified name from the filename (reverse of _sanitise_filename)
+            # The filename IS the sanitised qualified name.
+            qualified_name = doc_path.stem
+
+            results.append({
+                "qualified_name": qualified_name,
+                "name": func_name,
+                "module": module_qn,
+                "location": location,
+                "global_vars": global_vars_section,
+            })
+
+        if not results:
+            return {
+                "symbol": symbol,
+                "match_count": 0,
+                "results": [],
+                "message": (
+                    f"No functions found referencing '{symbol}'. "
+                    "If the repository was indexed before this feature was added, "
+                    "re-run `terrain index <path>` to rebuild the API docs."
+                ),
+            }
+
+        return {
+            "symbol": symbol,
+            "match_count": len(results),
+            "results": results,
         }
 
     # -------------------------------------------------------------------------

@@ -265,6 +265,151 @@ def _infer_ownership(func: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Global variable extraction
+# ---------------------------------------------------------------------------
+
+# Common uppercase tokens that are language keywords, builtins, or common
+# abbreviations — not worth surfacing as "referenced globals".
+_GLOBALS_EXCLUDE: frozenset[str] = frozenset({
+    "None", "True", "False", "NULL", "EOF", "OK", "ERR", "MAX", "MIN",
+    "PI", "NaN", "INF", "INT", "STR", "BOOL", "LIST", "DICT", "SET",
+    "GET", "PUT", "POST", "HTTP", "HTTPS", "URL", "URI", "API", "IO",
+    "ID", "OS", "DB", "UI", "LF", "CR", "TAB", "UTF", "ASCII", "JSON",
+    "XML", "SQL", "CSV", "PDF", "PNG", "JPG", "GIF", "SVG",
+    # C/C++ common macros
+    "DEFINE", "IFDEF", "IFNDEF", "ENDIF", "INCLUDE", "PRAGMA",
+    "RETURN", "BREAK", "CONTINUE", "STATIC", "EXTERN", "CONST",
+    "VOID", "INT", "CHAR", "LONG", "FLOAT", "DOUBLE", "UINT",
+    "SIZE_T", "INT64", "INT32", "INT16", "INT8",
+})
+
+# C/C++ reserved keywords and type specifiers — excluded from lowercase global detection
+_C_KEYWORDS: frozenset[str] = frozenset({
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short",
+    "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+    "unsigned", "void", "volatile", "while",
+    # C++ extras
+    "bool", "catch", "class", "delete", "explicit", "false", "friend",
+    "namespace", "new", "operator", "private", "protected", "public",
+    "template", "this", "throw", "true", "try", "typename", "using",
+    "virtual",
+    # Common local variable names that are almost never globals
+    "i", "j", "k", "n", "p", "q", "r", "s", "t", "x", "y", "z",
+    "ret", "err", "res", "val", "tmp", "buf", "ptr", "len", "size",
+    "type", "name", "data", "idx", "pos", "end", "start", "count",
+    "result", "status", "offset", "index", "value", "flag", "mask",
+    "node", "list", "head", "next", "prev", "left", "right", "key",
+})
+
+
+def _extract_referenced_globals(
+    source: str,
+    params: list[str] | None = None,
+    file_ext: str = "",
+) -> list[str]:
+    """Extract likely global/module-level symbol references from a function's source.
+
+    Uses heuristics that work across Python, C/C++, JS/TS, Go, etc.:
+
+    1. **Explicit ``global`` declarations** (Python) — always surfaced.
+    2. **UPPER_CASE identifiers** — the near-universal convention for
+       module-level constants, macros, and enum values.
+    3. **C/C++ lowercase globals** — identifiers mutated at statement level
+       (``vtop++``, ``nocode_wanted = 0``, ``error_count += 1``) that are
+       not C keywords, type names, or common loop variables.  Only applied
+       for ``.c / .h / .cpp / .cc / .cxx / .hpp`` files.
+
+    Parameters that are themselves UPPER_CASE are excluded to reduce noise.
+
+    Returns a sorted list of unique symbol names (may contain false positives
+    for local variables, but precision is intentionally traded for recall since
+    the downstream ``find_symbol_in_docs`` tool re-ranks by relevance).
+    """
+    import re
+
+    symbols: set[str] = set()
+
+    # For C/C++ files strip comments first to avoid matching comment text.
+    # For other languages (Python, JS, …) use source as-is.
+    _C_EXTS = {".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".m", ".mm"}
+    _is_c = file_ext.lower() in _C_EXTS
+    if _is_c:
+        src = re.sub(r'/\*.*?\*/', ' ', source, flags=re.DOTALL)  # /* … */
+        src = re.sub(r'//[^\n]*', ' ', src)                        # // …
+    else:
+        src = source
+
+    # Heuristic 1: explicit Python `global` declarations (single line only).
+    # Skipped for C/C++ because "global" can appear in comments and C has no
+    # such declaration syntax.
+    if not _is_c:
+        for m in re.finditer(r'\bglobal\s+([^\n#]+)', src):
+            for name in re.split(r'[,\s]+', m.group(1).strip()):
+                name = name.strip()
+                if re.match(r'^[A-Za-z_]\w*$', name):
+                    symbols.add(name)
+
+    # Heuristic 2: UPPER_CASE identifiers (≥ 3 chars, at least one underscore
+    # OR all-caps word ≥ 4 chars — reduces false positives from 2-letter tokens)
+    for m in re.finditer(r'\b([A-Z][A-Z0-9_]{2,})\b', src):
+        name = m.group(1)
+        if name in _GLOBALS_EXCLUDE:
+            continue
+        # Accept: has underscore (FOO_BAR) OR is ≥ 4 chars all-caps (HTTP, INIT…)
+        if "_" in name or len(name) >= 4:
+            symbols.add(name)
+
+    # Heuristic 3 (C/C++ only): various patterns for global variable detection.
+    if _is_c:
+        # 3a: Lowercase identifier mutated at statement level.
+        #   vtop++;  nocode_wanted = 0;  error_count += 1;  cur_scope--;
+        _assign_re = re.compile(
+            r'^[ \t]{0,8}([a-z_][a-zA-Z0-9_]{2,})\s*'
+            r'(?:\+\+|--|[+\-*\/%&|^]=|=(?!=))',
+            re.MULTILINE,
+        )
+        for m in _assign_re.finditer(src):
+            name = m.group(1)
+            if name not in _C_KEYWORDS:
+                symbols.add(name)
+
+        # 3b: Global struct pointer access via `->`.
+        #   file->buf_ptr, vtop->type, tcc_state->do_debug
+        # Capture the base pointer (left of `->`) — these are almost always globals
+        # when not in the parameter list.  Member names (right of `->`) are excluded.
+        _arrow_re = re.compile(r'\b([a-z_][a-zA-Z0-9_]{1,})\s*->')
+        for m in _arrow_re.finditer(src):
+            name = m.group(1)
+            if name not in _C_KEYWORDS:
+                symbols.add(name)
+
+        # 3c: Common C global naming prefixes anywhere in the code.
+        #   nb_something, g_something, cur_xxx, last_xxx — almost always file-scope
+        _global_prefix_re = re.compile(
+            r'\b((?:nb_|g_|cur_|last_|prev_|next_|num_|is_|has_)[a-zA-Z][a-zA-Z0-9_]{1,})\b'
+        )
+        for m in _global_prefix_re.finditer(src):
+            name = m.group(1)
+            if name not in _C_KEYWORDS:
+                symbols.add(name)
+
+    # Remove symbols that are just the function's own parameters
+    if params:
+        param_names: set[str] = set()
+        for p in params:
+            if p:
+                # Extract the bare identifier from a typed param like "const int FOO"
+                bare = re.split(r'[\s*&,<>]', str(p).strip())[-1].strip()
+                if bare:
+                    param_names.add(bare)
+        symbols -= param_names
+
+    return sorted(symbols)
+
+
+# ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
 
@@ -488,12 +633,25 @@ def _render_func_detail(
                 lines.append(f"- {hint}")
             lines.append("")
 
-    # Source code
+    # Source code + global variable extraction
     if kind != "macro":  # Macros already show definition in sig
         source = _read_source_snippet(
             func.get("path"), func.get("start_line"), func.get("end_line"), repo_path
         )
         if source:
+            # Global variables referenced in this function
+            global_syms = _extract_referenced_globals(
+                source, func.get("parameters"), file_ext=Path(loc_path).suffix if loc_path else ""
+            )
+            if global_syms:
+                lines.append("## 全局变量引用")
+                lines.append("")
+                # One line per symbol so find_symbol_in_docs can grep for exact matches.
+                # Format: `SYMBOL_NAME` — one token per line, no prose.
+                for sym in global_syms:
+                    lines.append(f"- `{sym}`")
+                lines.append("")
+
             lines.append("## 实现")
             lines.append("")
             # Detect language from file extension
