@@ -229,3 +229,118 @@ class TestFindApiAggregation:
         safe_qn = qn.replace("/", "_").replace("\\", "_")
         doc_file = funcs_dir / f"{safe_qn}.md"
         assert doc_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _extract_referenced_globals — comment stripping
+# ---------------------------------------------------------------------------
+
+
+class TestExtractReferencedGlobalsCommentStripping:
+    """Verify that UPPERCASE symbols in comments are NOT included in results."""
+
+    def _extract(self, source: str, file_ext: str = ".py") -> list[str]:
+        from terrain.domains.upper.apidoc.api_doc_generator import (
+            _extract_referenced_globals,
+        )
+        return _extract_referenced_globals(source, params=None, file_ext=file_ext)
+
+    def test_python_hash_comment_not_included(self):
+        """Symbols only in # comments should not appear in Python results."""
+        src = (
+            "def connect(host):\n"
+            "    # Retry up to MAX_RETRIES times if connection fails\n"
+            "    for i in range(3):\n"
+            "        pass\n"
+        )
+        result = self._extract(src, ".py")
+        assert "MAX_RETRIES" not in result
+
+    def test_python_docstring_double_quote_not_included(self):
+        """Symbols only in triple-double-quote docstrings should not appear."""
+        src = (
+            'def fetch():\n'
+            '    """Fetches data.\n'
+            '\n'
+            '    Uses TIMEOUT_SECS as the default timeout.\n'
+            '    """\n'
+            '    return requests.get(url)\n'
+        )
+        result = self._extract(src, ".py")
+        assert "TIMEOUT_SECS" not in result
+
+    def test_python_docstring_single_quote_not_included(self):
+        """Symbols only in triple-single-quote docstrings should not appear."""
+        src = (
+            "def fetch():\n"
+            "    '''Uses BUFFER_SIZE internally.'''\n"
+            "    return data\n"
+        )
+        result = self._extract(src, ".py")
+        assert "BUFFER_SIZE" not in result
+
+    def test_python_real_usage_still_included(self):
+        """Symbols used in actual code (not comments) should still appear."""
+        src = (
+            "def connect(host):\n"
+            "    # Retry logic\n"
+            "    for i in range(MAX_RETRIES):\n"
+            "        pass\n"
+        )
+        result = self._extract(src, ".py")
+        assert "MAX_RETRIES" in result
+
+    def test_js_line_comment_not_included(self):
+        """Symbols only in // comments should not appear in JS results."""
+        src = (
+            "function connect(host) {\n"
+            "    // Retry up to MAX_RETRIES times\n"
+            "    for (let i = 0; i < 3; i++) {}\n"
+            "}\n"
+        )
+        result = self._extract(src, ".js")
+        assert "MAX_RETRIES" not in result
+
+    def test_js_block_comment_not_included(self):
+        """Symbols only in /* */ block comments should not appear in JS results."""
+        src = (
+            "function fetch() {\n"
+            "    /* Uses CACHE_SIZE for buffering */\n"
+            "    return data;\n"
+            "}\n"
+        )
+        result = self._extract(src, ".js")
+        assert "CACHE_SIZE" not in result
+
+    def test_ts_comment_not_included(self):
+        """Symbols only in comments should not appear in TS results."""
+        src = (
+            "function send(): void {\n"
+            "    // MAX_PAYLOAD_SIZE is the upper limit\n"
+            "    sendData();\n"
+            "}\n"
+        )
+        result = self._extract(src, ".ts")
+        assert "MAX_PAYLOAD_SIZE" not in result
+
+    def test_go_line_comment_not_included(self):
+        """Symbols only in // comments should not appear in Go results."""
+        src = (
+            "func connect(host string) {\n"
+            "    // Uses MAX_CONN_POOL for pooling\n"
+            "    for i := 0; i < 3; i++ {}\n"
+            "}\n"
+        )
+        result = self._extract(src, ".go")
+        assert "MAX_CONN_POOL" not in result
+
+    def test_go_block_comment_not_included(self):
+        """Symbols only in /* */ comments should not appear in Go results."""
+        src = (
+            "func fetch() {\n"
+            "    /* RETRY_LIMIT is set at startup */\n"
+            "    return\n"
+            "}\n"
+        )
+        result = self._extract(src, ".go")
+        assert "RETRY_LIMIT" not in result

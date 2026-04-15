@@ -331,13 +331,23 @@ def _extract_referenced_globals(
 
     symbols: set[str] = set()
 
-    # For C/C++ files strip comments first to avoid matching comment text.
-    # For other languages (Python, JS, …) use source as-is.
+    # Strip comments to avoid matching UPPERCASE symbols that only appear in
+    # comments or docstrings — they are not real code references.
     _C_EXTS = {".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".m", ".mm"}
-    _is_c = file_ext.lower() in _C_EXTS
-    if _is_c:
+    _PY_EXTS = {".py", ".pyi"}
+    _SLASH_COMMENT_EXTS = {".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".kt",
+                           ".swift", ".rs", ".cs", ".scala", ".rb"}
+    ext = file_ext.lower()
+    _is_c = ext in _C_EXTS
+    if _is_c or ext in _SLASH_COMMENT_EXTS:
         src = re.sub(r'/\*.*?\*/', ' ', source, flags=re.DOTALL)  # /* … */
         src = re.sub(r'//[^\n]*', ' ', src)                        # // …
+    elif ext in _PY_EXTS:
+        # Strip triple-quoted docstrings first (both """ and ''')
+        src = re.sub(r'"{3}.*?"{3}', ' ', source, flags=re.DOTALL)
+        src = re.sub(r"'{3}.*?'{3}", ' ', src, flags=re.DOTALL)
+        # Strip # line comments (not inside strings — good enough heuristic)
+        src = re.sub(r'#[^\n]*', ' ', src)
     else:
         src = source
 
