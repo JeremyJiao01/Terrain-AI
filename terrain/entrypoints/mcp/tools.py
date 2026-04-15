@@ -2270,8 +2270,9 @@ class MCPToolsRegistry:
 
         At index time, ``_render_func_detail`` writes a ``## 全局变量引用`` section
         listing UPPER_CASE identifiers and ``global`` declarations found in each
-        function's source code.  This handler scans those pre-built markdown files
-        for the target symbol and returns matching functions.
+        function's source code.  This handler first checks for a pre-built
+        ``symbol_index.json`` (O(1) lookup) and falls back to a full scan of
+        ``*.md`` files when the index is absent (older repos).
         """
         self._require_active()
 
@@ -2282,16 +2283,88 @@ class MCPToolsRegistry:
                 "with global variable extraction enabled."
             )
 
+        import json
         import re
 
-        # Pattern: inside a `## 全局变量引用` section, find "`SYMBOL`"
-        # We scan every .md file; the section may be absent for older docs.
+        max_results = max(1, min(max_results, 200))
+
+        index_path = self._active_artifact_dir / "api_docs" / "symbol_index.json"
+
+        if index_path.exists():
+            # ---- Fast path: O(1) lookup via pre-built index ----
+            index_data = json.loads(index_path.read_text(encoding="utf-8"))
+            meta = index_data.get("_meta", {})
+            matching_qns: list[str] = index_data.get(symbol, [])
+
+            results: list[dict[str, Any]] = []
+            for qn in matching_qns[:max_results]:
+                from terrain.domains.upper.apidoc.api_doc_generator import (
+                    _sanitise_filename,
+                )
+                doc_path = api_docs_dir / f"{_sanitise_filename(qn)}.md"
+                func_name = ""
+                location = ""
+                module_qn = ""
+                global_vars_section = ""
+                try:
+                    content = doc_path.read_text(encoding="utf-8", errors="replace")
+                    title_m = re.search(r"^# (.+)$", content, re.MULTILINE)
+                    if title_m:
+                        func_name = title_m.group(1).strip()
+                    loc_m = re.search(r"^- 位置: (.+)$", content, re.MULTILINE)
+                    if loc_m:
+                        location = loc_m.group(1).strip()
+                    mod_m = re.search(r"^- 模块: ([^\n—]+)", content, re.MULTILINE)
+                    if mod_m:
+                        module_qn = mod_m.group(1).strip()
+                    gv_m = re.search(
+                        r"^## 全局变量引用\n(.*?)(?=^## |\Z)",
+                        content,
+                        re.MULTILINE | re.DOTALL,
+                    )
+                    if gv_m:
+                        global_vars_section = gv_m.group(1).strip()
+                except OSError:
+                    pass
+                results.append({
+                    "qualified_name": qn,
+                    "name": func_name,
+                    "module": module_qn,
+                    "location": location,
+                    "global_vars": global_vars_section,
+                })
+
+            if not results:
+                return {
+                    "symbol": symbol,
+                    "match_count": 0,
+                    "results": [],
+                    "message": (
+                        f"No functions found referencing '{symbol}'. "
+                        "If the repository was indexed before this feature was added, "
+                        "re-run `terrain index <path>` to rebuild the API docs."
+                    ),
+                }
+
+            response: dict[str, Any] = {
+                "symbol": symbol,
+                "match_count": len(results),
+                "results": results,
+            }
+            if meta.get("funcs_without_globals", 0) > 0:
+                response["warning"] = (
+                    f"{meta['funcs_without_globals']} function(s) lack a "
+                    "'全局变量引用' section (indexed before this feature was added). "
+                    "Re-run `terrain index <path>` for complete coverage."
+                )
+            return response
+
+        # ---- Slow path: full scan (index absent — older repos) ----
         sym_escaped = re.escape(symbol)
         # Matches a list item exactly like "- `SYMBOL`" (with optional trailing whitespace)
         line_pattern = re.compile(r"^- `" + sym_escaped + r"`\s*$", re.MULTILINE)
 
-        results: list[dict[str, Any]] = []
-        max_results = max(1, min(max_results, 200))
+        results = []
 
         for doc_path in sorted(api_docs_dir.glob("*.md")):
             if len(results) >= max_results:
@@ -2362,6 +2435,10 @@ class MCPToolsRegistry:
             "symbol": symbol,
             "match_count": len(results),
             "results": results,
+            "hint": (
+                "symbol_index.json not found; re-run `terrain index <path>` "
+                "for faster lookups."
+            ),
         }
 
     # -------------------------------------------------------------------------

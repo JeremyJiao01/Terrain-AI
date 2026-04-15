@@ -344,3 +344,220 @@ class TestExtractReferencedGlobalsCommentStripping:
         )
         result = self._extract(src, ".go")
         assert "RETRY_LIMIT" not in result
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for build_symbol_index
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSymbolIndex:
+    """Tests for the reverse symbol index builder in api_doc_generator."""
+
+    def _write_func_doc(self, funcs_dir: Path, qn: str, symbols: list[str]) -> None:
+        """Write a minimal function .md file with a 全局变量引用 section."""
+        lines = [f"# {qn.split('.')[-1]}", "", f"- 模块: {'.'.join(qn.split('.')[:-1])}", ""]
+        if symbols:
+            lines += ["## 全局变量引用", ""]
+            for sym in symbols:
+                lines.append(f"- `{sym}`")
+            lines.append("")
+        lines += ["## 实现", "", "```c", "void stub() {}", "```", ""]
+        (funcs_dir / f"{qn}.md").write_text("\n".join(lines), encoding="utf-8")
+
+    def test_index_written(self, tmp_path: Path):
+        """build_symbol_index creates symbol_index.json."""
+        from terrain.domains.upper.apidoc.api_doc_generator import build_symbol_index
+
+        funcs_dir = tmp_path / "api_docs" / "funcs"
+        funcs_dir.mkdir(parents=True)
+        api_dir = tmp_path / "api_docs"
+
+        self._write_func_doc(funcs_dir, "mod.foo", ["MAX_SIZE", "GLOBAL_FLAG"])
+        self._write_func_doc(funcs_dir, "mod.bar", ["MAX_SIZE"])
+
+        build_symbol_index(funcs_dir, api_dir)
+
+        assert (api_dir / "symbol_index.json").exists()
+
+    def test_index_reverse_mapping(self, tmp_path: Path):
+        """symbol_index.json maps each symbol to all functions that reference it."""
+        import json
+
+        from terrain.domains.upper.apidoc.api_doc_generator import build_symbol_index
+
+        funcs_dir = tmp_path / "api_docs" / "funcs"
+        funcs_dir.mkdir(parents=True)
+        api_dir = tmp_path / "api_docs"
+
+        self._write_func_doc(funcs_dir, "mod.foo", ["MAX_SIZE", "GLOBAL_FLAG"])
+        self._write_func_doc(funcs_dir, "mod.bar", ["MAX_SIZE"])
+        self._write_func_doc(funcs_dir, "mod.baz", [])  # no globals
+
+        build_symbol_index(funcs_dir, api_dir)
+        data = json.loads((api_dir / "symbol_index.json").read_text())
+
+        assert sorted(data["MAX_SIZE"]) == ["mod.bar", "mod.foo"]
+        assert data["GLOBAL_FLAG"] == ["mod.foo"]
+        assert "mod.baz" not in str(data.get("GLOBAL_FLAG", ""))
+
+    def test_index_meta(self, tmp_path: Path):
+        """_meta counts total, with-globals, and without-globals functions."""
+        import json
+
+        from terrain.domains.upper.apidoc.api_doc_generator import build_symbol_index
+
+        funcs_dir = tmp_path / "api_docs" / "funcs"
+        funcs_dir.mkdir(parents=True)
+        api_dir = tmp_path / "api_docs"
+
+        self._write_func_doc(funcs_dir, "mod.foo", ["FLAG_A"])
+        self._write_func_doc(funcs_dir, "mod.bar", [])  # no globals
+
+        build_symbol_index(funcs_dir, api_dir)
+        meta = json.loads((api_dir / "symbol_index.json").read_text())["_meta"]
+
+        assert meta["total_funcs"] == 2
+        assert meta["funcs_with_globals"] == 1
+        assert meta["funcs_without_globals"] == 1
+
+    def test_generate_api_docs_creates_symbol_index(self, tmp_path: Path):
+        """generate_api_docs writes symbol_index.json alongside other docs."""
+        from terrain.domains.upper.apidoc.api_doc_generator import generate_api_docs
+
+        func_rows = [
+            {
+                "result": [
+                    "mymod", "src/mymod.c", "mymod.do_stuff", "do_stuff",
+                    "int do_stuff(int x)", "int", "public", "x: int",
+                    "Does stuff.", 1, 10, "src/mymod.c",
+                ]
+            }
+        ]
+
+        generate_api_docs(
+            func_rows=func_rows,
+            type_rows=[],
+            call_rows=[],
+            output_dir=tmp_path,
+        )
+
+        assert (tmp_path / "api_docs" / "symbol_index.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _handle_find_symbol_in_docs with symbol index
+# ---------------------------------------------------------------------------
+
+
+class TestFindSymbolIndexLookup:
+    """Tests for the fast-path (index-based) lookup in _handle_find_symbol_in_docs."""
+
+    def _make_api_docs(self, tmp_path: Path, symbol_map: dict[str, list[str]]) -> Path:
+        """Create a minimal api_docs directory with a symbol_index.json."""
+        import json
+
+        api_dir = tmp_path / "api_docs"
+        funcs_dir = api_dir / "funcs"
+        funcs_dir.mkdir(parents=True)
+
+        # Write index
+        index: dict = {}
+        for sym, qns in symbol_map.items():
+            index[sym] = qns
+        total = sum(len(v) for v in symbol_map.values())
+        index["_meta"] = {
+            "total_funcs": total,
+            "funcs_with_globals": total,
+            "funcs_without_globals": 0,
+        }
+        (api_dir / "symbol_index.json").write_text(
+            json.dumps(index, ensure_ascii=False), encoding="utf-8"
+        )
+
+        # Write minimal .md for each referenced qn
+        all_qns: set[str] = set()
+        for qns in symbol_map.values():
+            all_qns.update(qns)
+        for qn in all_qns:
+            name = qn.split(".")[-1]
+            mod = ".".join(qn.split(".")[:-1])
+            content = (
+                f"# {name}\n\n"
+                f"- 位置: src/{mod}.c:1-10\n"
+                f"- 模块: {mod}\n\n"
+                "## 全局变量引用\n\n"
+                f"- `{list(symbol_map.keys())[0]}`\n\n"
+                "## 实现\n\n```c\nvoid stub(){}\n```\n"
+            )
+            (funcs_dir / f"{qn}.md").write_text(content, encoding="utf-8")
+
+        return tmp_path
+
+    async def _call_handler(
+        self, artifact_dir: Path, symbol: str, max_results: int = 30
+    ) -> dict:
+        """Directly invoke _handle_find_symbol_in_docs on a mock server."""
+        from unittest.mock import MagicMock
+
+        from terrain.entrypoints.mcp.tools import MCPToolsRegistry
+
+        server = object.__new__(MCPToolsRegistry)
+        server._active_artifact_dir = artifact_dir  # type: ignore[attr-defined]
+        server._require_active = MagicMock()  # type: ignore[attr-defined]
+
+        return await server._handle_find_symbol_in_docs(symbol, max_results)
+
+    def test_uses_index_when_present(self, tmp_path: Path):
+        """When symbol_index.json exists, the handler returns matches via O(1) lookup."""
+        import asyncio
+
+        artifact_dir = self._make_api_docs(tmp_path, {"MY_GLOBAL": ["mod.func_a", "mod.func_b"]})
+        result = asyncio.get_event_loop().run_until_complete(
+            self._call_handler(artifact_dir, "MY_GLOBAL")
+        )
+
+        assert result["match_count"] == 2
+        qns = {r["qualified_name"] for r in result["results"]}
+        assert qns == {"mod.func_a", "mod.func_b"}
+
+    def test_no_match_returns_message(self, tmp_path: Path):
+        """A symbol not in the index returns match_count=0 with a message."""
+        import asyncio
+
+        artifact_dir = self._make_api_docs(tmp_path, {"OTHER_SYM": ["mod.func_a"]})
+        result = asyncio.get_event_loop().run_until_complete(
+            self._call_handler(artifact_dir, "MISSING_SYM")
+        )
+
+        assert result["match_count"] == 0
+        assert "message" in result
+
+    def test_warning_when_funcs_without_globals(self, tmp_path: Path):
+        """A 'warning' key appears when _meta.funcs_without_globals > 0."""
+        import asyncio
+        import json
+
+        artifact_dir = self._make_api_docs(tmp_path, {"FLAG": ["mod.func_a"]})
+        # Patch _meta to indicate some funcs lack globals
+        index_path = artifact_dir / "api_docs" / "symbol_index.json"
+        data = json.loads(index_path.read_text())
+        data["_meta"]["funcs_without_globals"] = 5
+        index_path.write_text(json.dumps(data), encoding="utf-8")
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self._call_handler(artifact_dir, "FLAG")
+        )
+
+        assert "warning" in result
+
+    def test_no_warning_when_all_funcs_indexed(self, tmp_path: Path):
+        """No 'warning' key when funcs_without_globals == 0."""
+        import asyncio
+
+        artifact_dir = self._make_api_docs(tmp_path, {"FLAG": ["mod.func_a"]})
+        result = asyncio.get_event_loop().run_until_complete(
+            self._call_handler(artifact_dir, "FLAG")
+        )
+
+        assert "warning" not in result

@@ -896,6 +896,78 @@ def _render_index(
 
 
 # ---------------------------------------------------------------------------
+# Symbol index builder
+# ---------------------------------------------------------------------------
+
+
+def build_symbol_index(funcs_dir: Path, api_dir: Path) -> dict[str, Any]:
+    """Build a reverse symbol index from pre-rendered function docs.
+
+    Reads all *.md files in *funcs_dir*, extracts the ``## 全局变量引用``
+    section from each, and writes ``api_dir/symbol_index.json``:
+
+    .. code-block:: json
+
+        {
+            "SYMBOL_A": ["mod.func1", "mod.func2"],
+            "_meta": {
+                "total_funcs": 3,
+                "funcs_with_globals": 2,
+                "funcs_without_globals": 1
+            }
+        }
+
+    Returns the ``_meta`` dict.
+    """
+    import json
+    import re as _re
+
+    gv_section_re = _re.compile(
+        r"^## 全局变量引用\n(.*?)(?=^## |\Z)",
+        _re.MULTILINE | _re.DOTALL,
+    )
+    sym_re = _re.compile(r"^- `([^`]+)`\s*$", _re.MULTILINE)
+
+    index: dict[str, list[str]] = {}
+    total_funcs = 0
+    funcs_with_globals = 0
+
+    for doc_path in sorted(funcs_dir.glob("*.md")):
+        total_funcs += 1
+        qn = doc_path.stem
+        try:
+            content = doc_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        gv_m = gv_section_re.search(content)
+        if not gv_m:
+            continue
+
+        syms = sym_re.findall(gv_m.group(1))
+        if not syms:
+            continue
+
+        funcs_with_globals += 1
+        for sym in syms:
+            index.setdefault(sym, []).append(qn)
+
+    meta: dict[str, Any] = {
+        "total_funcs": total_funcs,
+        "funcs_with_globals": funcs_with_globals,
+        "funcs_without_globals": total_funcs - funcs_with_globals,
+    }
+    payload: dict[str, Any] = dict(index)
+    payload["_meta"] = meta
+
+    (api_dir / "symbol_index.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return meta
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -1073,6 +1145,12 @@ def generate_api_docs(
                 logger.warning(f"L3 doc generation error: {exc}")
 
     total_funcs = len(_l3_tasks)
+
+    # ---- Build reverse symbol index from L3 docs ----
+    try:
+        build_symbol_index(funcs_dir, api_dir)
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Symbol index build failed: {exc}")
 
     # ---- Generate L2: per-module pages (parallel) ----
     def _write_l2(module_qn: str) -> dict[str, Any]:
