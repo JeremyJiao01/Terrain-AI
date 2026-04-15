@@ -6,26 +6,30 @@
 
 ---
 
-## [2.1.11] — 2026-04-14
+## [2.1.12] — 2026-04-15
 
 ### Added
+- **Reverse symbol index** (`symbol_index.json`) — `build_symbol_index()` builds an O(1) lookup map from global symbols to referencing functions at index time; `find_symbol_in_docs` now uses the index first and falls back to full `.md` scan only for older repos without the index
 - **`/research` skill command** — deep codebase investigation with explicit budgets (≤40 tool calls, ≤10 source files, ≤3 call traces) and per-phase convergence criteria; 6-phase workflow: scope → broad search → deep dive → cross-analysis → validation → structured report
 - **Knowledge persistence for `/research` and `/ask`** — both skills now save findings to `{artifact_dir}/kb/`; research reports tagged `[research]` in `index.md`; `/ask` can hit research reports as cache; `/research` checks for prior reports before starting
 - **`find_symbol_in_docs` MCP tool** — find all functions that reference a global variable / constant / macro by searching the `## 全局变量引用` sections in L3 API docs; supports Python `global` declarations, UPPERCASE constants, and C/C++ lowercase globals (struct pointer bases, common naming prefixes, statement-level mutations)
 - **Global variable reference extraction** — `api_doc_generator` now scans each function's source code at index time and writes a `## 全局变量引用` section listing referenced globals (comments stripped to avoid false positives)
 
 ### Fixed
+- **Strip comments before UPPERCASE heuristic in non-C files** — Python `#` comments, triple-quoted docstrings, and `//` / `/* */` in JS/TS/Go were not stripped before the UPPERCASE identifier scan, causing symbols appearing only in comments to be falsely reported as global variable references
 - **`get_merge_diff` now queries all symbol types** — previously only `Function` nodes were queried, causing `Method`, `Class`, `Interface`, `Enum`, `Type`, and `Union` symbols in changed files to be silently omitted; each label is now queried separately and includes a `node_type` field in the result
 
 ---
 
 ### 新增
+- **反向符号索引**（`symbol_index.json`）— `build_symbol_index()` 在索引阶段构建全局符号到引用函数的 O(1) 查找映射；`find_symbol_in_docs` 优先使用索引，仅在旧仓库无索引时回退到全量 `.md` 扫描
 - **`/research` skill 命令** — 深度代码调研，带明确预算（≤40 次工具调用、≤10 个源码文件、≤3 次调用链追溯）和逐阶段收敛条件；6 阶段流程：范围界定 → 广度搜索 → 深度调研 → 交叉分析 → 验证 → 结构化报告
 - **`/research` 和 `/ask` 知识持久化** — 两个 skill 的成果均保存到 `{artifact_dir}/kb/`；研究报告在 `index.md` 中以 `[research]` 标记；`/ask` 可命中研究报告作为缓存；`/research` 启动前检查已有报告
 - **`find_symbol_in_docs` MCP 工具** — 在 L3 API 文档的 `## 全局变量引用` 章节中查找所有引用指定全局变量/常量/宏的函数；支持 Python `global` 声明、大写常量、C/C++ 小写全局变量（结构体指针基址、常见命名前缀、语句级修改）
 - **全局变量引用提取** — `api_doc_generator` 在索引阶段扫描每个函数的源代码，生成 `## 全局变量引用` 章节（扫描前剔除注释以避免误匹配）
 
 ### 修复
+- **非 C 文件在 UPPERCASE 启发式扫描前未剔除注释** — Python `#` 注释、三引号文档字符串、JS/TS/Go 的 `//` 和 `/* */` 注释在大写标识符扫描前未被剔除，导致仅出现在注释中的符号被误报为全局变量引用
 - **`get_merge_diff` 现在查询所有符号类型** — 之前仅查询 `Function` 节点，导致变更文件中的 `Method`、`Class`、`Interface`、`Enum`、`Type`、`Union` 符号被静默遗漏；现在分别查询每种标签并在结果中包含 `node_type` 字段
 
 ---
