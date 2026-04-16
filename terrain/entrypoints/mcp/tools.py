@@ -2292,7 +2292,13 @@ class MCPToolsRegistry:
 
         if index_path.exists():
             # ---- Fast path: O(1) lookup via pre-built index ----
-            index_data = json.loads(index_path.read_text(encoding="utf-8"))
+            try:
+                index_data = json.loads(index_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                # Index is corrupt or unreadable — fall through to slow scan
+                index_data = None
+
+        if index_path.exists() and index_data is not None:
             meta = index_data.get("_meta", {})
             matching_qns: list[str] = index_data.get(symbol, [])
 

@@ -561,3 +561,35 @@ class TestFindSymbolIndexLookup:
         )
 
         assert "warning" not in result
+
+    def test_find_symbol_falls_back_on_corrupt_index(self, tmp_path: Path):
+        """When symbol_index.json is corrupted (truncated JSON), falls back to slow scan."""
+        import asyncio
+
+        # Set up api_docs with a valid func doc that references MY_GLOBAL
+        api_dir = tmp_path / "api_docs"
+        funcs_dir = api_dir / "funcs"
+        funcs_dir.mkdir(parents=True)
+
+        # Write a valid func doc containing MY_GLOBAL in 全局变量引用 section
+        content = (
+            "# func_a\n\n"
+            "- 位置: src/mod.c:1-10\n"
+            "- 模块: mod\n\n"
+            "## 全局变量引用\n\n"
+            "- `MY_GLOBAL`\n\n"
+            "## 实现\n\n```c\nvoid stub(){}\n```\n"
+        )
+        (funcs_dir / "mod.func_a.md").write_text(content, encoding="utf-8")
+
+        # Write a corrupted (truncated) symbol_index.json
+        (api_dir / "symbol_index.json").write_bytes(b'{"MY_GLOBAL": ["mod.func_a"')
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self._call_handler(tmp_path, "MY_GLOBAL")
+        )
+
+        # Should not crash; slow path should find the match
+        assert result["match_count"] >= 1
+        qns = {r["qualified_name"] for r in result["results"]}
+        assert "mod.func_a" in qns
