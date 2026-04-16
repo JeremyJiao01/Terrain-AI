@@ -960,10 +960,28 @@ def build_symbol_index(funcs_dir: Path, api_dir: Path) -> dict[str, Any]:
     payload: dict[str, Any] = dict(index)
     payload["_meta"] = meta
 
-    (api_dir / "symbol_index.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    import os
+    import tempfile
+
+    target = api_dir / "symbol_index.json"
+    json_text = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path_str = tempfile.mkstemp(dir=api_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json_text)
+            os.replace(tmp_path_str, target)
+        except Exception:
+            try:
+                os.unlink(tmp_path_str)
+            except OSError:
+                pass
+            raise
+    except OSError:
+        import logging
+        logging.getLogger(__name__).warning(
+            "build_symbol_index: could not write %s atomically, skipping", target
+        )
     return meta
 
 
