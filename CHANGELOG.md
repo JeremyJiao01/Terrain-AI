@@ -6,6 +6,36 @@
 
 ---
 
+## [2.1.13] — 2026-04-17
+
+### Added
+- **Unified persistent memory across `/ask`, `/research`, `/trace`** — all three skills now share `{artifact_dir}/kb/index.md` as a unified knowledge base index with typed markers (`[trace]`, `[research]`); each skill can discover and reuse findings from the others
+- **`/trace` knowledge persistence** — new stage 0.5 (kb flash check) skips redundant traces when a prior analysis exists; new stage 7 writes trace results to `kb/index.md` with `[trace]` marker so `/ask` and `/research` can hit them as cache
+- **`/research` local MD report generation** — research reports are now written to `{artifact_dir}/wiki/research/research-{topic}.md` (parallel to `/trace`'s `wiki/call-traces/`); kb index updated with relative path
+- **`/ask` cross-skill cache hits** — stage 0.5 now recognizes both `[research]` and `[trace]` entries, extracting relevant call trees or research findings as direct answers
+- **`/research` auto-detect CWD repo** — stage 0 now checks if the user's current working directory matches an indexed repository before prompting for selection
+- **`/ask` auto-detect CWD repo** — same CWD-based repo auto-detection as `/research`
+
+### Changed
+- `/research` stage 6 simplified to index-only update (report file already written in stage 5)
+- `/research` stage 0.3 flash check now also matches `[trace]` entries as research starting points
+
+---
+
+### 新增
+- **`/ask`、`/research`、`/trace` 统一持久化记忆** — 三个 skill 共享 `{artifact_dir}/kb/index.md` 作为统一知识库索引，使用类型标记（`[trace]`、`[research]`）；每个 skill 可发现并复用其他 skill 的分析结果
+- **`/trace` 知识持久化** — 新增阶段 0.5（知识库闪查），已有分析时跳过重复追溯；新增阶段 7 将追溯结果以 `[trace]` 标记写入 `kb/index.md`，`/ask` 和 `/research` 可命中缓存
+- **`/research` 本地 MD 报告生成** — 研究报告写入 `{artifact_dir}/wiki/research/research-{主题}.md`（与 `/trace` 的 `wiki/call-traces/` 平行）；知识库索引使用相对路径
+- **`/ask` 跨 skill 缓存命中** — 阶段 0.5 现在识别 `[research]` 和 `[trace]` 条目，可直接提取调用树或研究发现作为答案
+- **`/research` 自动检测 CWD 仓库** — 阶段 0 检查用户当前工作目录是否匹配已索引仓库
+- **`/ask` 自动检测 CWD 仓库** — 与 `/research` 相同的 CWD 自动检测机制
+
+### 变更
+- `/research` 阶段 6 简化为仅更新索引（报告文件已在阶段 5 写入）
+- `/research` 阶段 0.3 闪查现在也匹配 `[trace]` 条目作为研究起点
+
+---
+
 ## [2.1.12] — 2026-04-15
 
 ### Added
