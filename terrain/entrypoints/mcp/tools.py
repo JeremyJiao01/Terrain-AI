@@ -745,7 +745,7 @@ class MCPToolsRegistry:
         if not repo.exists():
             raise ToolError(f"Repository path does not exist: {repo}")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def sync_progress(msg: str, pct: float = 0.0) -> None:
             if _progress_cb is not None:
@@ -1771,7 +1771,7 @@ class MCPToolsRegistry:
                 "to build the graph and embeddings."
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def sync_progress(msg: str, pct: float = 0.0) -> None:
             if _progress_cb is not None:
@@ -1868,7 +1868,7 @@ class MCPToolsRegistry:
                 "to build the knowledge graph."
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def sync_progress(msg: str, pct: float = 0.0) -> None:
             if _progress_cb is not None:
@@ -1938,7 +1938,7 @@ class MCPToolsRegistry:
         if not repo.exists():
             raise ToolError(f"Repository path does not exist: {repo}")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def sync_progress(msg: str, pct: float = 0.0) -> None:
             if _progress_cb is not None:
@@ -2023,7 +2023,7 @@ class MCPToolsRegistry:
         artifact_dir = self._active_artifact_dir
         repo_path = self._active_repo_path
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def sync_progress(msg: str, pct: float = 0.0) -> None:
             if _progress_cb is not None:
@@ -2639,7 +2639,7 @@ class MCPToolsRegistry:
 
         with self._temporary_ingestor() as ingestor:
             query_service = GraphQueryService(ingestor, backend="kuzu")
-            result = await asyncio.get_event_loop().run_in_executor(
+            result = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: trace_call_chain(
                     query_service=query_service,
@@ -2656,7 +2656,7 @@ class MCPToolsRegistry:
 
             repo_name = self._active_repo_path.name if self._active_repo_path else "unknown"
             repo_root = self._active_repo_path or Path(".")
-            written = await asyncio.get_event_loop().run_in_executor(
+            written = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: write_wiki_pages(
                     result=result,
