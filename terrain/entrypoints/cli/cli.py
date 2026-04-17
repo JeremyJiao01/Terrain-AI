@@ -413,6 +413,63 @@ def _load_repos(ws: Path) -> list[dict]:
     return repos
 
 
+def _get_repo_status_entries(ws: Path) -> list[dict]:
+    """Return staleness status for every indexed repo under *ws*.
+
+    Each entry is a dict with:
+        name        — display name from meta.json
+        path        — absolute repo path
+        indexed_at  — ISO 8601 timestamp string
+        status      — "up-to-date" | "stale" | "unknown"
+        commits_since — int (>=0) or None when unknown
+    """
+    from terrain.foundation.services.git_service import GitChangeDetector
+
+    if not ws.exists():
+        return []
+
+    detector = GitChangeDetector()
+    entries: list[dict] = []
+
+    for child in sorted(ws.iterdir()):
+        if not child.is_dir():
+            continue
+        meta_file = child / "meta.json"
+        if not meta_file.exists():
+            continue
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        name = meta.get("repo_name", child.name)
+        repo_path_str = meta.get("repo_path", "")
+        indexed_at = meta.get("indexed_at", "")
+
+        repo_path = Path(repo_path_str) if repo_path_str else None
+        commits: int | None = None
+
+        if repo_path and indexed_at:
+            commits = detector.count_commits_since(repo_path, indexed_at)
+
+        if commits is None:
+            status = "unknown"
+        elif commits == 0:
+            status = "up-to-date"
+        else:
+            status = "stale"
+
+        entries.append({
+            "name": name,
+            "path": repo_path_str,
+            "indexed_at": indexed_at,
+            "status": status,
+            "commits_since": commits,
+        })
+
+    return entries
+
+
 def _interactive_select(repos: list[dict]) -> int | None:
     """Arrow-key interactive repo selector. Returns selected index or None on cancel.
 
@@ -573,9 +630,15 @@ def _detect_embed_info() -> dict[str, str]:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Show the currently active repository."""
+    """Show workspace status and staleness of indexed repositories."""
     ws = _get_workspace_root()
     env_path = ws / ".env"
+
+    # ── Handle --json: output machine-readable repo status ──
+    if getattr(args, "json", False):
+        entries = _get_repo_status_entries(ws)
+        print(json.dumps(entries, ensure_ascii=False, indent=2))
+        return 0
 
     # ── Handle --debug toggle ──
     toggle = getattr(args, "debug", None)
@@ -676,6 +739,37 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  debug      {_c('32', 'ON')}{size}   {debug_log}")
     else:
         print(f"  debug      {_c('2', 'OFF')}   — terrain status --debug on to enable")
+
+    # ── Repos staleness ──
+    repo_entries = _get_repo_status_entries(ws)
+    if repo_entries:
+        print()
+        _STATUS_ICONS = {
+            "up-to-date": _c("32", "✅") if _ANSI else "ok ",
+            "stale":      _c("33", "⚠️") if _ANSI else "!! ",
+            "unknown":    _c("2",  "❓") if _ANSI else "?  ",
+        }
+        _STATUS_LABELS = {
+            "up-to-date": _c("32", "up-to-date"),
+            "stale":      _c("33", "stale"),
+            "unknown":    _c("2",  "unknown"),
+        }
+        name_w = max(len(e["name"]) for e in repo_entries)
+        for entry in repo_entries:
+            icon = _STATUS_ICONS[entry["status"]]
+            label = _STATUS_LABELS[entry["status"]]
+            commits = entry["commits_since"]
+            indexed_at = entry["indexed_at"]
+            if commits is None:
+                detail = "no git repo detected"
+            elif commits == 0:
+                detail = f"0 commits since last index"
+            else:
+                detail = f"{commits} commit{'s' if commits != 1 else ''} since last index"
+            name_padded = entry["name"].ljust(name_w)
+            print(f"  {name_padded}  {icon}  {label:<12}  ({detail})")
+    elif ws.exists():
+        print(f"  repos      {_c('2', '(none indexed)')}")
 
     # ── Version ──
     print(f"  version    terrain-ai {__version__}")
@@ -2333,8 +2427,8 @@ Windows:
     # status command
     status_parser = subparsers.add_parser(
         "status",
-        help="Show the currently active repository",
-        description="Display info about the currently active CodeGraphWiki repository.",
+        help="Show workspace status and staleness of indexed repositories",
+        description="Display workspace info and show which indexed repositories have stale data.",
     )
     status_parser.add_argument(
         "--debug",
@@ -2344,6 +2438,12 @@ Windows:
         metavar="on|off",
         type=lambda v: v.lower() in ("1", "true", "yes", "on") if isinstance(v, str) else v,
         help="Toggle MCP debug logging: --debug on / --debug off (or just --debug to enable)",
+    )
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output machine-readable JSON with repo staleness info",
     )
     status_parser.set_defaults(func=cmd_status)
 

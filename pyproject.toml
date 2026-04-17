@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "terrain-ai"
-version = "2.1.13"
+version = "2.1.15"
 description = "Give your AI a complete map of any codebase — function signatures, call graphs, and semantic search"
 readme = "README.md"
 license = {text = "Apache-2.0"}

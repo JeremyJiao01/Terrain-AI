@@ -106,6 +106,37 @@ class GitChangeDetector:
             logger.debug("get_merge_commits failed: {}", e)
             return []
 
+    def count_commits_since(self, repo_path: Path, since_iso: str) -> int | None:
+        """Return the number of commits in *repo_path* made after *since_iso*.
+
+        Args:
+            repo_path: Path to the git repository.
+            since_iso: ISO 8601 timestamp (e.g. ``"2026-04-16T08:22:51+00:00"``).
+
+        Returns:
+            Number of commits (0 means up-to-date), or ``None`` if *repo_path*
+            is not a git repository or the command fails.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "log", f"--since={since_iso}", "--oneline"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                logger.debug("git log --since failed (exit {}): {}", result.returncode, result.stderr.strip())
+                return None
+            lines = [l for l in result.stdout.splitlines() if l.strip()]
+            return len(lines)
+        except subprocess.TimeoutExpired as e:
+            logger.debug("git log --since timed out: {}", e)
+            return None
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.debug("count_commits_since failed: {}", e)
+            return None
+
     def get_changed_files_between(
         self,
         repo_path: Path,
