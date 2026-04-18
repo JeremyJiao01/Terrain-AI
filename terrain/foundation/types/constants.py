@@ -433,6 +433,7 @@ QUERY_LANGUAGE = "language"
 QUERY_TYPEDEFS = "typedefs"
 QUERY_MACROS = "macros"
 QUERY_FUNC_PTR_ASSIGN = "func_ptr_assign"
+QUERY_PREDICATES = "predicates"
 
 # Query capture names
 CAPTURE_FUNCTION = "function"
@@ -446,6 +447,12 @@ CAPTURE_ASSIGN = "assign"
 CAPTURE_LHS = "lhs"
 CAPTURE_FIELD = "field"
 CAPTURE_RHS = "rhs"
+CAPTURE_PREDICATE_IF = "if"
+CAPTURE_PREDICATE_WHILE = "while"
+CAPTURE_PREDICATE_DO_WHILE = "do_while"
+CAPTURE_PREDICATE_FOR = "for"
+CAPTURE_PREDICATE_SWITCH_CASE = "switch_case"
+CAPTURE_PREDICATE_TERNARY = "ternary"
 
 # Locals query patterns for JS/TS
 JS_LOCALS_PATTERN = """

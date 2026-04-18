@@ -260,6 +260,70 @@ def _resolve_artifact_dir(ws_artifact_dir: Path) -> Path:
     return ws_artifact_dir
 
 
+# ---------------------------------------------------------------------------
+# extract_predicates helpers (slice 1/3 of JER-47).
+#
+# We re-parse C source on demand rather than carrying AST state through the
+# graph. Parser construction is expensive (loads tree-sitter shared libs), so
+# the parser + query pair for C is cached at module scope.
+# ---------------------------------------------------------------------------
+
+_EXTRACT_PREDICATES_C_EXTS: tuple[str, ...] = (".c", ".h")
+_EXTRACT_PREDICATES_CACHE: dict[str, Any] | None = None
+
+
+def _extract_predicates_bundle() -> dict[str, Any]:
+    """Return a cached {parser, predicate_query, function_query} bundle for C."""
+    global _EXTRACT_PREDICATES_CACHE
+    if _EXTRACT_PREDICATES_CACHE is None:
+        from terrain.foundation.parsers.parser_loader import load_parsers
+        from terrain.foundation.types import constants as cs
+
+        parsers, queries = load_parsers()
+        c_queries = queries.get(cs.SupportedLanguage.C) or {}
+        _EXTRACT_PREDICATES_CACHE = {
+            "parser": parsers.get(cs.SupportedLanguage.C),
+            "predicate_query": c_queries.get(cs.QUERY_PREDICATES),
+            "function_query": c_queries.get(cs.QUERY_FUNCTIONS),
+        }
+    return _EXTRACT_PREDICATES_CACHE
+
+
+def _extract_predicates_list_c_files(repo: Path) -> list[Path]:
+    """Return sorted absolute paths of .c / .h files under *repo*."""
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for ext in _EXTRACT_PREDICATES_C_EXTS:
+        for p in repo.rglob(f"*{ext}"):
+            if p in seen or not p.is_file():
+                continue
+            seen.add(p)
+            files.append(p)
+    files.sort()
+    return files
+
+
+def _extract_predicates_function_name(func_node) -> str | None:
+    """Extract the simple name of a C ``function_definition`` node."""
+    declarator = func_node.child_by_field_name("declarator")
+    # Unwrap pointer_declarator / parenthesized_declarator layers.
+    while declarator is not None and declarator.type not in (
+        "identifier",
+        "field_identifier",
+        "qualified_identifier",
+    ):
+        inner = declarator.child_by_field_name("declarator")
+        if inner is None:
+            break
+        declarator = inner
+    if declarator is None or declarator.type not in ("identifier", "field_identifier"):
+        return None
+    text = declarator.text
+    if text is None:
+        return None
+    return text.decode("utf-8", errors="replace")
+
+
 class MCPToolsRegistry:
     """Registry that manages workspace-based repo services and tool handlers."""
 
@@ -677,6 +741,39 @@ class MCPToolsRegistry:
                 },
             ),
             # -----------------------------------------------------------------
+            # Predicate extraction (slice 1/3 of JER-47)
+            # -----------------------------------------------------------------
+            ToolDefinition(
+                name="extract_predicates",
+                description=(
+                    "Extract the flat list of predicate nodes inside a C function "
+                    "(if / else_if / while / do_while / for / switch_case / ternary).\n\n"
+                    "Slice 1 MVP: returns only the skeleton — kind, location, "
+                    "expression and nesting_path. Future slices will add "
+                    "symbols_referenced, guarded_block, contains_assignments, "
+                    "contains_calls, has_early_return.\n\n"
+                    "Accepts a short function name ('AlarmCheck_DCI') or a qualified "
+                    "name ending with the function name ('pkg.mod.AlarmCheck_DCI'). "
+                    "If multiple C functions share the simple name, returns "
+                    "success=False with a candidates list so the caller can pass a "
+                    "fully-qualified name on retry."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "qualified_name": {
+                            "type": "string",
+                            "description": (
+                                "C function name — simple ('AlarmCheck_DCI') or "
+                                "qualified ('proj.alarm.AlarmCheck_DCI'). "
+                                "Matching is by last '.'-separated component."
+                            ),
+                        },
+                    },
+                    "required": ["qualified_name"],
+                },
+            ),
+            # -----------------------------------------------------------------
             # Hidden tools — handlers preserved, not exposed to MCP clients.
             # Superseded by API-doc-based workflows above.
             #   query_code_graph, get_code_snippet, semantic_search,
@@ -716,6 +813,7 @@ class MCPToolsRegistry:
             "trace_call_chain": self._handle_trace_call_chain,
             "get_merge_diff": self._handle_get_merge_diff,
             "find_symbol_in_docs": self._handle_find_symbol_in_docs,
+            "extract_predicates": self._handle_extract_predicates,
         }
         return handlers.get(name)
 
@@ -2809,4 +2907,89 @@ class MCPToolsRegistry:
             "to_merge": to_merge,
             "changed_files": len(rel_paths),
             "functions": functions,
+        }
+
+    # -------------------------------------------------------------------------
+    # extract_predicates — predicate skeleton for a C function (slice 1/3)
+    # -------------------------------------------------------------------------
+
+    async def _handle_extract_predicates(
+        self,
+        qualified_name: str,
+    ) -> dict[str, Any]:
+        """Extract predicates (if / while / for / switch_case / ternary) from a
+        C function's AST subtree.
+
+        Slice 1 MVP: only the skeleton — kind / location / expression /
+        nesting_path. ``symbols_referenced``, ``guarded_block``,
+        ``contains_assignments``, ``contains_calls``, ``has_early_return`` are
+        reserved for slice 2/3.
+        """
+        self._require_active()
+        assert self._active_repo_path is not None
+        repo_path = self._active_repo_path
+
+        bundle = _extract_predicates_bundle()
+        parser = bundle["parser"]
+        predicate_query = bundle["predicate_query"]
+        function_query = bundle["function_query"]
+        if parser is None or predicate_query is None or function_query is None:
+            raise ToolError(
+                "C parser or predicate query unavailable. "
+                "Ensure tree-sitter-c is installed."
+            )
+
+        simple_name = qualified_name.rsplit(".", 1)[-1]
+
+        from tree_sitter import QueryCursor
+        from terrain.foundation.parsers.predicate_processor import extract_predicates
+
+        matches: list[tuple[Any, Path]] = []  # (function_node, abs_path)
+        for abs_path in _extract_predicates_list_c_files(repo_path):
+            try:
+                source_bytes = abs_path.read_bytes()
+            except OSError:
+                continue
+            tree = parser.parse(source_bytes)
+            cursor = QueryCursor(function_query)
+            captures = cursor.captures(tree.root_node)
+            for func_node in captures.get("function", []):
+                name = _extract_predicates_function_name(func_node)
+                if name == simple_name:
+                    matches.append((func_node, abs_path))
+
+        if not matches:
+            return {
+                "success": False,
+                "error": "function not found",
+                "function": qualified_name,
+            }
+
+        if len(matches) > 1:
+            candidates = []
+            for _node, abs_path in matches:
+                try:
+                    rel = str(abs_path.relative_to(repo_path))
+                except ValueError:
+                    rel = str(abs_path)
+                candidates.append(f"{rel}:{_node.start_point[0] + 1}")
+            return {
+                "success": False,
+                "error": "ambiguous",
+                "function": qualified_name,
+                "candidates": sorted(candidates),
+            }
+
+        func_node, abs_path = matches[0]
+        try:
+            rel_file_path = str(abs_path.relative_to(repo_path))
+        except ValueError:
+            rel_file_path = str(abs_path)
+
+        predicates = extract_predicates(func_node, predicate_query, rel_file_path)
+
+        return {
+            "success": True,
+            "function": qualified_name,
+            "predicates": predicates,
         }
