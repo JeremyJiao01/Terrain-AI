@@ -285,6 +285,7 @@ def _extract_predicates_bundle() -> dict[str, Any]:
             "parser": parsers.get(cs.SupportedLanguage.C),
             "predicate_query": c_queries.get(cs.QUERY_PREDICATES),
             "function_query": c_queries.get(cs.QUERY_FUNCTIONS),
+            "call_query": c_queries.get(cs.QUERY_CALLS),
         }
     return _EXTRACT_PREDICATES_CACHE
 
@@ -2933,6 +2934,7 @@ class MCPToolsRegistry:
         parser = bundle["parser"]
         predicate_query = bundle["predicate_query"]
         function_query = bundle["function_query"]
+        call_query = bundle.get("call_query")
         if parser is None or predicate_query is None or function_query is None:
             raise ToolError(
                 "C parser or predicate query unavailable. "
@@ -2986,7 +2988,9 @@ class MCPToolsRegistry:
         except ValueError:
             rel_file_path = str(abs_path)
 
-        predicates = extract_predicates(func_node, predicate_query, rel_file_path)
+        predicates = extract_predicates(
+            func_node, predicate_query, rel_file_path, call_query=call_query
+        )
 
         return {
             "success": True,
