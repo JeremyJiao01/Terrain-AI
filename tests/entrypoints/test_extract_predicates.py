@@ -1,9 +1,9 @@
-"""Tests for the ``extract_predicates`` MCP tool (slice 1-2/3 of JER-47).
+"""Tests for the ``extract_predicates`` MCP tool (slice 1-3/3 of JER-47).
 
 Slice 1 MVP returns the predicate skeleton — ``kind``, ``location``,
 ``expression`` and ``nesting_path``. Slice 2 adds ``symbols_referenced`` and
-``guarded_block.{start_line, end_line, contains_calls}``. Slice 3 will add
-``guarded_block.contains_assignments`` and ``has_early_return``.
+``guarded_block.{start_line, end_line, contains_calls}``. Slice 3 adds
+``guarded_block.contains_assignments`` and ``guarded_block.has_early_return``.
 """
 
 from __future__ import annotations
@@ -643,3 +643,271 @@ class TestGuardedBlock:
         assert block["contains_calls"] == ["step"]
         assert block["start_line"] == 3
         assert block["end_line"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Slice 3: contains_assignments + has_early_return
+# ---------------------------------------------------------------------------
+
+
+class TestContainsAssignments:
+    def test_simple_assignment_and_return(self, tmp_path):
+        """``if (x) { y = 1; z = y + 2; return; }`` — two assignments +
+        ``has_early_return == True``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int x) {\n"
+            "    int y;\n"
+            "    int z;\n"
+            "    if (x) {\n"
+            "        y = 1;\n"
+            "        z = y + 2;\n"
+            "        return 0;\n"
+            "    }\n"
+            "    return z;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_assignments"] == [
+            {"line": 5, "lhs": "y", "rhs": "1"},
+            {"line": 6, "lhs": "z", "rhs": "y + 2"},
+        ]
+        assert block["has_early_return"] is True
+
+    def test_compound_assignment_keeps_op(self, tmp_path):
+        """``x += 1`` → ``{"lhs":"x","rhs":"1","op":"+="}``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "        x += 1;\n"
+            "    }\n"
+            "    return x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_assignments"] == [
+            {"line": 3, "lhs": "x", "rhs": "1", "op": "+="},
+        ]
+        assert block["has_early_return"] is False
+
+    def test_goto_style_error_handling(self, tmp_path):
+        """``if (err) goto fail;`` — ``has_early_return == True``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int err) {\n"
+            "    if (err) goto fail;\n"
+            "    return 0;\n"
+            "fail:\n"
+            "    return -1;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["has_early_return"] is True
+        assert block["contains_assignments"] == []
+
+    def test_local_variable_init_captured(self, tmp_path):
+        """``int local = compute();`` — ``{"lhs":"local","rhs":"compute()"}``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int compute(void);\n"
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "        int local = compute();\n"
+            "        return local;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_assignments"] == [
+            {"line": 4, "lhs": "local", "rhs": "compute()"},
+        ]
+        assert block["has_early_return"] is True
+
+    def test_local_declaration_without_init_skipped(self, tmp_path):
+        """``int local;`` (no initializer) — not in ``contains_assignments``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "        int local;\n"
+            "        local = 5;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_assignments"] == [
+            {"line": 4, "lhs": "local", "rhs": "5"},
+        ]
+
+    def test_break_and_continue_count_as_early_return(self, tmp_path):
+        """``break`` / ``continue`` in a guarded block both flip
+        ``has_early_return``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int n) {\n"
+            "    while (n > 0) {\n"
+            "        if (n == 5) { break; }\n"
+            "        if (n == 3) { continue; }\n"
+            "        n--;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        inner = [p for p in result["predicates"] if p["kind"] == "if"]
+        assert inner[0]["guarded_block"]["has_early_return"] is True
+        assert inner[1]["guarded_block"]["has_early_return"] is True
+
+    def test_nested_return_propagates_outward(self, tmp_path):
+        """A ``return`` nested inside an inner ``if`` also flips the outer
+        block's ``has_early_return`` — the path exists."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int a, int b) {\n"
+            "    if (a) {\n"
+            "        if (b) {\n"
+            "            return 1;\n"
+            "        }\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        preds = sorted(result["predicates"], key=lambda p: p["location"])
+        # Outer `if (a)` should have has_early_return == True even though the
+        # return is two levels deeper.
+        assert preds[0]["guarded_block"]["has_early_return"] is True
+        assert preds[1]["guarded_block"]["has_early_return"] is True
+
+    def test_empty_body_has_no_assignments_or_early_return(self, tmp_path):
+        """``if (x);`` — empty body: both fields are empty / False."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int x) {\n"
+            "    if (x);\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_assignments"] == []
+        assert block["has_early_return"] is False
+
+    def test_assignment_inside_call_argument(self, tmp_path):
+        """``foo(x = y)`` — the ``x = y`` assignment_expression is collected."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "void foo(int v);\n"
+            "int f(int cond, int y) {\n"
+            "    int x;\n"
+            "    if (cond) {\n"
+            "        foo(x = y);\n"
+            "    }\n"
+            "    return x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert {"line": 5, "lhs": "x", "rhs": "y"} in block["contains_assignments"]
+
+    def test_industrial_style_deep_nesting_end_to_end(self, tmp_path):
+        """≥ 5-level nested realistic alarm-handler style C — verify every
+        predicate has the slice-3 fields populated as expected."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "alarm_cfg.c").write_text(
+            """\
+int SetAlarm(int dci);
+int LogDebug(const char *msg);
+
+int AlarmCheck_DCI(int grid_ok, double dci_filtered, int dci_cnt,
+                   int system_ready, int user_ack) {
+    int fault_cnt = 0;
+    if (grid_ok) {
+        if (system_ready) {
+            if (dci_filtered > 0.5) {
+                if (dci_cnt > 3) {
+                    if (!user_ack) {
+                        fault_cnt += 1;
+                        SetAlarm(1);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+    return fault_cnt;
+}
+""",
+            encoding="utf-8",
+        )
+
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "AlarmCheck_DCI"})
+
+        assert result["success"] is True
+        preds = result["predicates"]
+        assert len(preds) == 5
+        # Every outer predicate sees the nested return.
+        for p in preds:
+            assert p["guarded_block"]["has_early_return"] is True
+        # Innermost if contains the two assignments + SetAlarm call + return.
+        innermost = preds[-1]
+        assigns = innermost["guarded_block"]["contains_assignments"]
+        assert {"line": 12, "lhs": "fault_cnt", "rhs": "1", "op": "+="} in assigns
+        assert innermost["guarded_block"]["contains_calls"] == ["SetAlarm"]
+        # Deepest nesting path is 4 entries (outer if's).
+        assert len(innermost["nesting_path"]) == 4

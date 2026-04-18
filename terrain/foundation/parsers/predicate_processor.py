@@ -1,10 +1,11 @@
-"""Terrain - Predicate Processor (slice 1-2/3 of JER-47).
+"""Terrain - Predicate Processor (slice 1-3/3 of JER-47).
 
 Extracts predicate nodes (if / while / do-while / for / switch-case / ternary)
 from a C function's AST subtree. Slice 1 returns the predicate skeleton —
 ``kind`` / ``location`` / ``expression`` / ``nesting_path``. Slice 2 adds
 ``symbols_referenced`` and ``guarded_block.{start_line, end_line, contains_calls}``.
-``contains_assignments`` and ``has_early_return`` are reserved for slice 3.
+Slice 3 adds ``guarded_block.contains_assignments`` and
+``guarded_block.has_early_return``.
 """
 
 from __future__ import annotations
@@ -263,8 +264,9 @@ def _guarded_block(
 ) -> dict[str, object] | None:
     """Build the ``guarded_block`` dict for a predicate node.
 
-    Returns ``{start_line, end_line, contains_calls}``. For kinds without a
-    meaningful body (none currently) returns None.
+    Returns ``{start_line, end_line, contains_calls, contains_assignments,
+    has_early_return}``. For kinds without a meaningful body (none currently)
+    returns None.
     """
     body: Node | None = None
     search_nodes: list[Node] = []
@@ -289,6 +291,8 @@ def _guarded_block(
                 "start_line": fallback_line,
                 "end_line": fallback_line,
                 "contains_calls": [],
+                "contains_assignments": [],
+                "has_early_return": False,
             }
         # Collect every named sibling statement so the call search covers the
         # whole case, not just the first statement.
@@ -303,6 +307,8 @@ def _guarded_block(
             "start_line": start_line,
             "end_line": end_line,
             "contains_calls": _contains_calls(search_nodes, call_query),
+            "contains_assignments": _contains_assignments(search_nodes),
+            "has_early_return": _any_early_exit(search_nodes),
         }
 
     if body is None:
@@ -312,7 +318,84 @@ def _guarded_block(
         "start_line": body.start_point[0] + 1,
         "end_line": body.end_point[0] + 1,
         "contains_calls": _contains_calls(search_nodes, call_query),
+        "contains_assignments": _contains_assignments(search_nodes),
+        "has_early_return": _any_early_exit(search_nodes),
     }
+
+
+_EARLY_EXIT_NODE_TYPES = frozenset({
+    "return_statement",
+    "break_statement",
+    "continue_statement",
+    "goto_statement",
+})
+
+
+def _collect_assignments(node: Node | None, out: list[dict[str, object]]) -> None:
+    """Walk *node*'s subtree in source order, appending one dict per
+    ``assignment_expression`` or initialised ``init_declarator``.
+
+    Traversal descends into every child — assignments buried inside nested
+    ``if`` / ``for`` / call arguments (``foo(x = y)``) are all captured. The
+    original source text for ``lhs`` / ``rhs`` is preserved (no whitespace
+    normalisation). Compound assignments (``+=`` etc.) keep the original
+    operator via an extra ``op`` field; plain ``=`` / init declarators omit it.
+    """
+    if node is None:
+        return
+    if node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        op_node = node.child_by_field_name("operator")
+        if left is not None and right is not None:
+            entry: dict[str, object] = {
+                "line": node.start_point[0] + 1,
+                "lhs": safe_decode_with_fallback(left),
+                "rhs": safe_decode_with_fallback(right),
+            }
+            op = safe_decode_with_fallback(op_node).strip() if op_node is not None else "="
+            if op and op != "=":
+                entry["op"] = op
+            out.append(entry)
+        # Continue descending — an assignment_expression's RHS may itself
+        # contain further assignments (e.g. chained ``a = b = 1``).
+    elif node.type == "init_declarator":
+        declarator = node.child_by_field_name("declarator")
+        value = node.child_by_field_name("value")
+        if declarator is not None and value is not None:
+            out.append({
+                "line": node.start_point[0] + 1,
+                "lhs": safe_decode_with_fallback(declarator),
+                "rhs": safe_decode_with_fallback(value),
+            })
+    for child in node.children:
+        _collect_assignments(child, out)
+
+
+def _contains_assignments(roots: list[Node]) -> list[dict[str, object]]:
+    """Collect every assignment within the given subtree roots, in source order."""
+    out: list[dict[str, object]] = []
+    for root in roots:
+        _collect_assignments(root, out)
+    out.sort(key=lambda e: int(e["line"]))
+    return out
+
+
+def _has_early_exit(node: Node | None) -> bool:
+    """True when *node*'s subtree contains any early-exit statement
+    (return / break / continue / goto)."""
+    if node is None:
+        return False
+    if node.type in _EARLY_EXIT_NODE_TYPES:
+        return True
+    for child in node.children:
+        if _has_early_exit(child):
+            return True
+    return False
+
+
+def _any_early_exit(roots: list[Node]) -> bool:
+    return any(_has_early_exit(r) for r in roots)
 
 
 def _contains_calls(roots: list[Node], call_query: Query | None) -> list[str]:
