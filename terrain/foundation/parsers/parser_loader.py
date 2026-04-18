@@ -278,6 +278,7 @@ def _create_language_queries(
     typedef_query = _create_optional_query(language, lang_config.typedef_query)
     macro_query = _create_optional_query(language, lang_config.macro_query)
     func_ptr_assign_query = _create_optional_query(language, lang_config.func_ptr_assign_query)
+    predicate_query = _create_optional_query(language, lang_config.predicate_query)
 
     return LanguageQueries(
         functions=_create_optional_query(language, function_patterns),
@@ -288,6 +289,7 @@ def _create_language_queries(
         typedefs=typedef_query,
         macros=macro_query,
         func_ptr_assign=func_ptr_assign_query,
+        predicates=predicate_query,
         config=lang_config,
         language=language,
         parser=parser,
