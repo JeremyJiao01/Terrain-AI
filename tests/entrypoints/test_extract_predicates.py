@@ -1,8 +1,9 @@
-"""Tests for the ``extract_predicates`` MCP tool (slice 1/3 of JER-47).
+"""Tests for the ``extract_predicates`` MCP tool (slice 1-2/3 of JER-47).
 
-Slice 1 MVP returns only the predicate skeleton — ``kind``, ``location``,
-``expression`` and ``nesting_path``. Later slices add ``symbols_referenced``,
-``guarded_block`` etc.
+Slice 1 MVP returns the predicate skeleton — ``kind``, ``location``,
+``expression`` and ``nesting_path``. Slice 2 adds ``symbols_referenced`` and
+``guarded_block.{start_line, end_line, contains_calls}``. Slice 3 will add
+``guarded_block.contains_assignments`` and ``has_early_return``.
 """
 
 from __future__ import annotations
@@ -321,3 +322,324 @@ class TestErrors:
         assert len(result["predicates"]) == 1
         assert result["predicates"][0]["kind"] == "if"
         assert result["predicates"][0]["expression"] == "x > 0"
+
+
+# ---------------------------------------------------------------------------
+# Slice 2: symbols_referenced
+# ---------------------------------------------------------------------------
+
+
+class TestSymbolsReferenced:
+    def test_if_condition_basic(self, tmp_path):
+        """``if (a > b && c != NULL)`` → order-preserving ["a","b","c","NULL"]."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int a, int b, int *c) {\n"
+            "    if (a > b && c != NULL) { return 1; }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        assert len(result["predicates"]) == 1
+        assert result["predicates"][0]["symbols_referenced"] == ["a", "b", "c", "NULL"]
+
+    def test_dedup_preserves_first_order(self, tmp_path):
+        """Duplicate symbols keep only their first occurrence."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int a, int b) {\n"
+            "    if (a > 0 && b > 0 && a < b) { return 1; }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        assert result["predicates"][0]["symbols_referenced"] == ["a", "b"]
+
+    def test_field_access_skips_field(self, tmp_path):
+        """``obj.field`` — only ``obj`` is captured, not ``field``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "struct S { int x; };\n"
+            "int f(struct S obj) {\n"
+            "    if (obj.x > 0) { return 1; }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        assert result["predicates"][0]["symbols_referenced"] == ["obj"]
+
+    def test_sizeof_type_is_not_a_symbol(self, tmp_path):
+        """``sizeof(struct Foo)`` — ``Foo`` is a type_identifier, excluded."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "struct Foo { int x; };\n"
+            "int f(int n) {\n"
+            "    if (n > sizeof(struct Foo)) { return 1; }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        assert result["predicates"][0]["symbols_referenced"] == ["n"]
+
+    def test_function_pointer_goes_into_symbols_and_calls(self, tmp_path):
+        """``cb(x)`` — ``cb`` appears in both ``symbols_referenced`` and
+        ``contains_calls``."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int (*cb)(int), int x) {\n"
+            "    if (cb(x) > 0) {\n"
+            "        return cb(x);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        p = result["predicates"][0]
+        assert "cb" in p["symbols_referenced"]
+        assert "x" in p["symbols_referenced"]
+        assert p["guarded_block"]["contains_calls"] == ["cb"]
+
+    def test_for_init_cond_update_all_contribute(self, tmp_path):
+        """``for (i=0; i<n; i++)`` — i and n both captured in source order."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int n) {\n"
+            "    int i;\n"
+            "    for (i = 0; i < n; i++) {\n"
+            "        n--;\n"
+            "    }\n"
+            "    return n;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        for_pred = next(p for p in result["predicates"] if p["kind"] == "for")
+        assert for_pred["symbols_referenced"] == ["i", "n"]
+
+    def test_switch_case_value_symbols(self, tmp_path):
+        """switch_case: symbols in the case value (constant, usually empty or a
+        single macro identifier)."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "#define ERR_A 1\n"
+            "#define ERR_B 2\n"
+            "int dispatch(int code) {\n"
+            "    switch (code) {\n"
+            "        case ERR_A: return 10;\n"
+            "        case ERR_B: return 20;\n"
+            "        default: return 0;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "dispatch"})
+
+        assert result["success"] is True
+        cases = [p for p in result["predicates"] if p["kind"] == "switch_case"]
+        assert cases[0]["symbols_referenced"] == ["ERR_A"]
+        assert cases[1]["symbols_referenced"] == ["ERR_B"]
+        assert cases[2]["symbols_referenced"] == []  # default
+
+    def test_string_literals_do_not_leak(self, tmp_path):
+        """Identifiers inside string literals are not captured."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int strcmp(const char *a, const char *b);\n"
+            "int f(const char *s) {\n"
+            '    if (strcmp(s, "banana") == 0) { return 1; }\n'
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        syms = result["predicates"][0]["symbols_referenced"]
+        assert "banana" not in syms
+        # strcmp (the function identifier) and s should be in there
+        assert "s" in syms
+
+
+# ---------------------------------------------------------------------------
+# Slice 2: guarded_block (start_line / end_line / contains_calls)
+# ---------------------------------------------------------------------------
+
+
+class TestGuardedBlock:
+    def test_contains_calls_dedup_and_order(self, tmp_path):
+        """``if (x) { foo(); bar(); foo(); }`` → ["foo","bar"]."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "void foo(void);\n"
+            "void bar(void);\n"
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "        foo();\n"
+            "        bar();\n"
+            "        foo();\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        p = result["predicates"][0]
+        assert p["guarded_block"]["contains_calls"] == ["foo", "bar"]
+
+    def test_if_guarded_block_line_numbers(self, tmp_path):
+        """Block lines cover the braces (or first to last inner statement)."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        # Line numbers:
+        # 1 void foo(void);
+        # 2 int f(int x) {
+        # 3     if (x) {
+        # 4         foo();
+        # 5     }
+        # 6     return 0;
+        # 7 }
+        (repo / "c.c").write_text(
+            "void foo(void);\n"
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "        foo();\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        # consequence is the compound_statement spanning `{` (line 3) to `}` (line 5)
+        assert block["start_line"] == 3
+        assert block["end_line"] == 5
+
+    def test_while_body_lines_and_calls(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "void tick(void);\n"
+            "int f(int n) {\n"
+            "    while (n > 0) {\n"
+            "        tick();\n"
+            "        n--;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["start_line"] == 3
+        assert block["end_line"] == 6
+        assert block["contains_calls"] == ["tick"]
+
+    def test_empty_block_has_no_calls(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "int f(int x) {\n"
+            "    if (x) {\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_calls"] == []
+
+    def test_switch_case_block_calls(self, tmp_path):
+        """switch_case guarded_block = the case body (statements after `:`)."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "void alpha(void);\n"
+            "void beta(void);\n"
+            "int dispatch(int code) {\n"
+            "    switch (code) {\n"
+            "        case 1:\n"
+            "            alpha();\n"
+            "            beta();\n"
+            "            return 10;\n"
+            "        default:\n"
+            "            return 0;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "dispatch"})
+
+        assert result["success"] is True
+        cases = [p for p in result["predicates"] if p["kind"] == "switch_case"]
+        assert cases[0]["guarded_block"]["contains_calls"] == ["alpha", "beta"]
+        assert cases[1]["guarded_block"]["contains_calls"] == []
+
+    def test_for_body(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "c.c").write_text(
+            "void step(int i);\n"
+            "int f(int n) {\n"
+            "    for (int i = 0; i < n; i++) {\n"
+            "        step(i);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        reg = _make_registry(tmp_path, repo)
+        result = _call(reg, "extract_predicates", {"qualified_name": "f"})
+
+        assert result["success"] is True
+        block = result["predicates"][0]["guarded_block"]
+        assert block["contains_calls"] == ["step"]
+        assert block["start_line"] == 3
+        assert block["end_line"] == 5

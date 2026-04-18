@@ -1,9 +1,10 @@
-"""Terrain - Predicate Processor (slice 1/3 of JER-47).
+"""Terrain - Predicate Processor (slice 1-2/3 of JER-47).
 
 Extracts predicate nodes (if / while / do-while / for / switch-case / ternary)
-from a C function's AST subtree. Slice 1 returns only the predicate skeleton —
-``kind`` / ``location`` / ``expression`` / ``nesting_path``. ``symbols_referenced``,
-``guarded_block`` and related fields are reserved for later slices.
+from a C function's AST subtree. Slice 1 returns the predicate skeleton —
+``kind`` / ``location`` / ``expression`` / ``nesting_path``. Slice 2 adds
+``symbols_referenced`` and ``guarded_block.{start_line, end_line, contains_calls}``.
+``contains_assignments`` and ``has_early_return`` are reserved for slice 3.
 """
 
 from __future__ import annotations
@@ -153,6 +154,197 @@ def _ancestor_header(anc: Node) -> str | None:
     return None
 
 
+_SYMBOL_NODE_TYPES = frozenset({
+    # Plain value identifiers — tree-sitter-c parses field / type names as
+    # separate node types (field_identifier / type_identifier) so those are
+    # naturally excluded here.
+    "identifier",
+    # Named constants: tree-sitter-c recognises NULL / TRUE / FALSE / true /
+    # false as distinct node types. They are still "symbols" for downstream
+    # classification (macros in practice), so we keep them.
+    "null",
+    "true",
+    "false",
+})
+
+
+def _collect_identifiers(node: Node | None, out: list[str], seen: set[str]) -> None:
+    """Walk *node*'s subtree in source order and append symbol tokens to *out*,
+    preserving first-occurrence order and skipping duplicates.
+
+    Only nodes whose type is in :data:`_SYMBOL_NODE_TYPES` are collected. String
+    literals, number literals, type identifiers and field identifiers are all
+    left out by construction.
+    """
+    if node is None:
+        return
+    if node.type in _SYMBOL_NODE_TYPES:
+        text = safe_decode_with_fallback(node).strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+        return
+    for child in node.children:
+        _collect_identifiers(child, out, seen)
+
+
+def _symbols_referenced(node: Node, kind: str) -> list[str]:
+    """Identifiers referenced in the predicate's condition, source order +
+    first-occurrence dedup. For ``for`` loops all three header parts contribute.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    if kind == "for":
+        for field_name in ("initializer", "condition", "update"):
+            _collect_identifiers(node.child_by_field_name(field_name), out, seen)
+    elif kind == "switch_case":
+        _collect_identifiers(node.child_by_field_name("value"), out, seen)
+    else:
+        _collect_identifiers(node.child_by_field_name("condition"), out, seen)
+    return out
+
+
+def _call_name(call_node: Node) -> str | None:
+    """Extract the simple function name from a ``call_expression``.
+
+    Handles ordinary ``foo(x)`` (identifier), field calls ``obj->cb(x)`` /
+    ``obj.cb(x)`` (field_expression -> field name), and parenthesised pointer
+    dereferences ``(*cb)(x)``. Falls back to the raw text for other shapes.
+    """
+    func = call_node.child_by_field_name("function")
+    if func is None:
+        return None
+    if func.type == "identifier":
+        text = safe_decode_with_fallback(func).strip()
+        return text or None
+    if func.type == "field_expression":
+        field = func.child_by_field_name("field")
+        if field is not None:
+            text = safe_decode_with_fallback(field).strip()
+            if text:
+                return text
+    if func.type == "parenthesized_expression":
+        for child in func.named_children:
+            if child.type == "pointer_expression":
+                arg = child.child_by_field_name("argument")
+                if arg is not None and arg.type == "identifier":
+                    text = safe_decode_with_fallback(arg).strip()
+                    if text:
+                        return text
+            elif child.type == "identifier":
+                text = safe_decode_with_fallback(child).strip()
+                if text:
+                    return text
+    fallback = safe_decode_with_fallback(func).strip()
+    return fallback or None
+
+
+def _switch_case_body(case_node: Node) -> tuple[Node | None, Node | None]:
+    """Return (first_stmt, last_stmt) for the body of a ``case_statement`` —
+    i.e. the named children excluding the ``value`` field.
+
+    Either may be None when the case is empty (pure fallthrough).
+    """
+    value_node = case_node.child_by_field_name("value")
+    body: list[Node] = []
+    for child in case_node.named_children:
+        if value_node is not None and child == value_node:
+            continue
+        body.append(child)
+    if not body:
+        return None, None
+    return body[0], body[-1]
+
+
+def _guarded_block(
+    node: Node,
+    kind: str,
+    call_query: Query | None,
+) -> dict[str, object] | None:
+    """Build the ``guarded_block`` dict for a predicate node.
+
+    Returns ``{start_line, end_line, contains_calls}``. For kinds without a
+    meaningful body (none currently) returns None.
+    """
+    body: Node | None = None
+    search_nodes: list[Node] = []
+    if kind in ("if", "else_if"):
+        body = node.child_by_field_name("consequence")
+        if body is not None:
+            search_nodes = [body]
+    elif kind in ("while", "do_while", "for"):
+        body = node.child_by_field_name("body")
+        if body is not None:
+            search_nodes = [body]
+    elif kind == "ternary":
+        body = node.child_by_field_name("consequence")
+        if body is not None:
+            search_nodes = [body]
+    elif kind == "switch_case":
+        first, last = _switch_case_body(node)
+        if first is None or last is None:
+            # Empty case (fallthrough) — degenerate block with no body.
+            fallback_line = node.end_point[0] + 1
+            return {
+                "start_line": fallback_line,
+                "end_line": fallback_line,
+                "contains_calls": [],
+            }
+        # Collect every named sibling statement so the call search covers the
+        # whole case, not just the first statement.
+        value_node = node.child_by_field_name("value")
+        for child in node.named_children:
+            if value_node is not None and child == value_node:
+                continue
+            search_nodes.append(child)
+        start_line = first.start_point[0] + 1
+        end_line = last.end_point[0] + 1
+        return {
+            "start_line": start_line,
+            "end_line": end_line,
+            "contains_calls": _contains_calls(search_nodes, call_query),
+        }
+
+    if body is None:
+        return None
+
+    return {
+        "start_line": body.start_point[0] + 1,
+        "end_line": body.end_point[0] + 1,
+        "contains_calls": _contains_calls(search_nodes, call_query),
+    }
+
+
+def _contains_calls(roots: list[Node], call_query: Query | None) -> list[str]:
+    """Run ``call_query`` on each root subtree, returning function names in
+    source order with first-occurrence dedup. If *call_query* is None, returns
+    an empty list.
+    """
+    if call_query is None or not roots:
+        return []
+    found: list[tuple[int, str]] = []  # (start_byte, name)
+    for root in roots:
+        cursor = QueryCursor(call_query)
+        captures = cursor.captures(root)
+        for cap_name in ("call",):
+            for call_node in captures.get(cap_name, []):
+                if not isinstance(call_node, Node):
+                    continue
+                name = _call_name(call_node)
+                if not name:
+                    continue
+                found.append((call_node.start_byte, name))
+    found.sort(key=lambda e: e[0])
+    out: list[str] = []
+    seen: set[str] = set()
+    for _, name in found:
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
 def _nesting_path(node: Node, stop_node: Node) -> list[str]:
     """Walk upward from *node* (exclusive) up to but not including *stop_node*,
     collecting predicate-class ancestor headers. Returns outermost-first.
@@ -191,11 +383,14 @@ def extract_predicates(
     function_node: Node,
     query: Query,
     rel_file_path: str,
+    call_query: Query | None = None,
 ) -> list[dict[str, object]]:
     """Extract all predicates inside *function_node*.
 
-    Returns a flat list of dicts: ``{kind, location, expression, nesting_path}``,
-    sorted by (line, column) of the predicate node's start.
+    Returns a flat list of dicts containing
+    ``{kind, location, expression, nesting_path, symbols_referenced, guarded_block}``,
+    sorted by (line, kind) of the predicate node's start. When *call_query* is
+    omitted the ``guarded_block.contains_calls`` list is empty.
     """
     cursor = QueryCursor(query)
     captures = cursor.captures(function_node)
@@ -227,7 +422,11 @@ def extract_predicates(
             "location": f"{rel_file_path}:{line}",
             "expression": expression,
             "nesting_path": _nesting_path(node, function_node),
+            "symbols_referenced": _symbols_referenced(node, kind),
         }
+        block = _guarded_block(node, kind, call_query)
+        if block is not None:
+            entry["guarded_block"] = block
         out.append(entry)
 
     out.sort(key=lambda e: (
