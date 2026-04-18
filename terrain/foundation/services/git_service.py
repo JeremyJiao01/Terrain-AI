@@ -116,6 +116,12 @@ class GitChangeDetector:
         Returns:
             Number of commits (0 means up-to-date), or ``None`` if *repo_path*
             is not a git repository or the command fails.
+
+        Note:
+            ``git log --since`` interprets naive timestamps in *local* time and
+            silently mis-counts across timezone moves, rebases, or clock skew.
+            Prefer :meth:`count_commits_since_sha` when a stable anchor SHA
+            is available.
         """
         try:
             result = subprocess.run(
@@ -135,6 +141,62 @@ class GitChangeDetector:
             return None
         except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
             logger.debug("count_commits_since failed: {}", e)
+            return None
+
+    def count_commits_since_sha(self, repo_path: Path, sha: str) -> int | None:
+        """Return the number of commits reachable from HEAD but not from *sha*.
+
+        This is immune to timezone shifts, clock skew, and commit-date
+        rewrites (rebase, cherry-pick, amend) that plague timestamp-based
+        counting. Shallow clones may undercount — that's acceptable.
+
+        Args:
+            repo_path: Path to the git repository.
+            sha: An anchor commit SHA previously captured at index time.
+
+        Returns:
+            - non-negative int — commit count between *sha* and HEAD
+            - ``None`` — *sha* missing from history (force-push / shallow clone),
+              *sha* empty, not a git repository, or subprocess failure.
+              Caller should surface this as "unknown", not a silent zero.
+        """
+        if not sha:
+            return None
+        try:
+            # Verify the SHA exists in this repo before counting.
+            verify = subprocess.run(
+                ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if verify.returncode != 0:
+                logger.debug("anchor SHA {} not in repo", sha[:8])
+                return None
+
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD", f"^{sha}"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                logger.debug(
+                    "git rev-list --count HEAD ^{} failed (exit {}): {}",
+                    sha[:8], result.returncode, result.stderr.strip(),
+                )
+                return None
+            return int(result.stdout.strip())
+        except ValueError as e:
+            logger.debug("rev-list output not an int: {}", e)
+            return None
+        except subprocess.TimeoutExpired as e:
+            logger.debug("count_commits_since_sha timed out: {}", e)
+            return None
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.debug("count_commits_since_sha failed: {}", e)
             return None
 
     def get_changed_files_between(

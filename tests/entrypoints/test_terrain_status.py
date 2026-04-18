@@ -175,3 +175,190 @@ class TestGetRepoStatusEntries:
         (ws / "no_meta_dir").mkdir()
         entries = _get_repo_status_entries(ws)
         assert entries == []
+
+
+# ---------------------------------------------------------------------------
+# GitChangeDetector.count_commits_since_sha — SHA-based counting
+# ---------------------------------------------------------------------------
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True, capture_output=True)
+
+
+def _commit(path: Path, name: str, content: str, msg: str) -> str:
+    (path / name).write_text(content)
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", msg], cwd=path, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return head
+
+
+class TestCountCommitsSinceSha:
+    def test_zero_when_head_equals_sha(self, tmp_path):
+        _init_repo(tmp_path)
+        head = _commit(tmp_path, "a.txt", "a", "first")
+        assert GitChangeDetector().count_commits_since_sha(tmp_path, head) == 0
+
+    def test_counts_commits_ahead_of_sha(self, tmp_path):
+        _init_repo(tmp_path)
+        anchor = _commit(tmp_path, "a.txt", "a", "first")
+        _commit(tmp_path, "b.txt", "b", "second")
+        _commit(tmp_path, "c.txt", "c", "third")
+        assert GitChangeDetector().count_commits_since_sha(tmp_path, anchor) == 2
+
+    def test_zero_after_amend(self, tmp_path):
+        """git commit --amend rewrites the commit timestamp but same SHA semantics.
+
+        Under the old `--since` strategy, the amended commit's new timestamp
+        would be counted as a change. SHA-based counting reports 0 because
+        HEAD's new SHA is what we would now record as last_indexed_commit.
+        """
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.txt", "a", "first")
+        # Amend — rewrites the commit (new SHA, new timestamp).
+        subprocess.run(
+            ["git", "commit", "--amend", "--no-edit", "--date=now"],
+            cwd=tmp_path, check=True, capture_output=True,
+        )
+        new_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        # Indexing captures the post-amend SHA — staleness should be 0.
+        assert GitChangeDetector().count_commits_since_sha(tmp_path, new_head) == 0
+
+    def test_none_when_sha_missing(self, tmp_path):
+        """Force-push / rebase dropped the anchor SHA — must return None, not silently miscount."""
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.txt", "a", "first")
+        bogus = "0" * 40
+        assert GitChangeDetector().count_commits_since_sha(tmp_path, bogus) is None
+
+    def test_none_for_empty_sha(self, tmp_path):
+        assert GitChangeDetector().count_commits_since_sha(tmp_path, "") is None
+
+    def test_none_on_timeout(self, tmp_path):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5)):
+            assert GitChangeDetector().count_commits_since_sha(tmp_path, "abc1234") is None
+
+
+# ---------------------------------------------------------------------------
+# _get_repo_status_entries integration — SHA-preferred + legacy fallback
+# ---------------------------------------------------------------------------
+
+class TestStatusEntriesShaPath:
+    def test_sha_path_reports_up_to_date(self, tmp_path):
+        """When last_indexed_commit matches HEAD, status is up-to-date."""
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _init_repo(repo)
+        head = _commit(repo, "a.txt", "a", "first")
+
+        artifact_dir = ws / "myrepo_abc12345"
+        artifact_dir.mkdir()
+        (artifact_dir / "meta.json").write_text(json.dumps({
+            "repo_name": "myrepo_abc12345",
+            "repo_path": str(repo),
+            "indexed_at": "2026-04-10T10:00:00+00:00",
+            "last_indexed_commit": head,
+        }))
+
+        entries = _get_repo_status_entries(ws)
+        assert entries[0]["status"] == "up-to-date"
+        assert entries[0]["commits_since"] == 0
+
+    def test_sha_path_reports_n_commits_ahead(self, tmp_path):
+        """HEAD is 3 commits past last_indexed_commit → stale, commits_since==3."""
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _init_repo(repo)
+        anchor = _commit(repo, "a.txt", "a", "first")
+        _commit(repo, "b.txt", "b", "second")
+        _commit(repo, "c.txt", "c", "third")
+        _commit(repo, "d.txt", "d", "fourth")
+
+        artifact_dir = ws / "myrepo_abc12345"
+        artifact_dir.mkdir()
+        (artifact_dir / "meta.json").write_text(json.dumps({
+            "repo_name": "myrepo_abc12345",
+            "repo_path": str(repo),
+            "indexed_at": "2026-04-10T10:00:00+00:00",
+            "last_indexed_commit": anchor,
+        }))
+
+        entries = _get_repo_status_entries(ws)
+        assert entries[0]["status"] == "stale"
+        assert entries[0]["commits_since"] == 3
+
+    def test_sha_path_unknown_when_sha_force_pushed_away(self, tmp_path):
+        """Simulate force-push: last_indexed_commit no longer exists in repo."""
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _init_repo(repo)
+        _commit(repo, "a.txt", "a", "first")
+
+        artifact_dir = ws / "myrepo_abc12345"
+        artifact_dir.mkdir()
+        (artifact_dir / "meta.json").write_text(json.dumps({
+            "repo_name": "myrepo_abc12345",
+            "repo_path": str(repo),
+            "indexed_at": "2026-04-10T10:00:00+00:00",
+            "last_indexed_commit": "0" * 40,  # SHA that no longer exists
+        }))
+
+        entries = _get_repo_status_entries(ws)
+        assert entries[0]["status"] == "unknown"
+        assert entries[0]["commits_since"] is None
+
+    def test_legacy_fallback_when_last_indexed_commit_missing(self, tmp_path):
+        """Old meta.json without last_indexed_commit — naive indexed_at still works via --since fallback."""
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        # Legacy entry: no last_indexed_commit, naive timestamp
+        artifact_dir = ws / "myrepo_abc12345"
+        artifact_dir.mkdir()
+        (artifact_dir / "meta.json").write_text(json.dumps({
+            "repo_name": "myrepo_abc12345",
+            "repo_path": str(repo),
+            "indexed_at": "2026-04-10T10:00:00",  # naive legacy string
+        }))
+
+        with patch("terrain.foundation.services.git_service.GitChangeDetector") as MockDetector:
+            instance = MockDetector.return_value
+            instance.count_commits_since.return_value = 2
+            entries = _get_repo_status_entries(ws)
+
+        # Fallback went through count_commits_since with the legacy string
+        instance.count_commits_since.assert_called_once()
+        assert entries[0]["status"] == "stale"
+        assert entries[0]["commits_since"] == 2
+
+
+# ---------------------------------------------------------------------------
+# save_meta writes timezone-aware UTC for indexed_at
+# ---------------------------------------------------------------------------
+
+class TestSaveMetaIndexedAtAware:
+    def test_indexed_at_is_timezone_aware_utc(self, tmp_path):
+        from datetime import datetime
+        from terrain.entrypoints.mcp.pipeline import save_meta
+
+        save_meta(tmp_path, tmp_path / "repo", wiki_page_count=0)
+        meta = json.loads((tmp_path / "meta.json").read_text())
+        parsed = datetime.fromisoformat(meta["indexed_at"])
+        assert parsed.tzinfo is not None, (
+            f"indexed_at must be timezone-aware, got naive: {meta['indexed_at']!r}"
+        )
+        # And it should be UTC (offset == 0)
+        assert parsed.utcoffset().total_seconds() == 0

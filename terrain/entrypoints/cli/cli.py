@@ -445,12 +445,18 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         name = meta.get("repo_name", child.name)
         repo_path_str = meta.get("repo_path", "")
         indexed_at = meta.get("indexed_at", "")
+        last_indexed_commit = meta.get("last_indexed_commit") or ""
 
         repo_path = Path(repo_path_str) if repo_path_str else None
         commits: int | None = None
 
-        if repo_path and indexed_at:
-            commits = detector.count_commits_since(repo_path, indexed_at)
+        if repo_path:
+            if last_indexed_commit:
+                # Prefer SHA anchor — immune to timezone / rebase / clock skew.
+                commits = detector.count_commits_since_sha(repo_path, last_indexed_commit)
+            elif indexed_at:
+                # Legacy meta.json without a SHA anchor — best-effort timestamp path.
+                commits = detector.count_commits_since(repo_path, indexed_at)
 
         if commits is None:
             status = "unknown"

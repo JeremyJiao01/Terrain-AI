@@ -10,7 +10,7 @@ import json
 import os
 import pickle
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -1500,7 +1500,7 @@ def save_meta(
         **existing,
         "repo_path": repo_path.as_posix(),
         "repo_name": resolved_name,
-        "indexed_at": datetime.now().isoformat(),
+        "indexed_at": datetime.now(timezone.utc).isoformat(),
         "wiki_page_count": wiki_page_count,
         "steps": {
             "graph": has_graph,
