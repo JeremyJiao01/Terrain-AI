@@ -92,6 +92,74 @@ class TestRenderFuncDetail:
         # No docstring section when docstring is None
         assert "## 描述" not in content
 
+    def test_leaf_marker_when_no_callees(self):
+        """Leaf functions show `Callees: 0 (leaf)` so agents can skip deep reads."""
+        from terrain.domains.upper.apidoc.api_doc_generator import _render_func_detail
+
+        func = {
+            "qn": "mod.leaf",
+            "name": "leaf",
+            "signature": "int leaf(void)",
+            "module_qn": "mod",
+            "docstring": None,
+        }
+        content = _render_func_detail(func, callers=[], callees=[])
+        assert "- Callees: 0 (leaf)" in content
+
+    def test_non_leaf_marker_with_callees(self):
+        """Non-leaf functions show `Callees: N (non-leaf)` with distinct count."""
+        from terrain.domains.upper.apidoc.api_doc_generator import _render_func_detail
+
+        func = {
+            "qn": "mod.orch",
+            "name": "orch",
+            "signature": "void orch(void)",
+            "module_qn": "mod",
+            "docstring": None,
+        }
+        callees = [
+            {"qn": "mod.a", "path": "src/mod.c", "start_line": 1},
+            {"qn": "mod.b", "path": "src/mod.c", "start_line": 2},
+            {"qn": "mod.c", "path": "src/mod.c", "start_line": 3},
+        ]
+        content = _render_func_detail(func, callers=[], callees=callees)
+        assert "- Callees: 3 (non-leaf)" in content
+
+    def test_callees_count_dedupes_by_qn(self):
+        """Duplicate callee entries (same qn) count once — leaf decision is about distinct targets."""
+        from terrain.domains.upper.apidoc.api_doc_generator import _render_func_detail
+
+        func = {
+            "qn": "mod.f",
+            "name": "f",
+            "signature": "void f(void)",
+            "module_qn": "mod",
+            "docstring": None,
+        }
+        callees = [
+            {"qn": "mod.a", "path": "src/mod.c", "start_line": 1},
+            {"qn": "mod.a", "path": "src/mod.c", "start_line": 7},
+            {"qn": "mod.b", "path": "src/mod.c", "start_line": 3},
+        ]
+        content = _render_func_detail(func, callers=[], callees=callees)
+        assert "- Callees: 2 (non-leaf)" in content
+
+    def test_callees_line_survives_summarize(self):
+        """summarize_api_doc must preserve the Callees metadata line."""
+        from terrain.domains.upper.apidoc.api_doc_generator import _render_func_detail
+        from terrain.entrypoints.mcp.tools import summarize_api_doc
+
+        func = {
+            "qn": "mod.leaf",
+            "name": "leaf",
+            "signature": "int leaf(void)",
+            "module_qn": "mod",
+            "docstring": None,
+        }
+        full = _render_func_detail(func, callers=[], callees=[])
+        summary = summarize_api_doc(full)
+        assert "- Callees: 0 (leaf)" in summary
+
 
 # ---------------------------------------------------------------------------
 # Unit tests for generate_api_docs pipeline

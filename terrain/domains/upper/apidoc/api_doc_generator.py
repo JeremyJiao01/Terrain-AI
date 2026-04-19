@@ -529,6 +529,14 @@ def _render_func_detail(
         lines.append(f"- 模块: {module_qn} — {module_desc}")
     else:
         lines.append(f"- 模块: {module_qn}")
+
+    # Leafness — count of distinct resolved callees (one-hop CALLS edges).
+    # Lets LLM agents skip expensive call-chain queries when deciding whether
+    # to deep-read the function body. See JER-68 / JER-70.
+    callee_qns = {c["qn"] for c in callees if c.get("qn")}
+    callees_count = len(callee_qns)
+    leaf_label = "leaf" if callees_count == 0 else "non-leaf"
+    lines.append(f"- Callees: {callees_count} ({leaf_label})")
     lines.append("")
 
     # Full docstring (if longer than the summary line or contains bilingual content)

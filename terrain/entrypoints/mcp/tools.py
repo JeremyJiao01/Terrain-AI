@@ -2006,10 +2006,13 @@ class MCPToolsRegistry:
 
         content = target.read_text(encoding="utf-8", errors="ignore")
 
-        # Live caller query — overrides potentially stale caller section in the MD
+        # Live caller query — overrides potentially stale caller section in the MD.
+        # Also collect callees_count so agents can decide whether to deep-read
+        # without a second tool call (JER-70).
         live_callers: list[dict] = []
+        callees_count: int | None = None
         try:
-            cypher = """
+            callers_cypher = """
                 MATCH (caller)-[:CALLS]->(callee)
                 WHERE callee.qualified_name = $qn OR callee.name = $name
                 RETURN DISTINCT
@@ -2018,9 +2021,21 @@ class MCPToolsRegistry:
                        caller.path           AS caller_path,
                        caller.start_line     AS caller_start
             """
+            callees_cypher = """
+                MATCH (f:Function {qualified_name: $qn})-[:CALLS]->(c)
+                RETURN count(DISTINCT c) AS n
+            """
             simple_name = qualified_name.split(".")[-1]
             with self._temporary_ingestor() as ingestor:
-                rows = ingestor.query(cypher, {"qn": qualified_name, "name": simple_name})
+                rows = ingestor.query(
+                    callers_cypher, {"qn": qualified_name, "name": simple_name}
+                )
+                try:
+                    crows = ingestor.query(callees_cypher, {"qn": qualified_name})
+                    if crows:
+                        callees_count = int(crows[0].get("n", 0) or 0)
+                except Exception:
+                    callees_count = None
             seen: set[str] = set()
             for r in rows:
                 key = r.get("caller_qn") or r.get("caller_name", "")
@@ -2035,11 +2050,15 @@ class MCPToolsRegistry:
         except Exception:
             pass  # live callers are supplemental; don't fail the whole call
 
-        return {
+        response: dict[str, Any] = {
             "qualified_name": qualified_name,
             "content": content,
             "live_callers": live_callers,
         }
+        if callees_count is not None:
+            response["callees_count"] = callees_count
+            response["is_leaf"] = callees_count == 0
+        return response
 
     # -------------------------------------------------------------------------
     # find_api  (aggregated: semantic search + API doc lookup)
@@ -2126,6 +2145,34 @@ class MCPToolsRegistry:
                     entry["api_doc"] = summarize_api_doc(full_doc)
 
             combined.append(entry)
+
+        # Batch callees count so agents see leafness without a second round-trip
+        # (JER-70). One cypher round-trip regardless of result count.
+        qns_for_leaf = [
+            e["qualified_name"] for e in combined
+            if e.get("qualified_name") and e.get("type") == "function"
+        ]
+        if qns_for_leaf:
+            try:
+                cypher = """
+                    MATCH (f:Function) WHERE f.qualified_name IN $qns
+                    OPTIONAL MATCH (f)-[:CALLS]->(c)
+                    RETURN f.qualified_name AS qn, count(DISTINCT c) AS n
+                """
+                with self._temporary_ingestor() as ingestor:
+                    rows = ingestor.query(cypher, {"qns": qns_for_leaf})
+                counts: dict[str, int] = {}
+                for row in rows:
+                    qn = row.get("qn")
+                    if qn is not None:
+                        counts[qn] = int(row.get("n", 0) or 0)
+                for entry in combined:
+                    qn = entry.get("qualified_name")
+                    if qn in counts:
+                        entry["callees_count"] = counts[qn]
+                        entry["is_leaf"] = counts[qn] == 0
+            except Exception:
+                pass  # leafness is supplemental; don't fail the whole call
 
         return {
             "query": query,
