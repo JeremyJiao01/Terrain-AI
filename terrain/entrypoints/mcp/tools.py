@@ -536,11 +536,38 @@ def _symbol_usage_identifier_role(ident_node) -> str:
     if ptype == "field_expression":
         if parent.child_by_field_name("field") == ident_node:
             return "skip"
+        # ``ident`` is the ``argument`` of a field_expression. If the
+        # enclosing field_expression chain is the LHS of an assignment or the
+        # target of ++/--, the write pass owns this node — don't also report
+        # it as a read.
+        if parent.child_by_field_name("argument") == ident_node:
+            chain_top = parent
+            while (
+                chain_top.parent is not None
+                and chain_top.parent.type == "field_expression"
+                and chain_top.parent.child_by_field_name("argument") == chain_top
+            ):
+                chain_top = chain_top.parent
+            gp = chain_top.parent
+            if gp is not None:
+                if (
+                    gp.type == "assignment_expression"
+                    and gp.child_by_field_name("left") == chain_top
+                ):
+                    return "skip"
+                if (
+                    gp.type == "update_expression"
+                    and gp.child_by_field_name("argument") == chain_top
+                ):
+                    return "skip"
     if ptype == "call_expression":
         if parent.child_by_field_name("function") == ident_node:
             return "skip"
     if ptype == "assignment_expression":
         if parent.child_by_field_name("left") == ident_node:
+            return "write"
+    if ptype == "update_expression":
+        if parent.child_by_field_name("argument") == ident_node:
             return "write"
     if ptype == "pointer_expression":
         op = parent.child_by_field_name("operator")
@@ -585,6 +612,168 @@ def _symbol_usage_collect_reads(
 
     _visit(root)
     return out
+
+
+# Compound assignment operators recognised by slice 2. The `=` plain direct
+# assignment is handled separately.
+_SYMBOL_USAGE_COMPOUND_OPS: frozenset[str] = frozenset(
+    {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
+)
+
+
+def _symbol_usage_lhs_matches(left_node, simple_name: str) -> bool:
+    """Does the LHS of an assignment (or target of ++/--) refer to ``simple_name``?
+
+    Matches two shapes only (MVP):
+      * bare identifier ``simple_name``
+      * ``field_expression`` whose outermost ``argument`` is an identifier
+        matching ``simple_name`` (e.g. ``g_alarm.dci`` with symbol=``g_alarm``).
+    """
+    if left_node is None:
+        return False
+    if left_node.type == "identifier":
+        return left_node.text.decode("utf-8", errors="replace") == simple_name
+    if left_node.type == "field_expression":
+        arg = left_node.child_by_field_name("argument")
+        # Walk down any inner field_expression chain to find the outermost argument.
+        while arg is not None and arg.type == "field_expression":
+            arg = arg.child_by_field_name("argument")
+        if arg is not None and arg.type == "identifier":
+            return arg.text.decode("utf-8", errors="replace") == simple_name
+    return False
+
+
+def _symbol_usage_collect_writes(
+    root,
+    simple_name: str,
+    source_lines: list[str],
+    module_qn: str,
+    path: str,
+) -> list[dict[str, Any]]:
+    """Collect write sites for ``simple_name`` from one parsed source tree.
+
+    Recognises:
+      * ``assignment_expression`` with ``=`` (``assign_type="direct"``)
+      * ``assignment_expression`` with a compound operator (``+=``, ``|=``, ...)
+        (``assign_type="compound"``)
+      * ``update_expression`` (``x++`` / ``++x`` / ``x--`` / ``--x``)
+        (``assign_type="compound"``, rhs="")
+    """
+    out: list[dict[str, Any]] = []
+
+    def _enclosing_qn(node) -> str:
+        enc = _symbol_usage_enclosing_function(node)
+        return f"{module_qn}.{enc[0]}" if enc else module_qn
+
+    def _ctx(line_no: int) -> str:
+        if 0 < line_no <= len(source_lines):
+            raw = source_lines[line_no - 1].strip()
+            return raw if len(raw) <= 200 else raw[:199] + "…"
+        return ""
+
+    def _visit(node):
+        ntype = node.type
+        if ntype == "assignment_expression":
+            left = node.child_by_field_name("left")
+            if _symbol_usage_lhs_matches(left, simple_name):
+                op_node = node.child_by_field_name("operator")
+                right = node.child_by_field_name("right")
+                op = (
+                    op_node.text.decode("utf-8", errors="replace")
+                    if op_node is not None
+                    else "="
+                )
+                if op == "=":
+                    assign_type = "direct"
+                elif op in _SYMBOL_USAGE_COMPOUND_OPS:
+                    assign_type = "compound"
+                else:
+                    # Unknown operator — treat as compound so we don't lose the edit.
+                    assign_type = "compound"
+                rhs = (
+                    right.text.decode("utf-8", errors="replace").strip()
+                    if right is not None
+                    else ""
+                )
+                line_no = node.start_point[0] + 1
+                out.append({
+                    "mode": "write",
+                    "location": f"{path}:{line_no}",
+                    "enclosing_function": _enclosing_qn(node),
+                    "context": _ctx(line_no),
+                    "assign_type": assign_type,
+                    "op": op,
+                    "rhs": rhs,
+                })
+        elif ntype == "update_expression":
+            arg = node.child_by_field_name("argument")
+            if (
+                arg is not None
+                and arg.type == "identifier"
+                and arg.text.decode("utf-8", errors="replace") == simple_name
+            ):
+                op_node = node.child_by_field_name("operator")
+                op = (
+                    op_node.text.decode("utf-8", errors="replace")
+                    if op_node is not None
+                    else "++"
+                )
+                line_no = node.start_point[0] + 1
+                out.append({
+                    "mode": "write",
+                    "location": f"{path}:{line_no}",
+                    "enclosing_function": _enclosing_qn(node),
+                    "context": _ctx(line_no),
+                    "assign_type": "compound",
+                    "op": op,
+                    "rhs": "",
+                })
+
+        for i in range(node.named_child_count):
+            _visit(node.named_child(i))
+
+    _visit(root)
+    return out
+
+
+def _symbol_usage_collect_scopes(root, module_qn: str) -> set[str]:
+    """Return every valid ``qualified_scope`` rooted at this file.
+
+    Includes the file's own module qn plus ``<module>.<func>`` for each
+    top-level function definition. MVP does not expand member functions or
+    namespaces — the handler's scope matcher also accepts suffix segments,
+    which covers the cases named in the issue without a deeper AST walk.
+    """
+    scopes: set[str] = {module_qn}
+
+    def _visit(node):
+        if node.type == "function_definition":
+            declarator = node.child_by_field_name("declarator")
+            cur = declarator
+            while cur is not None and cur.type != "function_declarator":
+                cur = cur.child_by_field_name("declarator")
+            if cur is not None:
+                name_node = cur.child_by_field_name("declarator")
+                while name_node is not None and name_node.type not in (
+                    "identifier",
+                    "field_identifier",
+                ):
+                    inner = name_node.child_by_field_name("declarator")
+                    if inner is None:
+                        break
+                    name_node = inner
+                if name_node is not None and name_node.type in (
+                    "identifier",
+                    "field_identifier",
+                ):
+                    scopes.add(
+                        f"{module_qn}.{name_node.text.decode('utf-8', errors='replace')}"
+                    )
+        for i in range(node.named_child_count):
+            _visit(node.named_child(i))
+
+    _visit(root)
+    return scopes
 
 
 def _symbol_usage_list_source_files(repo: Path) -> list[tuple[Path, str]]:
@@ -985,18 +1174,20 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="find_symbol_usage",
                 description=(
-                    "Find every READ usage of a C/C++ variable symbol (global "
-                    "or function-scope static) across the indexed repository. "
-                    "Slice 1 MVP: symbol resolution + mode='read'. "
-                    "Accepts a short name like 'g_alarm' or a qualified name "
-                    "like 'module.g_alarm' / 'module.func.counter'. "
-                    "Returns the resolved qualified_name + kind plus, for "
-                    "mode='read'/'all', a list of usages with file:line, the "
-                    "enclosing function's qualified name, and the source line. "
+                    "Find read and/or write usages of a C/C++ variable symbol "
+                    "(global or function-scope static) across the indexed "
+                    "repository. Accepts a short name like 'g_alarm' or a "
+                    "qualified name like 'module.g_alarm' / 'module.func.counter'. "
+                    "Returns the resolved qualified_name + kind plus a list of "
+                    "usages with file:line, the enclosing function's qualified "
+                    "name, and the source line. Writes carry "
+                    "'assign_type' ('direct' for '=', 'compound' for '+='/'|='/"
+                    "'++'/... ), the raw 'op', and 'rhs' (empty for ++/--). "
                     "Rejects enum values, typedefs, functions, and parameters "
                     "with error='symbol is not a variable (kind=X)'. "
-                    "mode='write' is reserved for slice 2 (returns empty + note); "
-                    "qualified_scope is accepted but ignored until slice 2."
+                    "qualified_scope restricts to one function or module qn "
+                    "(full qn or a dot-segment suffix); unknown scopes return "
+                    "error='scope not found: <scope>'."
                 ),
                 input_schema={
                     "type": "object",
@@ -1012,15 +1203,19 @@ class MCPToolsRegistry:
                             "type": "string",
                             "enum": ["read", "write", "all"],
                             "description": (
-                                "Usage category to return. 'read' and 'all' "
-                                "scan read sites; 'write' is a slice-2 stub."
+                                "Usage category to return. 'read' lists read "
+                                "sites, 'write' lists assignment/update sites "
+                                "(direct + compound), 'all' merges both sorted "
+                                "by location."
                             ),
                         },
                         "qualified_scope": {
                             "type": "string",
                             "description": (
-                                "Reserved for slice 2. Accepted but ignored in "
-                                "slice 1 (a note is attached to the result)."
+                                "Restrict results to a function or module qn "
+                                "(full qn like 'proj.alarm_cfg.AlarmCheck_DCI' "
+                                "or a dot-segment suffix like "
+                                "'alarm_cfg.AlarmCheck_DCI')."
                             ),
                         },
                     },
@@ -2693,7 +2888,7 @@ class MCPToolsRegistry:
         }
 
     # -------------------------------------------------------------------------
-    # find_symbol_usage — resolve a symbol and list every read usage (slice 1)
+    # find_symbol_usage — resolve a symbol and list every read/write usage
     # -------------------------------------------------------------------------
 
     async def _handle_find_symbol_usage(
@@ -2702,11 +2897,12 @@ class MCPToolsRegistry:
         mode: str = "all",
         qualified_scope: str | None = None,
     ) -> dict[str, Any]:
-        """Find read usages of a C/C++ variable symbol via AST scan.
+        """Find read/write usages of a C/C++ variable symbol via AST scan.
 
-        Slice 1 MVP: mode=``read`` / ``all`` perform the AST scan; ``write``
-        is accepted but returns an empty list and a note. ``qualified_scope``
-        is accepted but ignored with a note.
+        mode=``read`` / ``write`` / ``all`` select which categories to scan.
+        ``qualified_scope`` restricts results to a single function or module qn
+        (or a dot-segment suffix thereof); unknown scopes yield
+        ``error="scope not found: <scope>"``.
         """
         self._require_active()
 
@@ -2789,24 +2985,31 @@ class MCPToolsRegistry:
 
         matched = uniq[0]
 
-        # ---------- Phase 2: usage scan (mode=read or mode=all) ----------
-        usages: list[dict[str, Any]] = []
-        notes: list[str] = []
+        # ---------- Phase 2: read + write scan (single traversal per file) ----------
+        want_reads = mode in ("read", "all")
+        want_writes = mode in ("write", "all")
 
-        if mode in ("read", "all"):
-            for abs_path, lang_key in source_files:
-                parser = parsers.get(lang_key)
-                if parser is None:
-                    continue
-                try:
-                    source_bytes = abs_path.read_bytes()
-                except OSError:
-                    continue
-                tree = parser.parse(source_bytes)
-                module_qn = _symbol_usage_module_qn(repo_path, abs_path)
-                rel = str(abs_path.relative_to(repo_path))
-                source_lines = source_bytes.decode("utf-8", errors="replace").splitlines()
-                usages.extend(
+        reads: list[dict[str, Any]] = []
+        writes: list[dict[str, Any]] = []
+        all_scopes: set[str] = set()
+
+        for abs_path, lang_key in source_files:
+            parser = parsers.get(lang_key)
+            if parser is None:
+                continue
+            try:
+                source_bytes = abs_path.read_bytes()
+            except OSError:
+                continue
+            tree = parser.parse(source_bytes)
+            module_qn = _symbol_usage_module_qn(repo_path, abs_path)
+            rel = str(abs_path.relative_to(repo_path))
+            source_lines = source_bytes.decode("utf-8", errors="replace").splitlines()
+
+            all_scopes |= _symbol_usage_collect_scopes(tree.root_node, module_qn)
+
+            if want_reads:
+                reads.extend(
                     _symbol_usage_collect_reads(
                         tree.root_node,
                         simple_name,
@@ -2815,20 +3018,66 @@ class MCPToolsRegistry:
                         rel,
                     )
                 )
+            if want_writes:
+                writes.extend(
+                    _symbol_usage_collect_writes(
+                        tree.root_node,
+                        simple_name,
+                        source_lines,
+                        module_qn,
+                        rel,
+                    )
+                )
 
-            if matched["kind"] == "static_local":
-                # Restrict to usages inside the owning function.
-                usages = [
-                    u for u in usages if u["enclosing_function"] == matched["qualified_name"].rsplit(".", 1)[0]
-                ]
+        # Static-local symbols: restrict to their owning function.
+        if matched["kind"] == "static_local":
+            owner = matched["qualified_name"].rsplit(".", 1)[0]
+            reads = [u for u in reads if u["enclosing_function"] == owner]
+            writes = [u for u in writes if u["enclosing_function"] == owner]
 
-        if mode in ("write", "all"):
-            notes.append("write mode arrives in slice 2")
-
+        # qualified_scope: resolve to one or more valid qns, then filter usages.
         if qualified_scope is not None:
-            notes.append("scope filter arrives in slice 2")
+            if qualified_scope in all_scopes:
+                matching_qns = {qualified_scope}
+            else:
+                suffix_marker = "." + qualified_scope
+                matching_qns = {s for s in all_scopes if s.endswith(suffix_marker)}
+            if not matching_qns:
+                return {
+                    "success": False,
+                    "error": f"scope not found: {qualified_scope}",
+                    "symbol": symbol,
+                }
 
-        result: dict[str, Any] = {
+            def _in_scope(u: dict[str, Any]) -> bool:
+                enc = u["enclosing_function"]
+                return any(
+                    enc == q or enc.startswith(q + ".") for q in matching_qns
+                )
+
+            reads = [u for u in reads if _in_scope(u)]
+            writes = [u for u in writes if _in_scope(u)]
+
+        if mode == "read":
+            usages = reads
+        elif mode == "write":
+            usages = writes
+        else:
+            usages = reads + writes
+
+        def _loc_key(u: dict[str, Any]) -> tuple[str, int]:
+            loc = u["location"]
+            if ":" in loc:
+                p, l = loc.rsplit(":", 1)
+                try:
+                    return (p, int(l))
+                except ValueError:
+                    return (p, 0)
+            return (loc, 0)
+
+        usages.sort(key=_loc_key)
+
+        return {
             "success": True,
             "symbol": symbol,
             "matched": {
@@ -2837,11 +3086,8 @@ class MCPToolsRegistry:
                 "path": matched["path"],
                 "line": matched["line"],
             },
-            "usages": usages if mode in ("read", "all") else [],
+            "usages": usages,
         }
-        if notes:
-            result["note"] = "; ".join(notes)
-        return result
 
     # -------------------------------------------------------------------------
     # find_symbol_in_docs — search pre-built API docs for global variable refs

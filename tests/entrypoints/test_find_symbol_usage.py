@@ -1,10 +1,10 @@
-"""Tests for the `find_symbol_usage` MCP tool (slice 1/3 — MVP).
+"""Tests for the `find_symbol_usage` MCP tool (slices 1+2).
 
-This slice implements:
-    * symbol resolution (short name → qualified_name + kind)
-    * mode="read" usage scanning (mode="all" reuses the same branch)
-
-mode="write" and qualified_scope are stubs that return empty + note.
+Slice 1 delivered symbol resolution and mode="read" / "all" read collection.
+Slice 2 layers on write collection (direct assignments, compound assignments,
+and ++/-- update expressions), merges read+write for mode="all", and adds
+``qualified_scope`` filtering with a "scope not found" error for invalid
+scopes.
 """
 
 from __future__ import annotations
@@ -227,55 +227,11 @@ int handle(int code) {
 
 
 # ---------------------------------------------------------------------------
-# mode + qualified_scope stubs
+# Mode validation
 # ---------------------------------------------------------------------------
 
 
-class TestModeAndScopeStubs:
-    def test_write_mode_returns_empty_with_note(self, tmp_path):
-        repo = tmp_path / "proj"
-        repo.mkdir()
-        (repo / "a.c").write_text(
-            """\
-int g_alarm = 0;
-
-int reader(void) { return g_alarm; }
-void writer(int v) { g_alarm = v; }
-""",
-            encoding="utf-8",
-        )
-
-        registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
-
-        assert result["success"] is True
-        assert result["usages"] == []
-        assert "note" in result
-        assert "slice 2" in result["note"]
-
-    def test_qualified_scope_accepted_but_ignored_with_note(self, tmp_path):
-        repo = tmp_path / "proj"
-        repo.mkdir()
-        (repo / "a.c").write_text(
-            """\
-int g_alarm = 0;
-
-int reader(void) { return g_alarm; }
-""",
-            encoding="utf-8",
-        )
-
-        registry = _make_registry(tmp_path, repo)
-        result = _call(
-            registry,
-            "find_symbol_usage",
-            {"symbol": "g_alarm", "mode": "read", "qualified_scope": "some.module"},
-        )
-
-        assert result["success"] is True
-        assert "note" in result
-        assert "scope" in result["note"]
-
+class TestModeValidation:
     def test_invalid_mode_raises(self, tmp_path):
         """mode must be one of read/write/all — anything else is rejected."""
         from terrain.entrypoints.mcp.tools import ToolError
@@ -288,6 +244,358 @@ int reader(void) { return g_alarm; }
         handler = registry.get_handler("find_symbol_usage")
         with pytest.raises(ToolError):
             _run(handler(symbol="g", mode="bogus"))
+
+
+# ---------------------------------------------------------------------------
+# Write-mode collection (slice 2)
+# ---------------------------------------------------------------------------
+
+
+class TestWriteModeCollection:
+    def test_direct_assignment(self, tmp_path):
+        """`g_alarm = 0;` → assign_type=direct, op="=", rhs="0"."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_alarm = 0;
+
+void clear(void) { g_alarm = 0; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+
+        assert result["success"] is True
+        # The file-scope initializer `int g_alarm = 0;` is a declaration, not an
+        # assignment_expression, so only the write inside clear() is reported.
+        assert len(result["usages"]) == 1
+        u = result["usages"][0]
+        assert u["mode"] == "write"
+        assert u["assign_type"] == "direct"
+        assert u["op"] == "="
+        assert u["rhs"] == "0"
+        assert u["enclosing_function"].endswith(".clear")
+
+    def test_compound_assignment_preserves_operator(self, tmp_path):
+        """`g_alarm |= ERR_MASK;` → compound, op="|=", rhs="ERR_MASK" (not normalized)."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_alarm = 0;
+
+void set_err(void) { g_alarm |= ERR_MASK; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+
+        assert result["success"] is True
+        assert len(result["usages"]) == 1
+        u = result["usages"][0]
+        assert u["assign_type"] == "compound"
+        assert u["op"] == "|="
+        # rhs preserves the original expression verbatim — no `x | ERR_MASK` rewrite.
+        assert u["rhs"] == "ERR_MASK"
+
+    def test_all_compound_operators_covered(self, tmp_path):
+        """+=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=  are all assign_type=compound."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_x = 0;
+
+void churn(int v) {
+    g_x += v;
+    g_x -= v;
+    g_x *= v;
+    g_x /= v;
+    g_x %= v;
+    g_x &= v;
+    g_x |= v;
+    g_x ^= v;
+    g_x <<= v;
+    g_x >>= v;
+}
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_x", "mode": "write"})
+
+        assert result["success"] is True
+        ops = [u["op"] for u in result["usages"]]
+        assert sorted(ops) == sorted(
+            ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
+        )
+        for u in result["usages"]:
+            assert u["assign_type"] == "compound"
+            assert u["rhs"] == "v"
+
+    def test_update_expression_is_compound_write(self, tmp_path):
+        """`g_alarm++` / `--g_alarm` → compound, op="++"/"--" with empty rhs."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_alarm = 0;
+
+void tick(void) {
+    g_alarm++;
+    --g_alarm;
+}
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+
+        assert result["success"] is True
+        ops = sorted(u["op"] for u in result["usages"])
+        assert ops == ["++", "--"]
+        for u in result["usages"]:
+            assert u["assign_type"] == "compound"
+            assert u["rhs"] == ""
+
+    def test_struct_field_assignment_hits_object_symbol(self, tmp_path):
+        """`g_alarm.dci = 1;` with symbol=`g_alarm` counts as a write of the object."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+struct Alarm { int dci; };
+struct Alarm g_alarm;
+
+void raise(void) { g_alarm.dci = 1; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+
+        assert result["success"] is True
+        assert len(result["usages"]) == 1
+        u = result["usages"][0]
+        assert u["assign_type"] == "direct"
+        assert u["op"] == "="
+        assert u["rhs"] == "1"
+
+    def test_struct_field_write_is_not_also_a_read(self, tmp_path):
+        """With mode=all, `g_alarm.dci = 1;` produces one write, zero reads."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+struct Alarm { int dci; };
+struct Alarm g_alarm;
+
+void raise(void) { g_alarm.dci = 1; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "all"})
+
+        modes = [u["mode"] for u in result["usages"]]
+        assert modes == ["write"]
+
+    def test_pointer_deref_write_is_skipped_for_mvp(self, tmp_path):
+        """`(*p) = 1;` is NOT recognized as a write of `p` in the MVP."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int *p = 0;
+
+void do_it(void) { (*p) = 1; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "p", "mode": "write"})
+
+        assert result["success"] is True
+        assert result["usages"] == []
+
+    def test_assignment_inside_if_condition(self, tmp_path):
+        """`if ((g_alarm = get()) != 0)` is a write site."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_alarm = 0;
+int get(void) { return 1; }
+
+void probe(void) {
+    if ((g_alarm = get()) != 0) {
+        return;
+    }
+}
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+
+        assert result["success"] is True
+        assert len(result["usages"]) == 1
+        assert result["usages"][0]["op"] == "="
+        assert result["usages"][0]["rhs"] == "get()"
+
+
+# ---------------------------------------------------------------------------
+# mode="all" merges read + write and sorts by location
+# ---------------------------------------------------------------------------
+
+
+class TestModeAll:
+    def test_reads_and_writes_sorted_by_location(self, tmp_path):
+        """mode="all" merges both lists and sorts by (file, line)."""
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "a.c").write_text(
+            """\
+int g_alarm = 0;
+
+int reader(void) { return g_alarm; }
+void writer(int v) { g_alarm = v; }
+void tick(void) { g_alarm++; }
+""",
+            encoding="utf-8",
+        )
+
+        registry = _make_registry(tmp_path, repo)
+        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "all"})
+
+        assert result["success"] is True
+        usages = result["usages"]
+        assert {u["mode"] for u in usages} == {"read", "write"}
+
+        def _line(u):
+            return int(u["location"].rsplit(":", 1)[1])
+
+        lines = [_line(u) for u in usages]
+        assert lines == sorted(lines)
+
+
+# ---------------------------------------------------------------------------
+# qualified_scope filtering (slice 2)
+# ---------------------------------------------------------------------------
+
+
+class TestQualifiedScope:
+    def _fixture(self, tmp_path):
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "alarm_cfg.c").write_text(
+            """\
+int g_alarm = 0;
+
+void AlarmCheck_DCI(void) {
+    g_alarm = 0;
+    g_alarm |= 0x01;
+    g_alarm++;
+}
+
+void OtherCheck(void) {
+    g_alarm = 1;
+}
+""",
+            encoding="utf-8",
+        )
+        return repo
+
+    def test_function_scope_filters_other_functions(self, tmp_path):
+        repo = self._fixture(tmp_path)
+        registry = _make_registry(tmp_path, repo)
+        result = _call(
+            registry,
+            "find_symbol_usage",
+            {
+                "symbol": "g_alarm",
+                "mode": "write",
+                "qualified_scope": "proj.alarm_cfg.AlarmCheck_DCI",
+            },
+        )
+
+        assert result["success"] is True
+        # Only the three writes inside AlarmCheck_DCI.
+        assert len(result["usages"]) == 3
+        for u in result["usages"]:
+            assert u["enclosing_function"] == "proj.alarm_cfg.AlarmCheck_DCI"
+
+    def test_module_scope_includes_all_functions_in_module(self, tmp_path):
+        repo = self._fixture(tmp_path)
+        registry = _make_registry(tmp_path, repo)
+        result = _call(
+            registry,
+            "find_symbol_usage",
+            {"symbol": "g_alarm", "mode": "write", "qualified_scope": "proj.alarm_cfg"},
+        )
+
+        assert result["success"] is True
+        # Three writes in AlarmCheck_DCI + one in OtherCheck = 4.
+        assert len(result["usages"]) == 4
+
+    def test_scope_not_found_returns_error(self, tmp_path):
+        repo = self._fixture(tmp_path)
+        registry = _make_registry(tmp_path, repo)
+        result = _call(
+            registry,
+            "find_symbol_usage",
+            {"symbol": "g_alarm", "qualified_scope": "proj.nonexistent"},
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "scope not found: proj.nonexistent"
+
+    def test_scope_filter_applies_to_mode_all(self, tmp_path):
+        repo = self._fixture(tmp_path)
+        registry = _make_registry(tmp_path, repo)
+        # Add a reader in AlarmCheck_DCI by augmenting the fixture.
+        (repo / "alarm_cfg.c").write_text(
+            """\
+int g_alarm = 0;
+
+void AlarmCheck_DCI(void) {
+    if (g_alarm) {
+        g_alarm = 0;
+    }
+}
+
+void OtherCheck(void) {
+    g_alarm = 1;
+}
+""",
+            encoding="utf-8",
+        )
+        result = _call(
+            registry,
+            "find_symbol_usage",
+            {
+                "symbol": "g_alarm",
+                "mode": "all",
+                "qualified_scope": "proj.alarm_cfg.AlarmCheck_DCI",
+            },
+        )
+
+        assert result["success"] is True
+        for u in result["usages"]:
+            assert u["enclosing_function"] == "proj.alarm_cfg.AlarmCheck_DCI"
+        modes = {u["mode"] for u in result["usages"]}
+        assert modes == {"read", "write"}
 
 
 # ---------------------------------------------------------------------------
