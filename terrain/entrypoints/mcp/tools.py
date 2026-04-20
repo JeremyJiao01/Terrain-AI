@@ -326,12 +326,12 @@ def _extract_predicates_function_name(func_node) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# find_symbol_usage helpers (slice 1/3)
+# Variable-usage helpers (powering the AST-level mode of find_symbol_in_docs).
 #
 # These walk the tree-sitter AST of every C/C++ source file under the active
 # repository to (a) resolve a short or qualified symbol name to exactly one
-# variable declaration and (b) list every read usage. Variable nodes are not
-# yet indexed in the graph, so everything is computed on demand.
+# variable declaration and (b) list every read/write usage. Variable nodes
+# are not indexed in the graph, so everything is computed on demand.
 # ---------------------------------------------------------------------------
 
 # Source-file extensions we scan for variable declarations/usages.
@@ -1386,76 +1386,34 @@ class MCPToolsRegistry:
             # Symbol / global-variable lookup
             # -----------------------------------------------------------------
             ToolDefinition(
-                name="find_symbol_usage",
-                description=(
-                    "Find read and/or write usages of a C/C++ variable symbol "
-                    "(global or function-scope static) across the indexed "
-                    "repository. Accepts a short name like 'g_alarm' or a "
-                    "qualified name like 'module.g_alarm' / 'module.func.counter'. "
-                    "Returns the resolved qualified_name + kind plus a list of "
-                    "usages with file:line, the enclosing function's qualified "
-                    "name, and the source line. Writes carry 'assign_type' "
-                    "('direct' for '=', 'compound' for '+='/'|='/'++'/..., "
-                    "'via_memcpy' for memcpy-family destinations, 'address_of' "
-                    "for `&sym` passed to a non-readonly function, "
-                    "'pointer_deref_write' for `*p = ...` where `p` aliases "
-                    "`&sym` within the same function), the raw 'op', and 'rhs' "
-                    "(full call expression for via_memcpy/address_of, empty for ++/--). "
-                    "Rejects enum values, typedefs, functions, and parameters "
-                    "with error='symbol is not a variable (kind=X)'. "
-                    "qualified_scope restricts to one function or module qn "
-                    "(full qn or a dot-segment suffix); unknown scopes return "
-                    "error='scope not found: <scope>'."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "symbol": {
-                            "type": "string",
-                            "description": (
-                                "Variable short name (e.g. 'g_alarm') or "
-                                "qualified name (e.g. 'proj.alarm.g_alarm')."
-                            ),
-                        },
-                        "mode": {
-                            "type": "string",
-                            "enum": ["read", "write", "all"],
-                            "description": (
-                                "Usage category to return. 'read' lists read "
-                                "sites, 'write' lists assignment/update sites "
-                                "(direct + compound), 'all' merges both sorted "
-                                "by location."
-                            ),
-                        },
-                        "qualified_scope": {
-                            "type": "string",
-                            "description": (
-                                "Restrict results to a function or module qn "
-                                "(full qn like 'proj.alarm_cfg.AlarmCheck_DCI' "
-                                "or a dot-segment suffix like "
-                                "'alarm_cfg.AlarmCheck_DCI')."
-                            ),
-                        },
-                    },
-                    "required": ["symbol"],
-                },
-            ),
-            ToolDefinition(
                 name="find_symbol_in_docs",
                 description=(
-                    "Find all functions that reference a specific global variable, "
-                    "constant, or symbol. Searches the pre-built API docs for "
-                    "'## 全局变量引用' entries — i.e. UPPER_CASE identifiers and "
-                    "explicit `global` declarations extracted from each function's "
-                    "source code at index time.\n\n"
-                    "Use this when the user asks:\n"
-                    "- 'Where is CONFIG_FILE used?'\n"
-                    "- 'Which functions read MAX_RETRY?'\n"
-                    "- 'What touches the DB_URL constant?'\n\n"
-                    "Returns a list of matching functions with their module, file "
-                    "location, and the full '## 全局变量引用' section of each match "
-                    "so the user can see all globals alongside the target symbol. "
-                    "Use get_api_doc on any result for full source and call graph details."
+                    "Find where a symbol is used. Two modes depending on the parameters:\n\n"
+                    "1. **Doc-based reference search (default)** — when neither `mode` nor "
+                    "`qualified_scope` is supplied. Scans the pre-built API docs for "
+                    "'## 全局变量引用' entries (UPPER_CASE identifiers and explicit "
+                    "`global` declarations captured at index time). Returns functions "
+                    "with their module, file location, and the full '## 全局变量引用' "
+                    "section of each match. Use for questions like "
+                    "'Where is CONFIG_FILE used?' / 'Which functions read MAX_RETRY?'.\n\n"
+                    "2. **AST-level variable read/write usage** — when `mode` or "
+                    "`qualified_scope` is supplied. Resolves the symbol against the "
+                    "source tree and lists every read/write site for a C/C++ variable "
+                    "(global or function-scope static). Accepts a short name "
+                    "('g_alarm') or a qualified name ('module.g_alarm' / "
+                    "'module.func.counter'). Returns the resolved qualified_name + "
+                    "kind plus a list of usages with file:line, the enclosing "
+                    "function's qualified name, and the source line. Writes carry "
+                    "'assign_type' ('direct' for '=', 'compound' for '+='/'|='/'++'/..., "
+                    "'via_memcpy' for memcpy-family destinations, 'address_of' for "
+                    "`&sym` passed to a non-readonly function, 'pointer_deref_write' "
+                    "for `*p = ...` where `p` aliases `&sym` within the same function), "
+                    "the raw 'op', and 'rhs' (full call expression for via_memcpy/"
+                    "address_of, empty for ++/--). Rejects enum values, typedefs, "
+                    "functions, and parameters with "
+                    "error='symbol is not a variable (kind=X)'. qualified_scope "
+                    "restricts to one function or module qn (full qn or a dot-segment "
+                    "suffix); unknown scopes return error='scope not found: <scope>'."
                 ),
                 input_schema={
                     "type": "object",
@@ -1464,12 +1422,36 @@ class MCPToolsRegistry:
                             "type": "string",
                             "description": (
                                 "Name of the symbol to look up "
-                                "(e.g. 'CONFIG_FILE', 'MAX_RETRY', 'DB_URL')."
+                                "(e.g. 'CONFIG_FILE', 'g_alarm', "
+                                "'proj.alarm.g_alarm')."
                             ),
                         },
                         "max_results": {
                             "type": "integer",
-                            "description": "Maximum number of results to return. Default: 30.",
+                            "description": (
+                                "Doc-based mode only: maximum number of results "
+                                "to return. Default: 30."
+                            ),
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["read", "write", "all"],
+                            "description": (
+                                "Opt into AST-level variable usage mode. 'read' "
+                                "lists read sites, 'write' lists assignment/update "
+                                "sites (direct + compound), 'all' merges both "
+                                "sorted by location."
+                            ),
+                        },
+                        "qualified_scope": {
+                            "type": "string",
+                            "description": (
+                                "AST-level mode only: restrict results to a "
+                                "function or module qn (full qn like "
+                                "'proj.alarm_cfg.AlarmCheck_DCI' or a dot-segment "
+                                "suffix like 'alarm_cfg.AlarmCheck_DCI'). "
+                                "Supplying this alone also selects AST-level mode."
+                            ),
                         },
                     },
                     "required": ["symbol"],
@@ -1548,7 +1530,6 @@ class MCPToolsRegistry:
             "trace_call_chain": self._handle_trace_call_chain,
             "get_merge_diff": self._handle_get_merge_diff,
             "find_symbol_in_docs": self._handle_find_symbol_in_docs,
-            "find_symbol_usage": self._handle_find_symbol_usage,
             "extract_predicates": self._handle_extract_predicates,
         }
         return handlers.get(name)
@@ -1782,8 +1763,8 @@ class MCPToolsRegistry:
                 "- `get_api_doc` -- read detailed docs for any function (signature, call tree, source)\n"
                 "- `find_callers` -- find every function that calls a given function\n"
                 "- `trace_call_chain` -- trace the full call chain from entry points to a target\n"
-                "- `find_symbol_in_docs` -- find all functions that reference a global variable or constant\n"
-                "- `find_symbol_usage` -- list every READ usage of a C/C++ global or static-local variable (AST-level)\n\n"
+                "- `find_symbol_in_docs` -- find symbol usage: doc-based global/constant refs by default, "
+                "or pass `mode`/`qualified_scope` for AST-level read/write sites of a C/C++ variable\n\n"
                 "Tell the user what was indexed and ask what they would like to explore."
             )
             return result
@@ -3140,10 +3121,12 @@ class MCPToolsRegistry:
         }
 
     # -------------------------------------------------------------------------
-    # find_symbol_usage — resolve a symbol and list every read/write usage
+    # Variable-usage helper — resolve a C/C++ variable symbol and list every
+    # read/write usage. Invoked from _handle_find_symbol_in_docs when the caller
+    # opts into AST-level mode by supplying `mode` or `qualified_scope`.
     # -------------------------------------------------------------------------
 
-    async def _handle_find_symbol_usage(
+    async def _find_symbol_variable_usage(
         self,
         symbol: str,
         mode: str = "all",
@@ -3349,6 +3332,8 @@ class MCPToolsRegistry:
         self,
         symbol: str,
         max_results: int = 30,
+        mode: str | None = None,
+        qualified_scope: str | None = None,
     ) -> dict[str, Any]:
         """Find all functions that reference *symbol* in their '全局变量引用' section.
 
@@ -3357,7 +3342,19 @@ class MCPToolsRegistry:
         function's source code.  This handler first checks for a pre-built
         ``symbol_index.json`` (O(1) lookup) and falls back to a full scan of
         ``*.md`` files when the index is absent (older repos).
+
+        When the caller supplies ``mode`` or ``qualified_scope`` the handler
+        switches to AST-level variable usage mode, resolving the symbol against
+        the source tree and returning every read/write site for C/C++ globals
+        and function-scope statics (previously the ``find_symbol_usage`` tool).
         """
+        if mode is not None or qualified_scope is not None:
+            return await self._find_symbol_variable_usage(
+                symbol,
+                mode=mode if mode is not None else "all",
+                qualified_scope=qualified_scope,
+            )
+
         self._require_active()
 
         api_docs_dir = self._active_artifact_dir / "api_docs" / "funcs"
