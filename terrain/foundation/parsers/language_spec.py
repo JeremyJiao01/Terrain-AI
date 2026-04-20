@@ -455,6 +455,14 @@ LANGUAGE_SPECS: dict[cs.SupportedLanguage, LanguageSpec] = {
     field: (field_identifier) @field)
   right: (identifier) @rhs) @assign
 """,
+        predicate_query="""
+(if_statement) @if
+(while_statement) @while
+(do_statement) @do_while
+(for_statement) @for
+(case_statement) @switch_case
+(conditional_expression) @ternary
+""",
     ),
     cs.SupportedLanguage.CPP: LanguageSpec(
         language=cs.SupportedLanguage.CPP,
