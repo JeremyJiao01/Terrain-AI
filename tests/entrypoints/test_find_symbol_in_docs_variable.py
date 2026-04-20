@@ -1,10 +1,12 @@
-"""Tests for the `find_symbol_usage` MCP tool (slices 1+2).
+"""Tests for AST-level variable usage via the `find_symbol_in_docs` MCP tool.
 
-Slice 1 delivered symbol resolution and mode="read" / "all" read collection.
-Slice 2 layers on write collection (direct assignments, compound assignments,
-and ++/-- update expressions), merges read+write for mode="all", and adds
-``qualified_scope`` filtering with a "scope not found" error for invalid
-scopes.
+Previously delivered by the standalone `find_symbol_usage` tool and merged
+here after JER-79: when a caller supplies ``mode`` or ``qualified_scope``
+`find_symbol_in_docs` switches from the doc-based UPPER_CASE reference
+search to the AST-level read/write scanner covered by these tests (symbol
+resolution, direct/compound/via_memcpy/address_of/pointer_deref_write
+writes, qualified_scope filtering, static-local isolation, and assorted
+edge cases).
 """
 
 from __future__ import annotations
@@ -23,8 +25,8 @@ def _run(coro):
 def _make_registry(tmp_path: Path, repo: Path):
     """Build an MCPToolsRegistry pointed at *repo* without running the indexer.
 
-    Slice 1 of find_symbol_usage computes everything on demand by parsing
-    source files with tree-sitter, so we don't need a real indexed artifact.
+    AST-level variable usage is computed on demand by parsing source files
+    with tree-sitter, so we don't need a real indexed artifact.
     """
     from terrain.entrypoints.mcp.tools import MCPToolsRegistry
 
@@ -41,7 +43,17 @@ def _make_registry(tmp_path: Path, repo: Path):
 def _call(registry, tool_name: str, args: dict | None = None):
     handler = registry.get_handler(tool_name)
     assert handler is not None, f"Tool '{tool_name}' not registered"
-    result = _run(handler(**(args or {})))
+    kwargs = dict(args or {})
+    # Every test in this file targets AST-level variable usage — make sure the
+    # call opts into that mode by defaulting `mode="all"` when the test omits
+    # both `mode` and `qualified_scope`.
+    if (
+        tool_name == "find_symbol_in_docs"
+        and "mode" not in kwargs
+        and "qualified_scope" not in kwargs
+    ):
+        kwargs["mode"] = "all"
+    result = _run(handler(**kwargs))
     return json.loads(json.dumps(result, ensure_ascii=False, default=str))
 
 
@@ -56,13 +68,28 @@ class TestRegistration:
 
         reg = MCPToolsRegistry(tmp_path / "workspace")
         names = [t.name for t in reg.tools()]
-        assert "find_symbol_usage" in names
+        assert "find_symbol_in_docs" in names
+        # find_symbol_usage was merged into find_symbol_in_docs (JER-79) and
+        # should no longer be advertised as a separate tool.
+        assert "find_symbol_usage" not in names
 
     def test_handler_dispatches(self, tmp_path):
         from terrain.entrypoints.mcp.tools import MCPToolsRegistry
 
         reg = MCPToolsRegistry(tmp_path / "workspace")
-        assert reg.get_handler("find_symbol_usage") is not None
+        assert reg.get_handler("find_symbol_in_docs") is not None
+        assert reg.get_handler("find_symbol_usage") is None
+
+    def test_tool_schema_advertises_mode_and_qualified_scope(self, tmp_path):
+        """AST-level mode is opt-in via `mode` / `qualified_scope` parameters."""
+        from terrain.entrypoints.mcp.tools import MCPToolsRegistry
+
+        reg = MCPToolsRegistry(tmp_path / "workspace")
+        tool = next(t for t in reg.tools() if t.name == "find_symbol_in_docs")
+        props = tool.input_schema["properties"]
+        assert "mode" in props
+        assert props["mode"]["enum"] == ["read", "write", "all"]
+        assert "qualified_scope" in props
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +125,7 @@ void print_alarm(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "read"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "read"})
 
         assert result["success"] is True
         assert result["matched"]["kind"] == "global"
@@ -118,7 +145,7 @@ void print_alarm(void) {
         (repo / "a.c").write_text("int g_real = 1;\n", encoding="utf-8")
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_missing"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_missing"})
 
         assert result["success"] is False
         assert result["error"] == "symbol not found"
@@ -149,7 +176,7 @@ int bar(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "counter"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "counter"})
 
         assert result["success"] is False
         assert result["error"] == "ambiguous"
@@ -186,11 +213,11 @@ int bar(void) {
 
         registry = _make_registry(tmp_path, repo)
         # First call returns the ambiguous candidates; pick one.
-        ambiguous = _call(registry, "find_symbol_usage", {"symbol": "counter"})
+        ambiguous = _call(registry, "find_symbol_in_docs", {"symbol": "counter"})
         assert ambiguous["error"] == "ambiguous"
         target_qn = next(c for c in ambiguous["candidates"] if "a.foo" in c or c.endswith("a.foo.counter"))
 
-        result = _call(registry, "find_symbol_usage", {"symbol": target_qn, "mode": "read"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": target_qn, "mode": "read"})
         assert result["success"] is True
         assert result["matched"]["qualified_name"] == target_qn
         assert result["matched"]["kind"] == "static_local"
@@ -219,7 +246,7 @@ int handle(int code) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "ERR_DCI_POS"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "ERR_DCI_POS"})
 
         assert result["success"] is False
         assert "not a variable" in result["error"]
@@ -241,7 +268,7 @@ class TestModeValidation:
         (repo / "a.c").write_text("int g = 0;\n", encoding="utf-8")
 
         registry = _make_registry(tmp_path, repo)
-        handler = registry.get_handler("find_symbol_usage")
+        handler = registry.get_handler("find_symbol_in_docs")
         with pytest.raises(ToolError):
             _run(handler(symbol="g", mode="bogus"))
 
@@ -266,7 +293,7 @@ void clear(void) { g_alarm = 0; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         # The file-scope initializer `int g_alarm = 0;` is a declaration, not an
@@ -293,7 +320,7 @@ void set_err(void) { g_alarm |= ERR_MASK; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -328,7 +355,7 @@ void churn(int v) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_x", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_x", "mode": "write"})
 
         assert result["success"] is True
         ops = [u["op"] for u in result["usages"]]
@@ -356,7 +383,7 @@ void tick(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         ops = sorted(u["op"] for u in result["usages"])
@@ -380,7 +407,7 @@ void raise(void) { g_alarm.dci = 1; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -404,7 +431,7 @@ void raise(void) { g_alarm.dci = 1; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "all"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "all"})
 
         modes = [u["mode"] for u in result["usages"]]
         assert modes == ["write"]
@@ -423,7 +450,7 @@ void do_it(void) { (*p) = 1; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "p", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "p", "mode": "write"})
 
         assert result["success"] is True
         assert result["usages"] == []
@@ -447,7 +474,7 @@ void probe(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -477,7 +504,7 @@ void tick(void) { g_alarm++; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "all"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "all"})
 
         assert result["success"] is True
         usages = result["usages"]
@@ -522,7 +549,7 @@ void OtherCheck(void) {
         registry = _make_registry(tmp_path, repo)
         result = _call(
             registry,
-            "find_symbol_usage",
+            "find_symbol_in_docs",
             {
                 "symbol": "g_alarm",
                 "mode": "write",
@@ -541,7 +568,7 @@ void OtherCheck(void) {
         registry = _make_registry(tmp_path, repo)
         result = _call(
             registry,
-            "find_symbol_usage",
+            "find_symbol_in_docs",
             {"symbol": "g_alarm", "mode": "write", "qualified_scope": "proj.alarm_cfg"},
         )
 
@@ -554,7 +581,7 @@ void OtherCheck(void) {
         registry = _make_registry(tmp_path, repo)
         result = _call(
             registry,
-            "find_symbol_usage",
+            "find_symbol_in_docs",
             {"symbol": "g_alarm", "qualified_scope": "proj.nonexistent"},
         )
 
@@ -583,7 +610,7 @@ void OtherCheck(void) {
         )
         result = _call(
             registry,
-            "find_symbol_usage",
+            "find_symbol_in_docs",
             {
                 "symbol": "g_alarm",
                 "mode": "all",
@@ -618,7 +645,7 @@ int get_it(void) { return g_val; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_val", "mode": "read"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_val", "mode": "read"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -640,7 +667,7 @@ int read_field(struct S *s) { return s->g_val; }
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_val", "mode": "read"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_val", "mode": "read"})
 
         assert result["success"] is True
         # Only read_global counts — the struct field access does not.
@@ -670,7 +697,7 @@ void copy_in(const void *src, unsigned n) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -696,7 +723,7 @@ void clear(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -720,7 +747,7 @@ void copy_buf(const char *src, unsigned n) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_buf", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_buf", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -751,7 +778,7 @@ void run(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -777,7 +804,7 @@ void run(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -801,7 +828,7 @@ int eq(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
 
         assert result["success"] is True
         assert result["usages"] == []
@@ -820,7 +847,7 @@ void dump(void) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
         assert result["success"] is True
         assert result["usages"] == []
 
@@ -841,7 +868,7 @@ void run(void) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_a", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_a", "mode": "write"})
         assert result["success"] is True
         assert len(result["usages"]) == 1
         assert result["usages"][0]["assign_type"] == "address_of"
@@ -871,7 +898,7 @@ void poke(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert len(result["usages"]) == 1
@@ -897,7 +924,7 @@ void poke(void) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
 
         assert result["success"] is True
         assert result["usages"] == []
@@ -923,7 +950,7 @@ void bar(int *p) {
         )
 
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
 
         assert result["success"] is True
         # Only foo() has the alias, and it doesn't deref-write — so zero hits.
@@ -946,7 +973,7 @@ void poke(void) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
         assert result["success"] is True
         assert len(result["usages"]) == 1
         assert result["usages"][0]["assign_type"] == "pointer_deref_write"
@@ -971,7 +998,7 @@ void foo(void) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "local_cnt"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "local_cnt"})
         assert result["success"] is True
         assert result["matched"]["kind"] == "static_local"
         # Qualified name includes the function name segment.
@@ -990,7 +1017,7 @@ void tick(void) { counter++; }
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "counter"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "counter"})
         assert result["success"] is True
         assert result["matched"]["kind"] == "global"
 
@@ -1016,7 +1043,7 @@ uint32_t hw_get(void) { return g_reg; }
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_reg", "mode": "all"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_reg", "mode": "all"})
         assert result["success"] is True
         modes = [u["mode"] for u in result["usages"]]
         assert sorted(modes) == ["read", "write"]
@@ -1038,7 +1065,7 @@ void run(void) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g", "mode": "write"})
         assert result["success"] is True
         # SET_FLAG looks like a call but `g` is passed as a bare identifier (not
         # &g), and SET_FLAG is not in the memcpy whitelist — so no write.
@@ -1059,7 +1086,7 @@ void store(int i, int v) {
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_array", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_array", "mode": "write"})
         assert result["success"] is True
         assert len(result["usages"]) == 1
         u = result["usages"][0]
@@ -1088,7 +1115,7 @@ void readonly_use(void) { (void)memcmp(&g_alarm, &g_alarm, sizeof(g_alarm)); }
             encoding="utf-8",
         )
         registry = _make_registry(tmp_path, repo)
-        result = _call(registry, "find_symbol_usage", {"symbol": "g_alarm", "mode": "write"})
+        result = _call(registry, "find_symbol_in_docs", {"symbol": "g_alarm", "mode": "write"})
         assert result["success"] is True
         types = sorted(u["assign_type"] for u in result["usages"])
         assert types == [
