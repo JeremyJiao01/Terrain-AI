@@ -387,7 +387,7 @@ def _get_workspace_root() -> Path:
 def _load_repos(ws: Path) -> list[dict]:
     """Return all indexed repos, sorted by name, with 'active' flag set."""
     active_file = ws / "active.txt"
-    active_name = active_file.read_text(encoding="utf-8").strip() if active_file.exists() else ""
+    active_name = active_file.read_text(encoding="utf-8", errors="replace").strip() if active_file.exists() else ""
 
     repos: list[dict] = []
     if not ws.exists():
@@ -399,8 +399,8 @@ def _load_repos(ws: Path) -> list[dict]:
         if not meta_file.exists():
             continue
         try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue
         resolved = _resolve_artifact_dir(child)
         repos.append({
@@ -441,8 +441,8 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         if not meta_file.exists():
             continue
         try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue
 
         name = meta.get("repo_name", child.name)
@@ -1210,8 +1210,8 @@ def _rename_repo(artifact_dir: Path, new_name: str) -> None:
     if not meta_file.exists():
         return
     try:
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return
     meta["repo_name"] = new_name
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1314,8 +1314,8 @@ def cmd_link(args: argparse.Namespace) -> int:
             meta: dict = {}
             if has_meta:
                 try:
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
+                    meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
+                except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                     pass
 
             candidates.append({
@@ -1441,8 +1441,8 @@ def _link_update_meta(artifact_dir: Path, repo_path: "Path | PurePath",
     existing: dict = {}
     if meta_file.exists():
         try:
-            existing = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            existing = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             pass
 
     meta = {
@@ -1873,7 +1873,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
         return 0
 
     active_file = ws / "active.txt"
-    active_name = active_file.read_text(encoding="utf-8").strip() if active_file.exists() else ""
+    active_name = active_file.read_text(encoding="utf-8", errors="replace").strip() if active_file.exists() else ""
 
     for r in targets:
         shutil.rmtree(r["artifact_dir"], ignore_errors=True)
@@ -1908,13 +1908,13 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
         print("No active repository. Run: terrain repo")
         return 1
 
-    artifact_dir = ws / active_file.read_text(encoding="utf-8").strip()
+    artifact_dir = ws / active_file.read_text(encoding="utf-8", errors="replace").strip()
     meta_file = artifact_dir / "meta.json"
     if not meta_file.exists():
         print("Active repository has no metadata. Run: terrain index <path>")
         return 1
 
-    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
     repo_path = Path(meta["repo_path"]).resolve()
     db_path = artifact_dir / "graph.db"
     vectors_path = artifact_dir / "vectors.pkl"
