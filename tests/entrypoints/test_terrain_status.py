@@ -485,6 +485,7 @@ class TestMcpListRepositoriesStaleness:
         assert r["staleness"] == "up-to-date"
         assert r["indexed_head"] == head[:7]
         assert r["current_head"] == head[:7]
+        assert r["commits_since"] == 0
 
     def test_stale_repo_reports_stale_with_distinct_short_shas(self, tmp_path):
         ws = tmp_path / "ws"
@@ -502,6 +503,25 @@ class TestMcpListRepositoriesStaleness:
         assert r["indexed_head"] == anchor[:7]
         assert r["current_head"] == latest[:7]
         assert r["indexed_head"] != r["current_head"]
+        assert r["commits_since"] == 1
+
+    def test_stale_repo_reports_exact_commits_since_count(self, tmp_path):
+        """HEAD advanced by 3 commits → commits_since must be exactly 3."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _init_repo(repo)
+        anchor = _commit(repo, "a.txt", "a", "first")
+        _commit(repo, "b.txt", "b", "second")
+        _commit(repo, "c.txt", "c", "third")
+        _commit(repo, "d.txt", "d", "fourth")
+        _write_artifact(ws, "myrepo_abc12345", repo, last_indexed_commit=anchor)
+
+        result = _list_repositories(ws)
+        r = result["repositories"][0]
+        assert r["staleness"] == "stale"
+        assert r["commits_since"] == 3
 
     def test_non_git_repo_reports_unknown(self, tmp_path):
         ws = tmp_path / "ws"
@@ -515,6 +535,7 @@ class TestMcpListRepositoriesStaleness:
         assert r["staleness"] == "unknown"
         assert r["indexed_head"] is None
         assert r["current_head"] is None
+        assert r["commits_since"] is None
 
     def test_half_built_repo_without_graph_is_unknown(self, tmp_path):
         """Edge case: artifact dir exists but graph step never finished."""
@@ -535,6 +556,7 @@ class TestMcpListRepositoriesStaleness:
         assert r["staleness"] == "unknown"
         assert r["indexed_head"] is None
         assert r["current_head"] is None
+        assert r["commits_since"] is None
 
     def test_empty_workspace_returns_empty_list_not_error(self, tmp_path):
         ws = tmp_path / "empty"

@@ -1172,6 +1172,8 @@ class MCPToolsRegistry:
                     "or 'unknown' (not a git repo, HEAD unreadable, or graph not built). "
                     "Short SHAs are reported as `indexed_head` and `current_head` so you "
                     "can tell how far the repo has drifted. "
+                    "`commits_since` gives the integer number of commits HEAD is ahead of "
+                    "indexed_head; it is null when staleness is 'unknown'. "
                     "Consult staleness before calling switch_repository or running heavy "
                     "queries; prefer re-indexing stale repos for trustworthy results."
                 ),
@@ -1910,10 +1912,12 @@ class MCPToolsRegistry:
                 staleness = "unknown"
                 indexed_head = None
                 current_head = None
+                commits_since = None
             else:
                 staleness = status_entry["status"]
                 indexed_head = status_entry["indexed_head"]
                 current_head = status_entry["current_head"]
+                commits_since = status_entry["commits_since"]
 
             repos.append({
                 "artifact_dir": child.name,
@@ -1926,6 +1930,7 @@ class MCPToolsRegistry:
                 "staleness": staleness,
                 "indexed_head": indexed_head,
                 "current_head": current_head,
+                "commits_since": commits_since,
             })
 
         return {
