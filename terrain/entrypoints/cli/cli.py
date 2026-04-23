@@ -386,6 +386,7 @@ def _get_workspace_root() -> Path:
 
 def _load_repos(ws: Path) -> list[dict]:
     """Return all indexed repos, sorted by name, with 'active' flag set."""
+    from terrain.foundation.utils.link_ops import migrate_meta_to_v2
     from terrain.foundation.utils.paths import normalize_repo_path
 
     active_file = ws / "active.txt"
@@ -400,6 +401,8 @@ def _load_repos(ws: Path) -> list[dict]:
         meta_file = child / "meta.json"
         if not meta_file.exists():
             continue
+        # JER-101: lazy v1 → v2 migration (idempotent, no-op for v2).
+        migrate_meta_to_v2(child, ws)
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -441,12 +444,16 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
     detector = GitChangeDetector()
     entries: list[dict] = []
 
+    from terrain.foundation.utils.link_ops import migrate_meta_to_v2
+
     for child in sorted(ws.iterdir()):
         if not child.is_dir():
             continue
         meta_file = child / "meta.json"
         if not meta_file.exists():
             continue
+        # JER-101: lazy v1 → v2 migration (idempotent, no-op for v2).
+        migrate_meta_to_v2(child, ws)
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -1406,11 +1413,29 @@ def cmd_link(args: argparse.Namespace) -> int:
     # If the user's repo path differs from the current artifact dir's
     # hash-based name, we create a new dir and symlink/copy from the old.
     from terrain.entrypoints.mcp.pipeline import artifact_dir_for
+    from terrain.foundation.utils.link_ops import register_link
+    from terrain.foundation.utils.paths import normalize_repo_path
 
     target_dir = artifact_dir_for(ws, repo_path)
+    canonical_new = normalize_repo_path(repo_path)
 
     if target_dir == artifact_dir:
-        # Same hash — just update meta.json in place
+        # Same hash — either a benign re-link or a hash collision to a
+        # *different* logical repo. JER-101: refuse overwriting a
+        # recorded repo_path with a different one.
+        existing_raw = selected.get("meta", {}).get("repo_path")
+        if existing_raw and existing_raw != "(unset)":
+            try:
+                existing_canonical = normalize_repo_path(existing_raw)
+            except (TypeError, ValueError):
+                existing_canonical = str(existing_raw)
+            if existing_canonical != canonical_new:
+                print(f"  {_c('31', 'ERROR')} artifact dir {artifact_dir.name} "
+                      f"already links a different repo: {existing_canonical}")
+                print(f"  New repo_path {canonical_new} would overwrite it.")
+                print(f"  Pick a different --db target or remove the existing "
+                      f"artifact dir before re-linking.")
+                return 1
         _link_update_meta(artifact_dir, repo_path)
     elif target_dir.exists() and (target_dir / "graph.db").exists():
         # Target already has data — just update its meta
@@ -1420,7 +1445,8 @@ def cmd_link(args: argparse.Namespace) -> int:
         # Create new dir with symlinks (or copies on Windows) pointing to source
         target_dir.mkdir(parents=True, exist_ok=True)
         _link_artifacts(artifact_dir, target_dir)
-        _link_update_meta(target_dir, repo_path, source_dir=artifact_dir)
+        register_link(ws, source_dir=artifact_dir, target_dir=target_dir,
+                      repo_path=repo_path)
         artifact_dir = target_dir
 
     # ── Set as active ─────────────────────────────────────────────────
@@ -1461,10 +1487,12 @@ def _link_update_meta(artifact_dir: Path, repo_path: "Path | PurePath",
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             pass
 
+    from terrain.foundation.utils.link_ops import SCHEMA_VERSION
     from terrain.foundation.utils.paths import normalize_repo_path
 
     meta = {
         **existing,
+        "schema_version": SCHEMA_VERSION,
         "repo_path": normalize_repo_path(repo_path),
         "repo_name": repo_path.name or "root",
         "linked_at": datetime.now().isoformat(),

@@ -2070,20 +2070,28 @@ class MCPToolsRegistry:
                 dst.symlink_to(src)
                 linked.append(name)
 
-        # Write meta.json (not symlinked — stores this repo's own path)
+        # JER-101: unified link writer — stamps schema v2 on the target and
+        # upserts linked_repos on the authoritative source meta.
+        from terrain.foundation.utils.link_ops import register_link
+        from terrain.foundation.utils.paths import normalize_repo_path
+
+        register_link(
+            self._workspace,
+            source_dir=source_dir,
+            target_dir=new_dir,
+            repo_path=repo,
+        )
+        # Preserve the legacy ``linked_to`` / ``linked_source_repo`` keys that
+        # existing MCP clients still key off. register_link already wrote
+        # ``linked_from``; add back the MCP-specific aliases.
+        meta_file = new_dir / "meta.json"
+        new_meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         source_meta = json.loads(
             (source_dir / "meta.json").read_text(encoding="utf-8", errors="replace")
         )
-        from terrain.foundation.utils.paths import normalize_repo_path
-
-        new_meta = {
-            **source_meta,
-            "repo_path": normalize_repo_path(repo),
-            "repo_name": repo.name,
-            "linked_to": str(source_dir),
-            "linked_source_repo": source_meta.get("repo_name", source_dir.name),
-        }
-        (new_dir / "meta.json").write_text(
+        new_meta["linked_to"] = str(source_dir)
+        new_meta["linked_source_repo"] = source_meta.get("repo_name", source_dir.name)
+        meta_file.write_text(
             json.dumps(new_meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
