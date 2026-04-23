@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from terrain.foundation.utils.link_ops import register_link
+from terrain.entrypoints.link_ops import register_link
 from terrain.foundation.utils.paths import normalize_repo_path
 
 

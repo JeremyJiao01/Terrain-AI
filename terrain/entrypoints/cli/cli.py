@@ -386,7 +386,7 @@ def _get_workspace_root() -> Path:
 
 def _load_repos(ws: Path) -> list[dict]:
     """Return all indexed repos, sorted by name, with 'active' flag set."""
-    from terrain.foundation.utils.link_ops import migrate_meta_to_v2
+    from terrain.entrypoints.link_ops import migrate_meta_to_v2
     from terrain.foundation.utils.paths import normalize_repo_path
 
     active_file = ws / "active.txt"
@@ -444,7 +444,7 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
     detector = GitChangeDetector()
     entries: list[dict] = []
 
-    from terrain.foundation.utils.link_ops import migrate_meta_to_v2
+    from terrain.entrypoints.link_ops import migrate_meta_to_v2
 
     for child in sorted(ws.iterdir()):
         if not child.is_dir():
@@ -1412,8 +1412,8 @@ def cmd_link(args: argparse.Namespace) -> int:
     # ── Decide: update-in-place vs. create-new ───────────────────────
     # If the user's repo path differs from the current artifact dir's
     # hash-based name, we create a new dir and symlink/copy from the old.
+    from terrain.entrypoints.link_ops import register_link
     from terrain.entrypoints.mcp.pipeline import artifact_dir_for
-    from terrain.foundation.utils.link_ops import register_link
     from terrain.foundation.utils.paths import normalize_repo_path
 
     target_dir = artifact_dir_for(ws, repo_path)
@@ -1487,7 +1487,7 @@ def _link_update_meta(artifact_dir: Path, repo_path: "Path | PurePath",
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             pass
 
-    from terrain.foundation.utils.link_ops import SCHEMA_VERSION
+    from terrain.entrypoints.link_ops import SCHEMA_VERSION
     from terrain.foundation.utils.paths import normalize_repo_path
 
     meta = {

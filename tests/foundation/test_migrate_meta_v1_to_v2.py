@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from terrain.foundation.utils.link_ops import migrate_meta_to_v2
+from terrain.entrypoints.link_ops import migrate_meta_to_v2
 from terrain.foundation.utils.paths import normalize_repo_path
 
 

@@ -2072,7 +2072,7 @@ class MCPToolsRegistry:
 
         # JER-101: unified link writer — stamps schema v2 on the target and
         # upserts linked_repos on the authoritative source meta.
-        from terrain.foundation.utils.link_ops import register_link
+        from terrain.entrypoints.link_ops import register_link
         from terrain.foundation.utils.paths import normalize_repo_path
 
         register_link(
