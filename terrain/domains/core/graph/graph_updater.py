@@ -590,6 +590,10 @@ class GraphUpdater:
     def _extract_source_for_qualified_name(self, qualified_name: str) -> str | None:
         """Extract source code for a qualified name.
 
+        Returns a compact snippet: the definition line with 2 lines of leading
+        context and up to 20 lines of body.  This keeps embedding input small
+        while preserving the signature and core logic.
+
         Args:
             qualified_name: Fully qualified name of the entity
 
@@ -619,10 +623,10 @@ class GraphUpdater:
             for i, line in enumerate(lines):
                 if entity_name in line and self._is_definition_line(line, entity_name):
                     start_line = max(0, i - 2)
-                    end_line = min(len(lines), i + 50)
+                    end_line = min(len(lines), i + 20)
                     return "\n".join(lines[start_line:end_line])
 
-            return source_code[:2000]
+            return source_code[:800]
 
         except Exception as e:
             logger.debug(f"Failed to extract source for {qualified_name}: {e}")

@@ -815,7 +815,7 @@ def enhance_api_docs_step(
 # Step 3: vector index with per-batch progress
 # ---------------------------------------------------------------------------
 
-_EMBED_BATCH_SIZE = 10
+_EMBED_BATCH_SIZE = 25  # Qwen3 API max batch size
 
 
 def _parse_l3_for_embedding(md_path: Path) -> tuple[dict, str] | None:
@@ -916,20 +916,20 @@ def _split_into_sections(lines: list[str]) -> dict[str, list[str]]:
 def _build_embedding_text(
     func_info: dict[str, Any],
     sections: dict[str, list[str]],
-    max_chars: int = 4000,
+    max_chars: int = 2000,
 ) -> str:
     """Build a de-formatted semantic text optimised for embedding retrieval.
 
     Strips Markdown syntax (headings, backticks, table borders, fences) and
-    assembles a plain-text representation ordered by semantic importance.
+    assembles a compact plain-text representation ordered by semantic importance.
 
     Supports bilingual (Chinese/English) descriptions for better cross-language
     semantic search.
 
         1. Identity + bilingual description  (always included)
-        2. Call tree               (high value for structural queries)
-        3. Callers                 (medium value)
-        4. Source code             (lowest priority, truncated first)
+        2. Call tree — direct callee names only  (high value, compact)
+        3. Callers — up to 10 caller names       (medium value)
+        4. Source code — signature + first 15 meaningful lines (lowest priority)
 
     The result is capped at *max_chars* by dropping lower-priority sections
     from the tail rather than cutting mid-sentence.
@@ -1007,34 +1007,31 @@ def _build_embedding_text(
     if not chinese_match and not english_match and combined_desc:
         parts.append(combined_desc)
 
-    # --- 2. Call tree (high value for "what does X call" queries) ---
+    # --- 3. Call tree — extract only direct callee names (compact) ---
     if "call_tree" in sections:
-        tree_text = _strip_markdown("\n".join(sections["call_tree"])).strip()
-        if tree_text:
-            parts.append(f"调用: {tree_text}")
+        callee_names = _extract_callee_names(sections["call_tree"])
+        if callee_names:
+            parts.append(f"调用: {', '.join(callee_names)}")
 
-    # --- 3. Callers (medium value for "who calls X" queries) ---
+    # --- 4. Callers — up to 10 caller names ---
     if "callers" in sections:
         caller_lines = []
         for line in sections["callers"]:
             stripped = line.strip()
             if stripped.startswith("- ") and stripped != "*(无调用者)*":
-                caller_lines.append(stripped[2:].split("→")[0].strip())
+                caller_name = stripped[2:].split("→")[0].strip()
+                # Strip backticks and markdown links
+                caller_name = caller_name.strip("`").split("(")[0].strip()
+                if caller_name:
+                    caller_lines.append(caller_name)
         if caller_lines:
-            parts.append(f"被调用: {', '.join(caller_lines)}")
+            parts.append(f"被调用: {', '.join(caller_lines[:10])}")
 
-    # --- 4. Source code (lowest priority) ---
+    # --- 5. Source code — signature + first 15 meaningful lines ---
     if "source" in sections:
-        source_lines = []
-        in_fence = False
-        for line in sections["source"]:
-            if line.startswith("```"):
-                in_fence = not in_fence
-                continue
-            if in_fence:
-                source_lines.append(line)
-        if source_lines:
-            parts.append("源码:\n" + "\n".join(source_lines))
+        source_snippet = _extract_source_snippet(sections["source"], max_lines=15)
+        if source_snippet:
+            parts.append(f"源码:\n{source_snippet}")
 
     # --- Priority-based truncation ---
     result = "\n".join(parts)
@@ -1046,6 +1043,75 @@ def _build_embedding_text(
         parts.pop()
 
     return "\n".join(parts)[:max_chars]
+
+
+def _extract_callee_names(call_tree_lines: list[str]) -> list[str]:
+    """Extract unique direct callee function names from call tree section.
+
+    Only picks top-level callees (no nested indentation), strips Markdown
+    formatting, and deduplicates while preserving order.
+    """
+    import re
+    names: list[str] = []
+    seen: set[str] = set()
+
+    for line in call_tree_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Match lines like "- `func_name`" or "- func_name → ..."
+        # Also handle "├── func_name" or "└── func_name" tree formatting
+        m = re.match(
+            r'^(?:[-*]|\s*[├└│]──?)\s*`?([A-Za-z_][\w.:]*)`?',
+            stripped,
+        )
+        if m:
+            callee = m.group(1).split("(")[0].strip()  # drop params if any
+            if callee and callee not in seen:
+                seen.add(callee)
+                names.append(callee)
+
+    return names
+
+
+def _extract_source_snippet(
+    source_section: list[str],
+    max_lines: int = 15,
+) -> str:
+    """Extract a compact source snippet: signature + first N meaningful lines.
+
+    Skips blank lines and pure comment-only lines (/* */ or //) to maximise
+    information density within the line budget.
+    """
+    import re
+
+    raw_lines: list[str] = []
+    in_fence = False
+    for line in source_section:
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            raw_lines.append(line)
+
+    if not raw_lines:
+        return ""
+
+    # Keep the first line (usually the signature) unconditionally,
+    # then collect meaningful lines up to the budget.
+    meaningful: list[str] = []
+    _comment_only = re.compile(r'^\s*(?://|/\*|\*\s|\*/).*$')
+
+    for line in raw_lines:
+        if not line.strip():
+            continue  # skip blank lines
+        # Always keep definition / signature lines
+        if len(meaningful) < 2 or not _comment_only.match(line):
+            meaningful.append(line)
+        if len(meaningful) >= max_lines:
+            break
+
+    return "\n".join(meaningful)
 
 
 def _strip_markdown(text: str) -> str:
