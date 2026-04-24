@@ -25,6 +25,75 @@ from loguru import logger
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 
+def _format_api_error(response: requests.Response) -> str:
+    """Extract a human-readable error message from a failed embedding response.
+
+    Handles a mix of provider shapes and guards every nested access so that
+    ``None`` or unexpectedly-typed fields never trigger an ``AttributeError``
+    (which previously bubbled up as the opaque ``'NoneType' ...`` message).
+
+    Recognised JSON shapes (in order):
+        1. ``{"error": {"message": "..."}}``        — OpenAI standard
+        2. ``{"error": "..."}``                    — error as plain string
+        3. ``{"message": "..."}``                  — DashScope / simple shape
+        4. ``{"msg": "..."}``                      — Aliyun legacy shape
+        5. ``{"detail": "..."}``                   — FastAPI / generic
+        6. Non-JSON body → ``response.text`` with forced UTF-8 decoding
+
+    The returned string preserves non-ASCII (e.g. Chinese) content verbatim.
+    """
+    # First, try JSON.
+    try:
+        body = response.json()
+    except (ValueError, Exception):
+        body = None
+
+    if isinstance(body, dict):
+        # 1 & 2: top-level "error"
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message")
+            if isinstance(msg, str) and msg:
+                return msg
+        elif isinstance(err, str) and err:
+            return err
+
+        # 3, 4, 5: flat string fields
+        for key in ("message", "msg", "detail"):
+            val = body.get(key)
+            if isinstance(val, str) and val:
+                return val
+
+        # Last JSON resort: dump the body so Chinese is preserved.
+        import json as _json
+        try:
+            return _json.dumps(body, ensure_ascii=False)[:500]
+        except Exception:
+            pass
+
+    # Fallback to raw text. requests defaults `encoding` to ISO-8859-1 when the
+    # server omits charset, mojibake-ing UTF-8 Chinese. Force a sensible
+    # decoding before reading ``.text``.
+    try:
+        raw = getattr(response, "content", None)
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            for enc in ("utf-8", response.apparent_encoding or "", response.encoding or ""):
+                if not enc:
+                    continue
+                try:
+                    return bytes(raw).decode(enc)[:500]
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            return bytes(raw).decode("utf-8", errors="replace")[:500]
+        text = response.text
+        if text:
+            return text[:500]
+    except Exception:
+        pass
+
+    return ""
+
+
 class BaseEmbedder(ABC):
     """Abstract base class for code embedders."""
 
@@ -174,12 +243,10 @@ class Qwen3Embedder(BaseEmbedder):
                     continue
 
                 # Handle other errors
+                detail = _format_api_error(response)
                 error_msg = f"API request failed: {response.status_code}"
-                try:
-                    error_data = response.json()
-                    error_msg += f" - {error_data.get('message', '')}"
-                except Exception:
-                    error_msg += f" - {response.text[:200]}"
+                if detail:
+                    error_msg += f" - {detail}"
 
                 if attempt < self.max_retries - 1:
                     logger.warning(f"{error_msg}, retrying...")
@@ -204,7 +271,13 @@ class Qwen3Embedder(BaseEmbedder):
     def _extract_embeddings(self, response: dict[str, Any]) -> list[list[float]]:
         """Extract embeddings from API response (OpenAI-compatible format).
 
-        Expects ``{"data": [{"embedding": [...], "index": 0}, ...]}``
+        Expects ``{"data": [{"embedding": [...], "index": 0}, ...]}``.
+
+        When the server returns HTTP 200 but a body that is not the expected
+        shape (e.g. ``{"data": null, "message": "限流"}``), raise a
+        ``RuntimeError`` carrying whatever human-readable message the body
+        contains rather than letting ``sorted(None)`` crash with the opaque
+        ``'NoneType' object is not iterable``.
 
         Args:
             response: API response JSON
@@ -212,10 +285,29 @@ class Qwen3Embedder(BaseEmbedder):
         Returns:
             List of embedding vectors
         """
-        if "data" not in response:
-            raise RuntimeError(f"Unexpected API response format: {list(response.keys())}")
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list):
+            # Try to surface whatever message the body contains.
+            detail = ""
+            if isinstance(response, dict):
+                for key in ("message", "msg", "detail"):
+                    val = response.get(key)
+                    if isinstance(val, str) and val:
+                        detail = val
+                        break
+                err = response.get("error")
+                if not detail and isinstance(err, dict):
+                    msg = err.get("message")
+                    if isinstance(msg, str) and msg:
+                        detail = msg
+                elif not detail and isinstance(err, str) and err:
+                    detail = err
+            if detail:
+                raise RuntimeError(f"API returned unexpected response body: {detail}")
+            keys = list(response.keys()) if isinstance(response, dict) else type(response).__name__
+            raise RuntimeError(f"Unexpected API response format: {keys}")
 
-        sorted_items = sorted(response["data"], key=lambda x: x["index"])
+        sorted_items = sorted(data, key=lambda x: x.get("index", 0))
         return [item["embedding"] for item in sorted_items]
 
     def embed_code(
@@ -448,8 +540,18 @@ class OpenAIEmbedder(BaseEmbedder):
                 response = requests.post(url, headers=headers, json=payload, timeout=60)
 
                 if response.status_code == 200:
-                    data = response.json()
-                    sorted_items = sorted(data["data"], key=lambda x: x["index"])
+                    try:
+                        data = response.json()
+                    except Exception:
+                        data = None
+                    items = data.get("data") if isinstance(data, dict) else None
+                    if not isinstance(items, list):
+                        detail = _format_api_error(response)
+                        raise RuntimeError(
+                            f"OpenAI embeddings API returned HTTP 200 with unexpected body"
+                            + (f": {detail}" if detail else "")
+                        )
+                    sorted_items = sorted(items, key=lambda x: x.get("index", 0))
                     return [item["embedding"] for item in sorted_items]
 
                 if response.status_code == 429:
@@ -459,12 +561,10 @@ class OpenAIEmbedder(BaseEmbedder):
                     time.sleep(wait_time)
                     continue
 
+                detail = _format_api_error(response)
                 error_msg = f"OpenAI embeddings API error: {response.status_code}"
-                try:
-                    err = response.json()
-                    error_msg += f" - {err.get('error', {}).get('message', response.text[:200])}"
-                except Exception:
-                    error_msg += f" - {response.text[:200]}"
+                if detail:
+                    error_msg += f" - {detail}"
 
                 if attempt < self.max_retries - 1:
                     logger.warning(f"{error_msg}, retrying...")
