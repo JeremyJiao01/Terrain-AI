@@ -1849,6 +1849,96 @@ def _resolve_index_artifact_dir(
     return ws_dir
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Incremental update for an indexed repository."""
+    ws = _get_workspace_root()
+
+    repo_path_arg = getattr(args, "repo_path", None)
+    if repo_path_arg:
+        repo_path = Path(repo_path_arg).resolve()
+        if not repo_path.exists():
+            print(f"ERROR: Path does not exist: {repo_path}")
+            return 1
+        sync_args = argparse.Namespace(
+            repo_path=str(repo_path),
+            update=True,
+            no_embed=False,
+            wiki=False,
+            mode="comprehensive",
+            backend="kuzu",
+            output=None,
+            no_llm=getattr(args, "no_llm", False),
+            verbose=getattr(args, "verbose", False),
+        )
+        return cmd_index(sync_args)
+
+    # Interactive mode: pick from indexed repos
+    entries = _get_repo_status_entries(ws)
+    if not entries:
+        print(f"  {_c('33', 'WARN')} No indexed repositories found.")
+        print("  Run: terrain index <path>")
+        return 0
+
+    # Sort: most stale first, then unknown, then up-to-date; alpha within groups
+    def _sort_key(e: dict):
+        c = e["commits_since"]
+        if c is None:
+            return (1, 0, e["name"])
+        if c == 0:
+            return (2, 0, e["name"])
+        return (0, -c, e["name"])
+
+    entries.sort(key=_sort_key)
+
+    GREEN  = "\033[32m"
+    YELLOW = "\033[33m"
+    DIM    = "\033[2m"
+    RESET  = "\033[0m"
+
+    labels: list[str] = []
+    for e in entries:
+        date = (e["indexed_at"] or "")[:10] or "?"
+        c = e["commits_since"]
+        if c is None:
+            stale_tag = f"{DIM}commits unknown{RESET}"
+        elif c == 0:
+            stale_tag = f"{GREEN}up to date{RESET}"
+        else:
+            stale_tag = f"{YELLOW}{c} commit{'s' if c != 1 else ''} behind{RESET}"
+        labels.append(f"{e['name']}  {DIM}{date}{RESET}  {stale_tag}")
+
+    print()
+    print(f"  {_T_BRANCH} ↑↓ navigate · Enter confirm · q cancel")
+    print()
+
+    choice = _select_menu(labels, prefix="  ")
+    print()
+
+    if choice is None:
+        print("  Cancelled.")
+        return 0
+
+    selected = entries[choice]
+    repo_path_str = selected["path"]
+    if not repo_path_str or not Path(repo_path_str).is_dir():
+        print(f"  {_c('31', 'ERROR')} Repository path not found: {repo_path_str or '(unknown)'}")
+        print("  The repository may have been moved. Run: terrain index <new-path>")
+        return 1
+
+    sync_args = argparse.Namespace(
+        repo_path=repo_path_str,
+        update=True,
+        no_embed=False,
+        wiki=False,
+        mode="comprehensive",
+        backend="kuzu",
+        output=None,
+        no_llm=getattr(args, "no_llm", False),
+        verbose=getattr(args, "verbose", False),
+    )
+    return cmd_index(sync_args)
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     """Run the full indexing pipeline on a repository."""
     from terrain.examples.generate_wiki import MAX_PAGES_COMPREHENSIVE, MAX_PAGES_CONCISE
@@ -2750,6 +2840,26 @@ Windows:
         help="Skip LLM-powered description generation and module enhancement",
     )
     index_parser.set_defaults(func=cmd_index)
+
+    # sync command
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Incremental update for an indexed repository",
+        description="Re-index only git-changed files. Interactive repo picker when no path is given.",
+    )
+    sync_parser.add_argument(
+        "repo_path",
+        nargs="?",
+        default=None,
+        type=str,
+        help="Path to repository (interactive picker if omitted)",
+    )
+    sync_parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM-powered description generation",
+    )
+    sync_parser.set_defaults(func=cmd_sync)
 
     # link command
     link_parser = subparsers.add_parser(

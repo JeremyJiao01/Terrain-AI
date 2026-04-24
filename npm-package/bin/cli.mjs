@@ -316,17 +316,33 @@ function findPython() {
     : ["python3.11", "python3", "python"];
 
   const valid = [];
-  for (const cmd of candidates) {
+
+  // Helper: try a specific (cmd, args) pair and push if version is compatible.
+  const tryCmd = (cmd, args, cmdLabel) => {
     try {
-      const out = execFileSync(cmd, ["--version"], { stdio: "pipe" }).toString().trim();
-      // Parse "Python X.Y.Z"
+      const out = execFileSync(cmd, [...args, "--version"], { stdio: "pipe" }).toString().trim();
       const m = out.match(/Python (\d+)\.(\d+)\.(\d+)/);
-      if (!m) continue;
+      if (!m) return;
       const [, major, minor, patch] = m.map(Number);
       if (major === 3 && minor >= 11 && minor <= MAX_MINOR) {
-        valid.push({ cmd, ver: out, major, minor, patch });
+        // Store the full invocation so runServer can call it correctly.
+        valid.push({ cmd, args, cmdLabel, ver: out, major, minor, patch });
       }
     } catch { /* not found or not runnable */ }
+  };
+
+  // Windows Python Launcher (py.exe) supports `py -3.11` version selection.
+  // Try each compatible minor version explicitly before falling back to the
+  // plain candidates, so a user with Python 3.13 as default but 3.11
+  // installed via the launcher is still found.
+  if (IS_WIN) {
+    for (let minor = MAX_MINOR; minor >= 11; minor--) {
+      tryCmd("py", [`-3.${minor}`], `py -3.${minor}`);
+    }
+  }
+
+  for (const cmd of candidates) {
+    tryCmd(cmd, [], cmd);
   }
 
   if (valid.length === 0) return null;
@@ -339,13 +355,14 @@ function findPython() {
 }
 
 const pythonInfo = findPython();
-const PYTHON_CMD = pythonInfo?.cmd || null;
-const PYTHON_VER = pythonInfo?.ver || null;
+const PYTHON_CMD  = pythonInfo?.cmd  || null;
+const PYTHON_ARGS = pythonInfo?.args || [];
+const PYTHON_VER  = pythonInfo?.ver  || null;
 
 function pythonPackageInstalled() {
   if (!PYTHON_CMD) return false;
   try {
-    execFileSync(PYTHON_CMD, ["-c", `import ${MODULE_PATH.split(".")[0]}`], {
+    execFileSync(PYTHON_CMD, [...PYTHON_ARGS, "-c", `import ${MODULE_PATH.split(".")[0]}`], {
       stdio: "pipe",
     });
     return true;
@@ -359,7 +376,7 @@ function getPackageVersion() {
   try {
     // Use importlib.metadata to read the installed package version by name.
     // Avoids false reads from an unrelated `terrain` package on PyPI.
-    return execFileSync(PYTHON_CMD, ["-c",
+    return execFileSync(PYTHON_CMD, [...PYTHON_ARGS, "-c",
       `import importlib.metadata; print(importlib.metadata.version('terrain-ai'))`
     ], { stdio: "pipe" }).toString().trim();
   } catch {
@@ -411,7 +428,7 @@ function getLatestPypiVersion() {
       "d = json.loads(urllib.request.urlopen('https://pypi.org/pypi/terrain-ai/json', timeout=5).read())",
       "print(d['info']['version'])",
     ].join("\n"), "utf-8");
-    const out = execFileSync(PYTHON_CMD, [tmpPy], {
+    const out = execFileSync(PYTHON_CMD, [...PYTHON_ARGS, tmpPy], {
       encoding: "utf-8", stdio: "pipe", timeout: 10_000,
     });
     return out.trim() || null;
@@ -533,7 +550,8 @@ const fs = require("fs");
 const LOG     = ${JSON.stringify(UPDATE_LOG_FILE)};
 const PENDING = ${JSON.stringify(UPDATE_PENDING_FILE)};
 const PKG_JSON = ${JSON.stringify(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"))};
-const PYTHON  = ${JSON.stringify(PYTHON_CMD || "")};
+const PYTHON      = ${JSON.stringify(PYTHON_CMD || "")};
+const PYTHON_ARGS = ${JSON.stringify(PYTHON_ARGS)};
 const IS_WIN  = process.platform === "win32";
 const SELF    = ${JSON.stringify(updaterFile)};
 
@@ -558,7 +576,7 @@ function pyEval(code) {
   const tmp = require("os").tmpdir() + "/terrain-py-" + process.pid + ".py";
   try {
     fs.writeFileSync(tmp, code, "utf-8");
-    return execFileSync(PYTHON, [tmp], {
+    return execFileSync(PYTHON, [...PYTHON_ARGS, tmp], {
       encoding: "utf-8", stdio: "pipe", timeout: 15000
     }).trim();
   } finally {
@@ -626,8 +644,8 @@ try {
       }
       if (!pip) {
         try {
-          execFileSync(PYTHON, ["-m", "pip", "--version"], { stdio: "pipe", timeout: 5000 });
-          pip = [PYTHON, "-m", "pip"];
+          execFileSync(PYTHON, [...PYTHON_ARGS, "-m", "pip", "--version"], { stdio: "pipe", timeout: 5000 });
+          pip = [PYTHON, ...PYTHON_ARGS, "-m", "pip"];
         } catch {}
       }
 
@@ -722,8 +740,8 @@ function findPip() {
   // Prefer pip that belongs to the selected Python (PYTHON_CMD >= 3.11)
   if (PYTHON_CMD) {
     try {
-      execFileSync(PYTHON_CMD, ["-m", "pip", "--version"], { stdio: "pipe" });
-      return [PYTHON_CMD, "-m", "pip"];
+      execFileSync(PYTHON_CMD, [...PYTHON_ARGS, "-m", "pip", "--version"], { stdio: "pipe" });
+      return [PYTHON_CMD, ...PYTHON_ARGS, "-m", "pip"];
     } catch { /* pip not available for this python */ }
   }
   // Fallback: look for a standalone pip/pip3 in PATH
@@ -1183,7 +1201,8 @@ async function runSetup() {
     log();
     process.exit(1);
   }
-  log(`  ${T.BRANCH} ${T.OK} ${PYTHON_VER} (${PYTHON_CMD})`);
+  const pythonDisplay = PYTHON_ARGS.length > 0 ? `${PYTHON_CMD} ${PYTHON_ARGS.join(" ")}` : PYTHON_CMD;
+  log(`  ${T.BRANCH} ${T.OK} ${PYTHON_VER} (${pythonDisplay})`);
 
   // 2. Package — auto-install or upgrade
   const pip = findPip();
@@ -1220,7 +1239,7 @@ async function runSetup() {
     }
     // Verify runtime version matches installed metadata version
     try {
-      const runtimeVer = execFileSync(PYTHON_CMD, ["-c",
+      const runtimeVer = execFileSync(PYTHON_CMD, [...PYTHON_ARGS, "-c",
         `from terrain import __version__; print(__version__)`
       ], { stdio: "pipe" }).toString().trim();
       if (ver && runtimeVer !== ver) {
@@ -1305,9 +1324,9 @@ async function runSetup() {
   // 2c. Windows: ensure Python Scripts dir is on user PATH so `terrain` works
   if (IS_WIN && PYTHON_CMD) {
     try {
-      const scriptsDir = execSync(
-        `${PYTHON_CMD} -c "import sysconfig; print(sysconfig.get_path('scripts'))"`,
-        { encoding: "utf-8", shell: true }
+      const scriptsDir = execFileSync(
+        PYTHON_CMD, [...PYTHON_ARGS, "-c", "import sysconfig; print(sysconfig.get_path('scripts'))"],
+        { encoding: "utf-8", stdio: "pipe" }
       ).trim();
       if (scriptsDir && existsSync(scriptsDir)) {
         const userPath = execSync('powershell -Command "[Environment]::GetEnvironmentVariable(\'Path\',\'User\')"', {
@@ -1333,7 +1352,7 @@ async function runSetup() {
     const mergedEnv = { ...process.env, ...envVars };
     if (!mergedEnv.CGB_WORKSPACE) mergedEnv.CGB_WORKSPACE = WORKSPACE_DIR;
 
-    const child = spawn(PYTHON_CMD, ["-m", MODULE_PATH], {
+    const child = spawn(PYTHON_CMD, [...PYTHON_ARGS, "-m", MODULE_PATH], {
       stdio: ["pipe", "pipe", "pipe"],
       env: mergedEnv,
       shell: IS_WIN,
@@ -1670,9 +1689,9 @@ function autoInstallAndStart(extraArgs) {
   // Windows: ensure Python Scripts dir is on user PATH
   if (IS_WIN && PYTHON_CMD) {
     try {
-      const scriptsDir = execSync(
-        `${PYTHON_CMD} -c "import sysconfig; print(sysconfig.get_path('scripts'))"`,
-        { encoding: "utf-8", shell: true }
+      const scriptsDir = execFileSync(
+        PYTHON_CMD, [...PYTHON_ARGS, "-c", "import sysconfig; print(sysconfig.get_path('scripts'))"],
+        { encoding: "utf-8", stdio: "pipe" }
       ).trim();
       if (scriptsDir && existsSync(scriptsDir)) {
         const userPath = execSync('powershell -Command "[Environment]::GetEnvironmentVariable(\'Path\',\'User\')"', {
@@ -1687,7 +1706,7 @@ function autoInstallAndStart(extraArgs) {
     } catch { /* non-critical */ }
   }
 
-  runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
+  runServer(PYTHON_CMD, [...PYTHON_ARGS, "-m", MODULE_PATH]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2064,7 +2083,7 @@ function startServer(extraArgs = []) {
   backgroundAutoUpdate();
 
   if (pythonPackageInstalled()) {
-    runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
+    runServer(PYTHON_CMD, [...PYTHON_ARGS, "-m", MODULE_PATH]);
   } else if (commandExists("uvx")) {
     runServer("uvx", [PYTHON_PACKAGE, ...extraArgs]);
   } else if (commandExists("uv")) {
@@ -2146,7 +2165,7 @@ async function runUpdate() {
         log(`  ${T.PIPE} ${T.OK} Python package updated to ${newVer || latestPy}`);
         // Verify runtime version matches
         try {
-          const runtimeVer = execFileSync(PYTHON_CMD, ["-c",
+          const runtimeVer = execFileSync(PYTHON_CMD, [...PYTHON_ARGS, "-c",
             `from terrain import __version__; print(__version__)`
           ], { stdio: "pipe" }).toString().trim();
           if (newVer && runtimeVer !== newVer) {
@@ -2198,7 +2217,7 @@ if (cmd === "setup") {
       );
       process.exit(1);
     }
-    runServer(PYTHON_CMD, ["-m", MODULE_PATH]);
+    runServer(PYTHON_CMD, [...PYTHON_ARGS, "-m", MODULE_PATH]);
   } else {
     startServer(args.slice(1));
   }
@@ -2240,7 +2259,7 @@ if (cmd === "setup") {
 } else {
   // Unknown subcommand — proxy to Python CLI (terrain status, list, repo, index, etc.)
   if (PYTHON_CMD && pythonPackageInstalled()) {
-    const result = spawnSync(PYTHON_CMD, ["-m", "terrain.entrypoints.cli.cli", ...args], {
+    const result = spawnSync(PYTHON_CMD, [...PYTHON_ARGS, "-m", "terrain.entrypoints.cli.cli", ...args], {
       stdio: "inherit",
       shell: IS_WIN,
     });
