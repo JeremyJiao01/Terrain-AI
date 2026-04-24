@@ -55,3 +55,39 @@ Expected output: `Python 3.11.x` where x is any patch version.
 After installing, re-run the version check before continuing. If the version is still not 3.11.x, STOP and ask the user to resolve the Python installation manually.
 
 ---
+
+## Block 3 — Install terrain-ai Python Package
+
+Try the following commands in order. Stop at the first one that succeeds (exit code 0). If all four fail, STOP and report the full error output to the user, then suggest checking firewall or proxy settings.
+
+**Mac/Linux — try in order:**
+```bash
+# Attempt 1: official PyPI
+python3.11 -m pip install terrain-ai
+
+# Attempt 2: Tsinghua mirror
+python3.11 -m pip install terrain-ai -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Attempt 3: Aliyun mirror
+python3.11 -m pip install terrain-ai -i https://mirrors.aliyun.com/pypi/simple
+
+# Attempt 4: Douban mirror
+python3.11 -m pip install terrain-ai -i https://pypi.douban.com/simple
+```
+
+**Windows — try in order:**
+```
+py -3.11 -m pip install terrain-ai
+py -3.11 -m pip install terrain-ai -i https://pypi.tuna.tsinghua.edu.cn/simple
+py -3.11 -m pip install terrain-ai -i https://mirrors.aliyun.com/pypi/simple
+py -3.11 -m pip install terrain-ai -i https://pypi.douban.com/simple
+```
+
+After a successful install, verify:
+
+**Mac/Linux:** `python3.11 -c "import terrain; print('ok')"`
+**Windows:** `py -3.11 -c "import terrain; print('ok')"`
+
+Expected output: `ok`. If this fails, try the next mirror source.
+
+---
