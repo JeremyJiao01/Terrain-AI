@@ -238,9 +238,10 @@ class _ProgressBar:
             f"  {spinner} [{bar}] {pct_str}  step {step_str}  "
             f"{_fmt_mmss(elapsed)} / ETA {_fmt_mmss(eta)}  "
         )
-        # Rough visible width — ANSI escape codes shouldn't be counted but the
-        # 80-col estimate is forgiving enough that we don't bother stripping.
-        max_msg = max(10, term_w - 60)
+        # Visible prefix width ≈ 63 + len(step_str) ≈ 66–68 chars.
+        # Using 70 ensures the full line never exceeds term_w and avoids the
+        # wrap-then-\r\033[K residual-line flooding bug.
+        max_msg = max(10, term_w - 70)
         display_msg = msg[:max_msg] + "…" if len(msg) > max_msg else msg
 
         line = f"{prefix}{display_msg}"
