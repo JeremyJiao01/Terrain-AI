@@ -351,8 +351,44 @@ Do not proceed past this block until both commands succeed.
 
 ## Installation Complete
 
-terrain-ai is now installed and configured. You can:
+terrain-ai is now installed and configured. Tell the user:
 
-- Index a codebase: `terrain index /path/to/repo`
-- Ask about code in your agent: "find the function that handles X"
-- Re-run this setup anytime by saying **"install terrain"** in your agent
+---
+
+**terrain-ai is ready. Here's what to do next:**
+
+**Step 1 — Index your codebase**
+
+Point terrain at the repo you want to explore:
+
+```bash
+terrain index /path/to/your/repo
+```
+
+This runs once and takes a few minutes. Incremental updates after that are fast:
+
+```bash
+terrain index -i
+```
+
+**Step 2 — Ask questions about the code**
+
+In this agent session, you can now ask things like:
+
+- "How does authentication work in this codebase?"
+- "Find the function that handles payment processing"
+- "Trace the call chain for the login flow"
+- "What calls the `refresh_token` function?"
+
+terrain will search the knowledge graph and return precise results with signatures, call trees, and source locations.
+
+**Step 3 — Switch between repos**
+
+If you work on multiple codebases, index each one and switch between them:
+
+```bash
+terrain list        # show all indexed repos
+terrain repo        # interactively switch active repo
+```
+
+**Re-run setup anytime** by saying **"install terrain"** in any agent session.
