@@ -25,6 +25,8 @@ import json
 import os
 import platform
 import sys
+import threading
+import time
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -61,26 +63,118 @@ def _c(code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m"
 
 
+# ---------------------------------------------------------------------------
+# Spinner frames — Braille for UTF-8 terminals, ASCII fallback for cp936 etc.
+# ---------------------------------------------------------------------------
+
+_SPINNER_BRAILLE: tuple[str, ...] = (
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+)
+_SPINNER_ASCII: tuple[str, ...] = ("|", "/", "-", "\\")
+_SPINNER_FRAMES: tuple[str, ...] | None = None
+
+
+def _resolve_spinner_frames(force_refresh: bool = False) -> tuple[str, ...]:
+    """Return the spinner character set for the current stdout encoding.
+
+    Probes whether the Braille set round-trips through the console encoding.
+    Non-UTF-8 Windows code pages (cp936, cp437, cp850) fall back to ASCII.
+    """
+    global _SPINNER_FRAMES
+    if _SPINNER_FRAMES is not None and not force_refresh:
+        return _SPINNER_FRAMES
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        "".join(_SPINNER_BRAILLE).encode(encoding)
+        frames = _SPINNER_BRAILLE
+    except (UnicodeEncodeError, LookupError):
+        frames = _SPINNER_ASCII
+    _SPINNER_FRAMES = frames
+    return frames
+
+
+def _fmt_mmss(seconds: float) -> str:
+    if seconds < 0 or seconds != seconds:  # NaN check
+        return "--:--"
+    s = int(seconds)
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
 class _ProgressBar:
     """Single-line progress bar that overwrites itself in place.
+
+    Runs a 150ms daemon ticker so the spinner keeps spinning and the elapsed
+    clock keeps advancing during blocking phases (LLM / embedding), which
+    otherwise make the bar *look* stuck.
 
     Usage:
         bar = _ProgressBar("graph", total_steps=4)
         bar.update(1, "Scanning files...", pct=30.0)
         bar.update(1, "Scanning files...", pct=80.0)
         bar.done(1, "Graph built: 1234 nodes")
-        bar.finish()   # after all steps
+        bar.finish()   # after all steps — also wire into try/finally
     """
 
     BAR_WIDTH = 24
+    _TICK_INTERVAL = 0.15  # seconds
 
     def __init__(self, repo_name: str, total_steps: int) -> None:
         self._total = total_steps
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._frame = 0
+        self._started_at = time.monotonic()
+        # Samples of (elapsed_seconds, pct) for ETA linear-regression.
+        self._pct_history: list[tuple[float, float]] = []
+        self._last_step = 0
+        self._last_msg = ""
         self._last_pct: float = -1.0
+        self._finished = False
+        self._ascii_only = False  # flips to True after a UnicodeEncodeError
+        self._frames = _resolve_spinner_frames()
         print(f"\nIndexing  {_c('1', repo_name)}  ({total_steps} steps)\n")
+        # Start the ticker even when ANSI is disabled: it still advances the
+        # frame counter, so that the first `update()` renders a non-zero frame
+        # and elapsed/ETA numbers are fresh.
+        self._ticker = threading.Thread(
+            target=self._tick_loop, name="progressbar-ticker", daemon=True,
+        )
+        self._ticker.start()
 
-    def _render(self, step: int, msg: str, pct: float) -> None:
-        filled = int(self.BAR_WIDTH * pct / 100)
+    # -- internals ------------------------------------------------------
+
+    def _tick_loop(self) -> None:
+        while not self._stop.wait(self._TICK_INTERVAL):
+            with self._lock:
+                self._frame = (self._frame + 1) % max(len(self._frames), 1)
+                # In non-ANSI terminals we cannot clear the line, so repainting
+                # with \r leaves residual text in cmd.exe. Just bump the frame
+                # and let the next update() / done() call render normally.
+                if _ANSI and self._last_step > 0 and not self._finished:
+                    self._render_locked(self._last_step, self._last_msg, self._last_pct)
+
+    def _eta_seconds(self, pct: float) -> float:
+        """Estimate ETA from recent progress samples. Returns NaN if unknown."""
+        if pct <= 0 or pct >= 100:
+            return float("nan")
+        # Use the oldest kept sample against the latest: slope = Δpct / Δt.
+        if not self._pct_history:
+            return float("nan")
+        t0, p0 = self._pct_history[0]
+        t1 = time.monotonic() - self._started_at
+        dp = pct - p0
+        dt = t1 - t0
+        if dp <= 0 or dt <= 0:
+            return float("nan")
+        remaining_pct = 100.0 - pct
+        return remaining_pct * dt / dp
+
+    def _render_locked(self, step: int, msg: str, pct: float) -> None:
+        """Render the current line. MUST be called with ``self._lock`` held."""
+        filled = int(self.BAR_WIDTH * max(0.0, min(100.0, pct)) / 100)
+        spinner = self._frames[self._frame % len(self._frames)]
+        elapsed = time.monotonic() - self._started_at
+        eta = self._eta_seconds(pct)
         if _ANSI:
             bar = _c("32", "█" * filled) + _c("2", "░" * (self.BAR_WIDTH - filled))
             pct_str = _c("1", f"{pct:3.0f}%")
@@ -90,43 +184,100 @@ class _ProgressBar:
             pct_str = f"{pct:3.0f}%"
             step_str = f"{step}/{self._total}"
 
-        # Truncate message to fit terminal width
         try:
             term_w = os.get_terminal_size().columns
         except OSError:
             term_w = 80
-        prefix = f"  [{bar}] {pct_str}  step {step_str}  "
-        max_msg = max(10, term_w - len(prefix) - 2)
+        prefix = (
+            f"  {spinner} [{bar}] {pct_str}  step {step_str}  "
+            f"{_fmt_mmss(elapsed)} / ETA {_fmt_mmss(eta)}  "
+        )
+        # Rough visible width — ANSI escape codes shouldn't be counted but the
+        # 80-col estimate is forgiving enough that we don't bother stripping.
+        max_msg = max(10, term_w - 60)
         display_msg = msg[:max_msg] + "…" if len(msg) > max_msg else msg
 
         line = f"{prefix}{display_msg}"
         if _ANSI:
-            sys.stdout.write(f"\r\033[K{line}")
+            payload = f"\r\033[K{line}"
         else:
-            sys.stdout.write(f"\r{line}")
-        sys.stdout.flush()
+            payload = f"\r{line}"
+        try:
+            sys.stdout.write(payload)
+            sys.stdout.flush()
+        except UnicodeEncodeError:
+            # Console encoding (e.g. cp437) can't render Braille / Unicode
+            # ellipsis. Permanently downgrade to ASCII-safe output.
+            self._ascii_only = True
+            self._frames = _SPINNER_ASCII
+            ascii_msg = msg.encode("ascii", "replace").decode("ascii")
+            ascii_line = f"  {self._frames[self._frame % len(self._frames)]} [{bar}] {pct_str}  step {step_str}  {_fmt_mmss(elapsed)} / ETA {_fmt_mmss(eta)}  {ascii_msg[:max_msg]}"
+            if _ANSI:
+                ascii_payload = f"\r\033[K{ascii_line}"
+            else:
+                ascii_payload = f"\r{ascii_line}"
+            try:
+                sys.stdout.write(ascii_payload)
+                sys.stdout.flush()
+            except Exception:
+                pass
+
+    # -- public API -----------------------------------------------------
 
     def update(self, step: int, msg: str, pct: float) -> None:
         """Update the in-place progress line."""
-        if pct <= self._last_pct and pct > 0:
-            return
-        self._last_pct = pct
-        self._render(step, msg, pct)
+        with self._lock:
+            if pct <= self._last_pct and pct > 0:
+                # Still refresh the remembered msg so the ticker shows it.
+                self._last_msg = msg
+                self._last_step = step
+                return
+            self._last_pct = pct
+            self._last_msg = msg
+            self._last_step = step
+            # Keep a short history for ETA regression (cap at 16 samples).
+            self._pct_history.append((time.monotonic() - self._started_at, pct))
+            if len(self._pct_history) > 16:
+                self._pct_history.pop(0)
+            self._render_locked(step, msg, pct)
 
     def done(self, step: int, msg: str) -> None:
         """Mark a step as complete — prints a finalised line and moves to next line."""
-        self._last_pct = -1.0
-        self._render(step, msg, 100.0)
-        if _ANSI:
-            label = _c("32", "✓")
-        else:
-            label = "done"
-        sys.stdout.write(f"  {label}\n")
-        sys.stdout.flush()
+        with self._lock:
+            self._last_pct = -1.0
+            self._last_step = step
+            self._last_msg = msg
+            self._pct_history.clear()
+            self._render_locked(step, msg, 100.0)
+            if _ANSI:
+                label = _c("32", "✓")
+            else:
+                label = "done"
+            try:
+                sys.stdout.write(f"  {label}\n")
+                sys.stdout.flush()
+            except UnicodeEncodeError:
+                sys.stdout.write("  done\n")
+                sys.stdout.flush()
 
     def finish(self) -> None:
-        """Print the completion summary line."""
-        print()
+        """Stop the ticker and print the completion summary line.
+
+        Idempotent — safe to call from both the happy path and a try/finally
+        cleanup wrapper around the top-level command.
+        """
+        if self._finished:
+            return
+        self._stop.set()
+        with self._lock:
+            self._finished = True
+            try:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
+        # Join is best-effort; the daemon thread won't block process exit.
+        self._ticker.join(timeout=0.5)
 
 from loguru import logger
 
@@ -1877,6 +2028,10 @@ def cmd_index(args: argparse.Namespace) -> int:
             import traceback
             traceback.print_exc()
         return 1
+    finally:
+        # Stop the ticker even on KeyboardInterrupt / SystemExit — otherwise
+        # the daemon may print one last frame on top of subsequent logs.
+        bar.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -2098,6 +2253,8 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
             import traceback
             traceback.print_exc()
         return 1
+    finally:
+        bar.finish()
 
 
 def _load_vector_store_simple(vectors_path: Path):
