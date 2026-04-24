@@ -510,6 +510,26 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         indexed_at = meta.get("indexed_at", "")
         last_indexed_commit = meta.get("last_indexed_commit") or ""
 
+        # JER-107: a linked child's meta never carries ``last_indexed_commit``
+        # (``register_link`` only writes it onto the authoritative source).
+        # Inherit the source's SHA anchor — and its ``indexed_at`` as a
+        # last-resort fallback — so staleness goes through
+        # ``count_commits_since_sha`` instead of the naive ``--since``
+        # timestamp path that 45da00e replaced for authoritative rows.
+        # Keep the child's own ``indexed_at`` / ``linked_at`` for display.
+        src_name = meta.get("source_artifact")
+        staleness_indexed_at = indexed_at
+        if src_name:
+            src_meta = metas.get(str(src_name))
+            if src_meta is not None:
+                if not last_indexed_commit:
+                    last_indexed_commit = src_meta.get("last_indexed_commit") or ""
+                if not last_indexed_commit:
+                    # Rare legacy: source predates SHA-anchor writes.
+                    src_indexed_at = src_meta.get("indexed_at") or ""
+                    if src_indexed_at:
+                        staleness_indexed_at = src_indexed_at
+
         if repo_path_str:
             try:
                 repo_path = Path(normalize_repo_path(repo_path_str))
@@ -525,9 +545,9 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
             if last_indexed_commit:
                 # Prefer SHA anchor — immune to timezone / rebase / clock skew.
                 commits = detector.count_commits_since_sha(repo_path, last_indexed_commit)
-            elif indexed_at:
+            elif staleness_indexed_at:
                 # Legacy meta.json without a SHA anchor — best-effort timestamp path.
-                commits = detector.count_commits_since(repo_path, indexed_at)
+                commits = detector.count_commits_since(repo_path, staleness_indexed_at)
             current_head_full = detector.get_current_head(repo_path)
 
         if commits is None:
