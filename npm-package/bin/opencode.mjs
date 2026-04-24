@@ -100,14 +100,16 @@ export function unregisterOpencodeMcp(opts = {}) {
 
 export function installOpencodeSkills(opts = {}) {
   const { env = process.env, home = homedir(), srcDir } = opts;
-  const packageSrcDir = srcDir || join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "commands"
-  );
+  const __oc_dirname = dirname(fileURLToPath(import.meta.url));
+  // Try multiple candidate paths (npm package layout vs root dev wrapper)
+  const candidates = [
+    join(__oc_dirname, "..", "commands"),
+    join(__oc_dirname, "..", "..", "npm-package", "commands"),
+  ];
+  const packageSrcDir = srcDir || candidates.find(d => existsSync(d));
   const targetDir = getOpencodeCommandDir(env, home);
 
-  if (!existsSync(packageSrcDir)) {
+  if (!packageSrcDir || !existsSync(packageSrcDir)) {
     return { installed: [], skills: [], targetDir, missing: true };
   }
 

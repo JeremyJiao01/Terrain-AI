@@ -6,6 +6,10 @@
   "bin": {
     "terrain": "./npm-package/bin/cli.mjs"
   },
+  "files": [
+    "npm-package/bin/",
+    "npm-package/commands/"
+  ],
   "scripts": {
     "postinstall": "node -e \"const g=require('fs').readdirSync('dist').find(f=>f.endsWith('.whl'));if(!g){console.error('No .whl found in dist/');process.exit(1)}const p=require('path').join('dist',g);require('child_process').execSync((process.platform==='win32'?'pip':'pip3')+' install --force-reinstall '+p,{stdio:'inherit'})\" && node ./npm-package/bin/cli.mjs",
     "server": "node ./npm-package/bin/cli.mjs --server",

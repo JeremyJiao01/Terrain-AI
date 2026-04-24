@@ -1499,11 +1499,18 @@ async function runSetup() {
 
 function installSkills(log) {
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const srcDir = join(__dirname, "..", "commands");
+
+  // Try multiple candidate paths to find the commands directory:
+  //   1. ../commands  — standard npm package layout (terrain-ai)
+  //   2. ../../npm-package/commands  — root dev wrapper (terrain-dev)
+  const candidates = [
+    join(__dirname, "..", "commands"),
+    join(__dirname, "..", "..", "npm-package", "commands"),
+  ];
+  const srcDir = candidates.find(d => existsSync(d));
   const targetDir = join(homedir(), ".claude", "commands");
 
-  if (!existsSync(srcDir)) {
-    // Running from development or commands dir not bundled
+  if (!srcDir) {
     if (log) log(`  ${T.BRANCH} ${T.WARN} Skill files not found in package`);
     return;
   }
