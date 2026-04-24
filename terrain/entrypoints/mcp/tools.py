@@ -1673,13 +1673,13 @@ class MCPToolsRegistry:
 
         # Force rebuild to ensure fresh graph data — unless the repo ships
         # pre-built .terrain/ artifacts (CI pipeline scenario), in which
-        # case we honour rebuild=False so _run_pipeline can reuse them.
+        # case we pass rebuild=False so _run_pipeline can reuse them.
         local_terrain = repo / ".terrain"
         has_prebuilt = (
             (local_terrain / "graph.db").exists()
             and (local_terrain / "meta.json").exists()
         )
-        effective_rebuild = not has_prebuilt if not rebuild else True
+        effective_rebuild = False if has_prebuilt else True
 
         from terrain.foundation.types.config import TimeoutConfig
         tc = TimeoutConfig.from_env()
