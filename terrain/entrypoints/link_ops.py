@@ -165,6 +165,12 @@ def migrate_meta_to_v2(artifact_dir: Path, ws: Path) -> None:
     Cheap no-op when already v2. Writes atomically. Any failure to parse
     or write meta is swallowed — migration is best-effort; it must never
     break a read path.
+
+    .. note::
+
+       When migrating many repos at once, prefer :func:`batch_migrate_to_v2`
+       which builds the link map once (O(n)) instead of scanning siblings
+       per-repo (O(n²)).
     """
     meta_file = artifact_dir / "meta.json"
     meta = _read_meta(meta_file)
@@ -217,8 +223,69 @@ def migrate_meta_to_v2(artifact_dir: Path, ws: Path) -> None:
         pass
 
 
+def batch_migrate_to_v2(ws: Path) -> None:
+    """Migrate all repos in *ws* to schema v2 in a single O(n) pass.
+
+    Builds the source→targets link map once, then writes each meta.json
+    at most once. Much faster than calling :func:`migrate_meta_to_v2`
+    per-repo when the workspace contains many repositories.
+    """
+    if not ws.exists():
+        return
+
+    # Pass 1: read all metas and identify which need migration
+    repo_metas: dict[str, dict[str, Any]] = {}   # dir_name → meta
+    needs_migration: list[str] = []
+
+    for child in sorted(ws.iterdir()):
+        if not child.is_dir():
+            continue
+        meta = _read_meta(child / "meta.json")
+        if meta is None:
+            continue
+        repo_metas[child.name] = meta
+        if meta.get("schema_version", 1) < SCHEMA_VERSION:
+            needs_migration.append(child.name)
+
+    if not needs_migration:
+        return
+
+    # Pass 2: build reverse link map  source_name → [target entries]
+    link_map: dict[str, list[dict[str, Any]]] = {}
+    for dir_name, meta in repo_metas.items():
+        ptr = _source_artifact_for(meta)
+        if ptr and ptr in repo_metas:
+            link_map.setdefault(ptr, []).append({
+                "repo_path": normalize_repo_path(
+                    meta.get("repo_path", dir_name)
+                ),
+                "repo_name": meta.get("repo_name", dir_name),
+                "artifact_dir": dir_name,
+                "linked_at": meta.get(
+                    "linked_at", meta.get("indexed_at", "")
+                ),
+            })
+
+    # Pass 3: write updated metas
+    for dir_name in needs_migration:
+        meta = repo_metas[dir_name]
+        pointer = _source_artifact_for(meta)
+        if pointer:
+            meta["source_artifact"] = pointer
+        else:
+            targets = link_map.get(dir_name)
+            if targets:
+                meta["linked_repos"] = targets
+        meta["schema_version"] = SCHEMA_VERSION
+        try:
+            _atomic_write_meta(ws / dir_name / "meta.json", meta)
+        except OSError:
+            pass
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "register_link",
     "migrate_meta_to_v2",
+    "batch_migrate_to_v2",
 ]

@@ -386,7 +386,7 @@ def _get_workspace_root() -> Path:
 
 def _load_repos(ws: Path) -> list[dict]:
     """Return all indexed repos, sorted by name, with 'active' flag set."""
-    from terrain.entrypoints.link_ops import migrate_meta_to_v2
+    from terrain.entrypoints.link_ops import batch_migrate_to_v2
     from terrain.foundation.utils.paths import normalize_repo_path
 
     active_file = ws / "active.txt"
@@ -395,14 +395,16 @@ def _load_repos(ws: Path) -> list[dict]:
     repos: list[dict] = []
     if not ws.exists():
         return repos
+
+    # JER-101: batch v1 → v2 migration in a single O(n) pass.
+    batch_migrate_to_v2(ws)
+
     for child in sorted(ws.iterdir()):
         if not child.is_dir():
             continue
         meta_file = child / "meta.json"
         if not meta_file.exists():
             continue
-        # JER-101: lazy v1 → v2 migration (idempotent, no-op for v2).
-        migrate_meta_to_v2(child, ws)
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -444,7 +446,9 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
     detector = GitChangeDetector()
     entries: list[dict] = []
 
-    from terrain.entrypoints.link_ops import migrate_meta_to_v2
+    # JER-101: batch v1 → v2 migration in a single O(n) pass.
+    from terrain.entrypoints.link_ops import batch_migrate_to_v2
+    batch_migrate_to_v2(ws)
 
     for child in sorted(ws.iterdir()):
         if not child.is_dir():
@@ -452,8 +456,6 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         meta_file = child / "meta.json"
         if not meta_file.exists():
             continue
-        # JER-101: lazy v1 → v2 migration (idempotent, no-op for v2).
-        migrate_meta_to_v2(child, ws)
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8", errors="replace"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
