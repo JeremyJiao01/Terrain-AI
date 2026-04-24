@@ -2020,8 +2020,13 @@ class MCPToolsRegistry:
         if active_file.exists():
             active_name = active_file.read_text(encoding="utf-8", errors="replace").strip()
 
+        # Run in thread pool — _get_repo_status_entries calls git subprocess
+        # and must not block the async event loop.
+        loop = asyncio.get_running_loop()
         try:
-            status_entries = _get_repo_status_entries(self._workspace)
+            status_entries = await loop.run_in_executor(
+                None, _get_repo_status_entries, self._workspace
+            )
         except Exception as exc:  # pragma: no cover — defensive: never 500 the MCP tool
             logger.debug("staleness lookup failed: {}", exc)
             status_entries = []

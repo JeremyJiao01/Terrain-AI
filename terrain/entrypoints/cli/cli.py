@@ -477,7 +477,9 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         commits: int | None = None
         current_head_full: str | None = None
 
-        if repo_path:
+        # Only run git checks when repo_path actually exists on this machine.
+        # Skips repos whose paths are from a CI build or another machine.
+        if repo_path and repo_path.is_dir():
             if last_indexed_commit:
                 # Prefer SHA anchor — immune to timezone / rebase / clock skew.
                 commits = detector.count_commits_since_sha(repo_path, last_indexed_commit)
