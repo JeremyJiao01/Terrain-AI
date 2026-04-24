@@ -129,7 +129,9 @@ class _FakeEmbedder:
     def get_embedding_dimension(self) -> int:
         return self._dim
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(
+        self, texts: list[str], progress_cb=None
+    ) -> list[list[float]]:
         return [[float(i + 1)] * self._dim for i, _ in enumerate(texts)]
 
 

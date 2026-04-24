@@ -16,10 +16,15 @@ from __future__ import annotations
 import os
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 import requests
 from loguru import logger
+
+# Optional callback invoked on each retry branch (429 / 5xx / timeout / network)
+# so the CLI progress bar can surface "rate limited, retry in 2s (1/3)" instead
+# of looking stuck. Message is plain ASCII for cp936 / cp437 safety.
+EmbedProgressCb = Callable[[str], None]
 
 # Suppress SSL verification warnings when verify=False is used (e.g. third-party proxy)
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
@@ -110,11 +115,18 @@ class BaseEmbedder(ABC):
         ...
 
     @abstractmethod
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(
+        self,
+        texts: list[str],
+        progress_cb: EmbedProgressCb | None = None,
+    ) -> list[list[float]]:
         """Generate embeddings for multiple code snippets.
 
         Args:
             texts: List of code texts to embed
+            progress_cb: Optional callback ``fn(msg)`` invoked on each retry
+                (429 / 5xx / timeout / network error) so callers can update a
+                progress bar. Messages are plain ASCII.
 
         Returns:
             List of embedding vectors
@@ -199,6 +211,7 @@ class Qwen3Embedder(BaseEmbedder):
         texts: list[str],
         text_type: str = "document",
         dimensions: int | None = None,
+        progress_cb: EmbedProgressCb | None = None,
     ) -> dict[str, Any]:
         """Make API request to get embeddings.
 
@@ -206,6 +219,9 @@ class Qwen3Embedder(BaseEmbedder):
             texts: List of texts to embed
             text_type: Type of text ("document" or "query")
             dimensions: Optional dimension reduction (not supported by all models)
+            progress_cb: Optional ``fn(msg)`` called before each retry so the
+                CLI spinner can show "rate limited, retry in 2s (1/3)" instead
+                of looking stuck.
 
         Returns:
             API response JSON
@@ -238,6 +254,11 @@ class Qwen3Embedder(BaseEmbedder):
                     import time
 
                     wait_time = 2 ** attempt
+                    if progress_cb:
+                        progress_cb(
+                            f"rate limited, retry in {wait_time}s "
+                            f"({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Rate limited. Waiting {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -249,6 +270,11 @@ class Qwen3Embedder(BaseEmbedder):
                     error_msg += f" - {detail}"
 
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"server busy ({response.status_code}), retry "
+                            f"({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"{error_msg}, retrying...")
                     continue
 
@@ -256,12 +282,20 @@ class Qwen3Embedder(BaseEmbedder):
 
             except requests.exceptions.Timeout:
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"timeout, retry ({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Request timeout, retrying... ({attempt + 1}/{self.max_retries})")
                     continue
                 raise RuntimeError("API request timeout after all retries")
 
             except requests.exceptions.RequestException as e:
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"network error, retry ({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Request error: {e}, retrying...")
                     continue
                 raise RuntimeError(f"API request failed: {e}")
@@ -340,6 +374,7 @@ class Qwen3Embedder(BaseEmbedder):
         texts: list[str],
         use_instruction: bool = False,
         show_progress: bool = False,
+        progress_cb: EmbedProgressCb | None = None,
     ) -> list[list[float]]:
         """Generate embeddings for multiple code snippets.
 
@@ -347,6 +382,8 @@ class Qwen3Embedder(BaseEmbedder):
             texts: List of code texts to embed
             use_instruction: Whether to prepend instruction (for queries)
             show_progress: Whether to show progress bar
+            progress_cb: Optional ``fn(msg)`` forwarded to ``_make_request`` so
+                retry / backoff state surfaces to callers.
 
         Returns:
             List of embedding vectors
@@ -380,7 +417,9 @@ class Qwen3Embedder(BaseEmbedder):
             batch_texts = texts[i : i + self.batch_size]
 
             try:
-                response = self._make_request(batch_texts, text_type="document")
+                response = self._make_request(
+                    batch_texts, text_type="document", progress_cb=progress_cb
+                )
                 batch_embeddings = self._extract_embeddings(response)
                 all_embeddings.extend(batch_embeddings)
             except Exception as e:
@@ -524,7 +563,11 @@ class OpenAIEmbedder(BaseEmbedder):
 
         logger.info(f"Initialized OpenAIEmbedder with model: {self.model}")
 
-    def _make_request(self, texts: list[str]) -> list[list[float]]:
+    def _make_request(
+        self,
+        texts: list[str],
+        progress_cb: EmbedProgressCb | None = None,
+    ) -> list[list[float]]:
         url = f"{self.base_url}/embeddings"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -557,6 +600,11 @@ class OpenAIEmbedder(BaseEmbedder):
                 if response.status_code == 429:
                     import time
                     wait_time = 2 ** attempt
+                    if progress_cb:
+                        progress_cb(
+                            f"rate limited, retry in {wait_time}s "
+                            f"({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Rate limited. Waiting {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -567,17 +615,30 @@ class OpenAIEmbedder(BaseEmbedder):
                     error_msg += f" - {detail}"
 
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"server busy ({response.status_code}), retry "
+                            f"({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"{error_msg}, retrying...")
                     continue
                 raise RuntimeError(error_msg)
 
             except requests.exceptions.Timeout:
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"timeout, retry ({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Request timeout, retrying ({attempt + 1}/{self.max_retries})...")
                     continue
                 raise RuntimeError("OpenAI embeddings API timeout after all retries")
             except requests.exceptions.RequestException as e:
                 if attempt < self.max_retries - 1:
+                    if progress_cb:
+                        progress_cb(
+                            f"network error, retry ({attempt + 1}/{self.max_retries})"
+                        )
                     logger.warning(f"Request error: {e}, retrying...")
                     continue
                 raise RuntimeError(f"OpenAI embeddings API request failed: {e}")
@@ -588,13 +649,17 @@ class OpenAIEmbedder(BaseEmbedder):
         results = self._make_request([text])
         return results[0] if results else []
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(
+        self,
+        texts: list[str],
+        progress_cb: EmbedProgressCb | None = None,
+    ) -> list[list[float]]:
         if not texts:
             return []
         all_embeddings: list[list[float]] = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            all_embeddings.extend(self._make_request(batch))
+            all_embeddings.extend(self._make_request(batch, progress_cb=progress_cb))
         return all_embeddings
 
     def get_embedding_dimension(self) -> int:
@@ -614,7 +679,11 @@ class DummyEmbedder(BaseEmbedder):
         """Return zero vector."""
         return [0.0] * self.dimension
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(
+        self,
+        texts: list[str],
+        progress_cb: EmbedProgressCb | None = None,
+    ) -> list[list[float]]:
         """Return list of zero vectors."""
         return [[0.0] * self.dimension for _ in texts]
 

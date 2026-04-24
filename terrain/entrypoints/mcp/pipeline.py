@@ -1314,14 +1314,20 @@ def build_vector_index(
 
         # Pre-call header so L1's spinner has meaningful text while the
         # embed API is blocking.
+        batch_cb = None
         if progress_cb and total > 0:
             done_before = already_done + batch_start
+            last_pct = 16.0 + (done_before / total) * 24.0
             progress_cb(
                 f"embed {done_before + 1}-{already_done + batch_end}/{total} → {preview}…",
-                16.0 + (done_before / total) * 24.0,
+                last_pct,
             )
+            # Forward embedder retry/backoff state (429 / 5xx / timeout) to the
+            # CLI progress bar. Embedder cb takes msg only — capture the current
+            # pct via default arg so the bar stays at the pre-call position.
+            batch_cb = lambda m, _pct=last_pct: progress_cb(m, _pct)
 
-        batch_embeddings = embedder.embed_batch(batch_texts)
+        batch_embeddings = embedder.embed_batch(batch_texts, progress_cb=batch_cb)
 
         if batch_embeddings is None:
             continue
