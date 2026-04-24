@@ -306,9 +306,14 @@ function commandExists(cmd) {
 }
 
 function findPython() {
+  // Pin to Python 3.11 — key C-extension dependencies (tree-sitter,
+  // kuzu, etc.) have the best wheel coverage on 3.11.  Bump when the
+  // ecosystem catches up.
+  const MAX_MINOR = 11;
+
   const candidates = IS_WIN
-    ? ["python", "python3", "py", "python3.13", "python3.12", "python3.11"]
-    : ["python3.13", "python3.12", "python3.11", "python3", "python"];
+    ? ["python3.11", "python", "python3", "py"]
+    : ["python3.11", "python3", "python"];
 
   const valid = [];
   for (const cmd of candidates) {
@@ -318,7 +323,7 @@ function findPython() {
       const m = out.match(/Python (\d+)\.(\d+)\.(\d+)/);
       if (!m) continue;
       const [, major, minor, patch] = m.map(Number);
-      if (major === 3 && minor >= 11) {
+      if (major === 3 && minor >= 11 && minor <= MAX_MINOR) {
         valid.push({ cmd, ver: out, major, minor, patch });
       }
     } catch { /* not found or not runnable */ }
@@ -326,7 +331,7 @@ function findPython() {
 
   if (valid.length === 0) return null;
 
-  // Pick the highest version among valid candidates
+  // Pick the highest compatible version among valid candidates
   valid.sort((a, b) =>
     b.major - a.major || b.minor - a.minor || b.patch - a.patch
   );

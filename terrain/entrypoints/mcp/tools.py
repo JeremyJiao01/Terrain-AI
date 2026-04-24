@@ -1021,19 +1021,38 @@ class MCPToolsRegistry:
         self._try_auto_load()
 
     def _try_auto_load(self) -> None:
-        """Try to load the last active repo from workspace."""
+        """Try to load the last active repo from workspace.
+
+        Resolution order:
+        1. ``{workspace}/active.txt`` → previously activated repo
+        2. ``{cwd}/.terrain/`` → pre-built artifacts shipped with the repo
+           (e.g. from a CI pipeline).  Automatically registers a workspace
+           stub so subsequent startups hit path 1.
+        """
+        # --- Path 1: workspace active.txt ---
         active_file = self._workspace / "active.txt"
-        if not active_file.exists():
-            return
-        artifact_dir_name = active_file.read_text(encoding="utf-8", errors="replace").strip()
-        artifact_dir = self._workspace / artifact_dir_name
-        if artifact_dir.exists():
-            artifact_dir = _resolve_artifact_dir(artifact_dir)
+        if active_file.exists():
+            artifact_dir_name = active_file.read_text(encoding="utf-8", errors="replace").strip()
+            artifact_dir = self._workspace / artifact_dir_name
+            if artifact_dir.exists():
+                artifact_dir = _resolve_artifact_dir(artifact_dir)
+                try:
+                    self._load_services(artifact_dir)
+                    logger.info(f"Auto-loaded repo from: {artifact_dir}")
+                    return
+                except Exception as exc:
+                    logger.warning(f"Graph/LLM services unavailable: {exc}")
+
+        # --- Path 2: discover pre-built .terrain/ in cwd ---
+        cwd = Path.cwd().resolve()
+        local_terrain = cwd / ".terrain"
+        if (local_terrain / "graph.db").exists() and (local_terrain / "meta.json").exists():
             try:
-                self._load_services(artifact_dir)
-                logger.info(f"Auto-loaded repo from: {artifact_dir}")
+                self._set_active_local(local_terrain, cwd)
+                self._load_services(local_terrain)
+                logger.info(f"Auto-discovered pre-built .terrain/ in {cwd}")
             except Exception as exc:
-                logger.warning(f"Graph/LLM services unavailable: {exc}")
+                logger.warning(f"Failed to load pre-built .terrain/: {exc}")
 
     def _load_services(self, artifact_dir: Path) -> None:
         """Load KuzuIngestor + CypherGenerator + SemanticSearchService from artifact dir."""
@@ -1053,6 +1072,29 @@ class MCPToolsRegistry:
         except (TypeError, ValueError) as exc:
             logger.warning(f"meta.json repo_path normalize failed ({raw_repo_path!r}): {exc}; falling back to raw")
             repo_path = Path(raw_repo_path)
+
+        # If the stored repo_path doesn't exist on this machine (e.g. artifacts
+        # were built on CI and shipped with the repo), infer the real repo_path
+        # from the artifact directory location.
+        #   {repo}/.terrain/meta.json → repo_path = {repo}
+        #   {workspace}/{name}_{hash}/meta.json → keep as-is (already broken)
+        if not repo_path.is_dir() and artifact_dir.name == ".terrain":
+            inferred = artifact_dir.parent
+            if inferred.is_dir():
+                logger.info(
+                    "repo_path {} not found; inferred {} from artifact location",
+                    raw_repo_path, inferred,
+                )
+                repo_path = inferred
+                # Persist the corrected path so subsequent loads are instant
+                meta["repo_path"] = normalize_repo_path(repo_path)
+                try:
+                    meta_file.write_text(
+                        json.dumps(meta, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass  # read-only FS is fine, we have the path in memory
         db_path = artifact_dir / "graph.db"
         vectors_path = artifact_dir / "vectors.pkl"
 
@@ -1104,6 +1146,50 @@ class MCPToolsRegistry:
         (self._workspace / "active.txt").write_text(
             artifact_dir.name, encoding="utf-8"
         )
+
+    def _set_active_local(self, local_dir: Path, repo_path: Path) -> None:
+        """Register a repo-local .terrain/ directory in the workspace.
+
+        Creates a lightweight stub in the workspace so that ``active.txt``
+        can reference it, while ``_resolve_artifact_dir`` will redirect to
+        the real ``.terrain/`` directory inside the repo.
+        """
+        ws_dir = artifact_dir_for(self._workspace, repo_path)
+        ws_dir.mkdir(parents=True, exist_ok=True)
+
+        from terrain.foundation.utils.paths import normalize_repo_path
+
+        # Write a minimal meta.json in the workspace stub that points to
+        # the actual repo — _resolve_artifact_dir() will follow it.
+        stub_meta = ws_dir / "meta.json"
+        meta: dict[str, Any] = {}
+        if stub_meta.exists():
+            try:
+                meta = json.loads(stub_meta.read_text(encoding="utf-8", errors="replace"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        meta["repo_path"] = normalize_repo_path(repo_path)
+        meta["repo_name"] = meta.get("repo_name") or repo_path.name or "root"
+        stub_meta.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        # Also fix the local .terrain/meta.json repo_path to this machine
+        local_meta_file = local_dir / "meta.json"
+        if local_meta_file.exists():
+            try:
+                local_meta = json.loads(
+                    local_meta_file.read_text(encoding="utf-8", errors="replace")
+                )
+                local_meta["repo_path"] = normalize_repo_path(repo_path)
+                local_meta_file.write_text(
+                    json.dumps(local_meta, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        self._set_active(ws_dir)
 
     def close(self) -> None:
         if self._ingestor is not None:
@@ -1585,8 +1671,15 @@ class MCPToolsRegistry:
             if _progress_cb is not None:
                 asyncio.run_coroutine_threadsafe(_progress_cb(msg, pct), loop)
 
-        # Force rebuild to ensure fresh graph data
-        effective_rebuild = True
+        # Force rebuild to ensure fresh graph data — unless the repo ships
+        # pre-built .terrain/ artifacts (CI pipeline scenario), in which
+        # case we honour rebuild=False so _run_pipeline can reuse them.
+        local_terrain = repo / ".terrain"
+        has_prebuilt = (
+            (local_terrain / "graph.db").exists()
+            and (local_terrain / "meta.json").exists()
+        )
+        effective_rebuild = not has_prebuilt if not rebuild else True
 
         from terrain.foundation.types.config import TimeoutConfig
         tc = TimeoutConfig.from_env()
@@ -1655,6 +1748,37 @@ class MCPToolsRegistry:
 
         artifact_dir = artifact_dir_for(self._workspace, repo_path)
         artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        # If the repo ships pre-built artifacts in {repo}/.terrain/ (e.g.
+        # from a CI pipeline) and we're not forcing a rebuild, register &
+        # activate the local artifacts directly instead of re-indexing.
+        local_terrain = repo_path / ".terrain"
+        if (
+            not rebuild
+            and (local_terrain / "graph.db").exists()
+            and (local_terrain / "meta.json").exists()
+        ):
+            logger.info("Found pre-built .terrain/ in repo, reusing artifacts")
+            if progress_cb:
+                progress_cb("Found pre-built .terrain/ in repo, activating...", 5.0)
+
+            self._set_active_local(local_terrain, repo_path)
+            self._load_services(local_terrain)
+
+            final_validation = validate_api_docs(local_terrain)
+            if progress_cb:
+                progress_cb("Pre-built artifacts activated.", 100.0)
+            return {
+                "status": "success",
+                "repo_path": str(repo_path),
+                "artifact_dir": str(local_terrain),
+                "source": "pre-built",
+                "api_docs": final_validation,
+                "next_steps": (
+                    "Repository loaded from pre-built .terrain/ artifacts.\n"
+                    "You now have full code intelligence for this repo."
+                ),
+            }
 
         db_path = artifact_dir / "graph.db"
         vectors_path = artifact_dir / "vectors.pkl"
