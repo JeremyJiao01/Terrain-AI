@@ -199,3 +199,86 @@ echo EMBEDDING_MODEL={EMBEDDING_MODEL}
 Omit any line whose value was not provided.
 
 ---
+
+## Block 5 — Register terrain as an MCP Server
+
+Detect which AI agent client the user is running and register the MCP server accordingly.
+
+### Claude Code
+
+**Mac/Linux:**
+```bash
+claude mcp add terrain -- npx terrain-ai@latest --server
+```
+
+**Windows:**
+```
+claude mcp add terrain -- cmd /c npx terrain-ai@latest --server
+```
+
+Verify registration:
+```bash
+claude mcp list
+```
+Expected: `terrain` appears in the list.
+
+---
+
+### opencode
+
+Read the current config file:
+
+**Mac/Linux:** `~/.config/opencode/opencode.json` (or `$XDG_CONFIG_HOME/opencode/opencode.json` if set)
+**Windows:** `%APPDATA%\opencode\opencode.json`
+
+Add the following entry inside the `"mcpServers"` object (create the key if absent):
+
+**Mac/Linux:**
+```json
+"terrain": {
+  "command": "npx",
+  "args": ["-y", "terrain-ai@latest", "--server"]
+}
+```
+
+**Windows:**
+```json
+"terrain": {
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "terrain-ai@latest", "--server"]
+}
+```
+
+---
+
+### Other agents (codex, Hermes, etc.)
+
+Tell the user: "Please add the following to your agent's MCP configuration file:"
+
+**Mac/Linux:**
+```json
+{
+  "mcpServers": {
+    "terrain": {
+      "command": "npx",
+      "args": ["-y", "terrain-ai@latest", "--server"]
+    }
+  }
+}
+```
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "terrain": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "terrain-ai@latest", "--server"]
+    }
+  }
+}
+```
+
+If the MCP registration command fails, show the appropriate JSON block above and instruct the user to add it manually.
+
+---
