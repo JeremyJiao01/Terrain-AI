@@ -25,3 +25,33 @@ echo %OS%
 Use PLATFORM in every subsequent block to choose the correct commands.
 
 ---
+
+## Block 2 — Verify Python 3.11.x
+
+terrain-ai requires **exactly Python 3.11.x**. Versions 3.10, 3.12, and above are not supported. STOP if you cannot find Python 3.11.
+
+**Check (Mac/Linux):**
+```bash
+python3.11 --version
+```
+
+**Check (Windows):**
+```
+py -3.11 --version
+```
+
+Expected output: `Python 3.11.x` where x is any patch version.
+
+**If Python 3.11.x is found** → continue to Block 3.
+
+**If Python 3.11 is not found or the version is wrong** → install it using the instructions below, then re-run the check. Do NOT continue with any other Python version.
+
+| PLATFORM | Installation command |
+|----------|---------------------|
+| `mac`    | `brew install python@3.11` |
+| `linux`  | `sudo apt install python3.11` or `sudo dnf install python3.11` |
+| `windows`| Download the installer from `https://www.python.org/downloads/release/python-3119/` — check **"Add Python to PATH"** before installing. |
+
+After installing, re-run the version check before continuing. If the version is still not 3.11.x, STOP and ask the user to resolve the Python installation manually.
+
+---
