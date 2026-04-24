@@ -73,6 +73,46 @@ _SPINNER_BRAILLE: tuple[str, ...] = (
 _SPINNER_ASCII: tuple[str, ...] = ("|", "/", "-", "\\")
 _SPINNER_FRAMES: tuple[str, ...] | None = None
 
+# Active progress bar — set by _ProgressBar.__init__, cleared by finish().
+# Used by _ProgressAwareStderr to coordinate stderr writes with the progress line.
+_ACTIVE_BAR: "_ProgressBar | None" = None
+
+
+class _ProgressAwareStderr:
+    """sys.stderr drop-in that prevents loguru from breaking the progress bar.
+
+    When a log line arrives while a progress bar is active:
+      1. Erase the current progress line  (\\r\\033[K on stdout)
+      2. Write the log content to the real stderr
+      3. Redraw the progress bar on stdout
+
+    This keeps log messages visible without causing "screen flood" from the
+    ticker re-rendering on successive blank lines.
+    """
+
+    def __init__(self, real_stderr) -> None:
+        self._real = real_stderr
+
+    def write(self, data: str) -> int:
+        bar = _ACTIVE_BAR
+        if _ANSI and bar is not None and not bar._finished and bar._last_step > 0:
+            with bar._lock:
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+                result = self._real.write(data)
+                self._real.flush()
+                if data.endswith("\n"):
+                    bar._render_locked(bar._last_step, bar._last_msg, bar._last_pct)
+                    sys.stdout.flush()
+            return result
+        return self._real.write(data)
+
+    def flush(self) -> None:
+        self._real.flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
 
 def _resolve_spinner_frames(force_refresh: bool = False) -> tuple[str, ...]:
     """Return the spinner character set for the current stdout encoding.
@@ -140,6 +180,12 @@ class _ProgressBar:
             target=self._tick_loop, name="progressbar-ticker", daemon=True,
         )
         self._ticker.start()
+        # Intercept sys.stderr so that loguru (and any other stderr writer)
+        # coordinates with the progress line instead of flooding the screen.
+        global _ACTIVE_BAR
+        self._saved_stderr = sys.stderr
+        sys.stderr = _ProgressAwareStderr(sys.stderr)
+        _ACTIVE_BAR = self
 
     # -- internals ------------------------------------------------------
 
@@ -270,6 +316,11 @@ class _ProgressBar:
             return
         self._stop.set()
         with self._lock:
+            # Restore sys.stderr before setting _finished so that any in-flight
+            # loguru write that's waiting on the lock sees the restored stream.
+            global _ACTIVE_BAR
+            _ACTIVE_BAR = None
+            sys.stderr = self._saved_stderr
             self._finished = True
             try:
                 sys.stdout.write("\n")
@@ -280,6 +331,35 @@ class _ProgressBar:
         self._ticker.join(timeout=0.5)
 
 from loguru import logger
+
+# Replace loguru's built-in stderr handler with a proxy that always delegates
+# to the *current* sys.stderr.  This lets _ProgressBar swap sys.stderr at
+# runtime to coordinate log output with the progress line.
+class _StderrProxy:
+    def write(self, msg: str) -> int:
+        return sys.stderr.write(msg)
+    def flush(self) -> None:
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+    def __getattr__(self, name: str):
+        return getattr(sys.stderr, name)
+
+_STDERR_PROXY = _StderrProxy()
+
+logger.remove()
+logger.add(
+    _STDERR_PROXY,
+    level="INFO",
+    format=(
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>"
+        " - <level>{message}</level>"
+    ),
+    colorize=True,
+)
 
 from terrain import __version__
 from terrain.domains.core.graph.builder import TerrainBuilder
@@ -298,9 +378,15 @@ def setup_logging(verbose: bool = False) -> None:
     level = "DEBUG" if verbose else "INFO"
     logger.remove()
     logger.add(
-        sys.stderr,
+        _STDERR_PROXY,
         level=level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>"
+            " - <level>{message}</level>"
+        ),
+        colorize=True,
     )
 
 
@@ -2495,6 +2581,222 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
 
 
+# ---------------------------------------------------------------------------
+# update — check and install updates for npm and PyPI packages
+# ---------------------------------------------------------------------------
+
+def _semver_cmp(a: str, b: str) -> int:
+    """Compare two semver strings. Returns 1 if a > b, -1 if a < b, 0 if equal."""
+    def _parts(v: str) -> list[int]:
+        return [int(x) for x in (v or "0").split(".")[:3]]
+    for va, vb in zip(_parts(a), _parts(b)):
+        if va > vb:
+            return 1
+        if va < vb:
+            return -1
+    return 0
+
+
+def _find_pip() -> list[str] | None:
+    """Return a pip invocation list, e.g. ['pip3'] or ['python3', '-m', 'pip']."""
+    import shutil
+    import subprocess
+    import sys as _sys
+
+    candidates = ["pip3", "pip"] if _sys.platform != "win32" else ["pip", "pip3"]
+    for p in candidates:
+        if shutil.which(p):
+            try:
+                subprocess.run(
+                    [p, "--version"],
+                    check=True, capture_output=True, timeout=8,
+                )
+                return [p]
+            except Exception:
+                pass
+    # Fallback: python -m pip
+    py = _sys.executable
+    try:
+        subprocess.run(
+            [py, "-m", "pip", "--version"],
+            check=True, capture_output=True, timeout=8,
+        )
+        return [py, "-m", "pip"]
+    except Exception:
+        return None
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Check and install updates for the terrain-ai npm and PyPI packages."""
+    import importlib.metadata
+    import json
+    import shutil
+    import subprocess
+    import urllib.error
+    import urllib.request
+
+    check_only: bool = getattr(args, "check_only", False)
+    skip_npm: bool = getattr(args, "skip_npm", False)
+    skip_pip: bool = getattr(args, "skip_pip", False)
+
+    OK   = _c("32", "✓")
+    FAIL = _c("31", "✗")
+    WARN = _c("33", "⚠")
+    UP   = _c("36", "↑")
+    DIM  = lambda t: _c("2", t)  # noqa: E731
+
+    print()
+
+    # ── Python / PyPI ─────────────────────────────────────────────────────────
+    local_py: str | None = None
+    latest_py: str | None = None
+    pip_cmd: list[str] | None = None
+    py_updated = False
+    py_error: str | None = None
+
+    if not skip_pip:
+        print(f"  {DIM('Checking PyPI …')}", end="", flush=True)
+
+        try:
+            local_py = importlib.metadata.version("terrain-ai")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+
+        try:
+            with urllib.request.urlopen(
+                "https://pypi.org/pypi/terrain-ai/json", timeout=10
+            ) as resp:
+                data = json.loads(resp.read())
+            latest_py = data["info"]["version"]
+        except (urllib.error.URLError, KeyError, Exception) as exc:
+            py_error = f"Could not reach PyPI: {exc}"
+
+        print(f"\r\033[K", end="")  # clear the "Checking…" line
+
+        if py_error:
+            print(f"  {WARN} PyPI  {DIM(py_error)}")
+        elif local_py is None:
+            print(f"  {WARN} PyPI  terrain-ai not installed via pip")
+        elif latest_py is None:
+            print(f"  {WARN} PyPI  current {local_py}  (could not fetch latest)")
+        elif _semver_cmp(latest_py, local_py) <= 0:
+            print(f"  {OK} PyPI  terrain-ai {_c('32', local_py)}  (up to date)")
+        else:
+            # Update available
+            arrow = f"{_c('33', local_py)} → {_c('32', latest_py)}"
+            if check_only:
+                print(f"  {UP} PyPI  terrain-ai {arrow}  {DIM('(update available)')}")
+            else:
+                print(f"  {UP} PyPI  terrain-ai {arrow}  — installing …", flush=True)
+                pip_cmd = _find_pip()
+                if pip_cmd is None:
+                    print(f"  {FAIL} PyPI  pip not found; cannot update automatically.")
+                    print(f"       Run: pip install --upgrade terrain-ai[treesitter-full]")
+                else:
+                    try:
+                        cmd = [
+                            *pip_cmd, "install",
+                            "--upgrade", "--prefer-binary",
+                            "--no-cache-dir", "--force-reinstall",
+                            "terrain-ai[treesitter-full]",
+                        ]
+                        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+                        py_updated = True
+                        print(f"\r\033[K  {OK} PyPI  terrain-ai {arrow}  updated ✓")
+                    except subprocess.CalledProcessError as exc:
+                        err_tail = (exc.stderr or b"").decode(errors="replace").strip()
+                        err_tail = err_tail[-200:] if err_tail else "(no output)"
+                        print(f"\r\033[K  {FAIL} PyPI  update failed: {err_tail}")
+                    except subprocess.TimeoutExpired:
+                        print(f"\r\033[K  {FAIL} PyPI  update timed out (>5 min)")
+
+    # ── npm ───────────────────────────────────────────────────────────────────
+    local_npm: str | None = None
+    latest_npm: str | None = None
+    npm_updated = False
+    npm_error: str | None = None
+
+    if not skip_npm and shutil.which("npm"):
+        print(f"  {DIM('Checking npm …')}", end="", flush=True)
+
+        # Local version: ask npm what's globally installed
+        try:
+            result = subprocess.run(
+                ["npm", "list", "-g", "--depth=0", "--json"],
+                capture_output=True, timeout=15, text=True,
+            )
+            info = json.loads(result.stdout or "{}")
+            deps = info.get("dependencies", {})
+            if "terrain-ai" in deps:
+                local_npm = deps["terrain-ai"].get("version")
+        except Exception:
+            pass
+
+        # Latest version from registry
+        try:
+            result = subprocess.run(
+                ["npm", "view", "terrain-ai", "version"],
+                capture_output=True, timeout=15, text=True, check=True,
+            )
+            latest_npm = result.stdout.strip() or None
+        except Exception as exc:
+            npm_error = str(exc)
+
+        print(f"\r\033[K", end="")  # clear "Checking…"
+
+        if npm_error and local_npm is None:
+            print(f"  {WARN} npm   could not reach registry: {npm_error}")
+        elif local_npm is None:
+            print(f"  {DIM('  npm   terrain-ai not installed globally — skipping')}")
+        elif latest_npm is None:
+            print(f"  {WARN} npm   current {local_npm}  (could not fetch latest)")
+        elif _semver_cmp(latest_npm, local_npm) <= 0:
+            print(f"  {OK} npm   terrain-ai {_c('32', local_npm)}  (up to date)")
+        else:
+            arrow = f"{_c('33', local_npm)} → {_c('32', latest_npm)}"
+            if check_only:
+                print(f"  {UP} npm   terrain-ai {arrow}  {DIM('(update available)')}")
+            else:
+                print(f"  {UP} npm   terrain-ai {arrow}  — installing …", flush=True)
+                try:
+                    subprocess.run(
+                        ["npm", "install", "-g", "terrain-ai@latest"],
+                        check=True, capture_output=True, timeout=120,
+                    )
+                    npm_updated = True
+                    print(f"\r\033[K  {OK} npm   terrain-ai {arrow}  updated ✓")
+                except subprocess.CalledProcessError as exc:
+                    err_tail = (exc.stderr or b"").decode(errors="replace").strip()
+                    err_tail = err_tail[-200:] if err_tail else "(no output)"
+                    print(f"\r\033[K  {FAIL} npm   update failed: {err_tail}")
+                except subprocess.TimeoutExpired:
+                    print(f"\r\033[K  {FAIL} npm   update timed out (>2 min)")
+    elif not skip_npm:
+        print(f"  {DIM('  npm   not found — skipping npm update')}")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print()
+    if check_only:
+        if (local_py and latest_py and _semver_cmp(latest_py, local_py) > 0) or \
+           (local_npm and latest_npm and _semver_cmp(latest_npm, local_npm) > 0):
+            print(f"  {DIM('Run  terrain update  to install the above updates.')}")
+        else:
+            print(f"  {OK} Everything is up to date.")
+    else:
+        if py_updated or npm_updated:
+            notes: list[str] = []
+            if py_updated:
+                notes.append("Python package updated — restart terrain / MCP server to use new version")
+            if npm_updated:
+                notes.append("npm package updated — restart any running terrain processes")
+            for note in notes:
+                print(f"  {_c('2', note)}")
+        else:
+            print(f"  {OK} No updates were applied.")
+    print()
+    return 0
+
+
 def cmd_reload(args: argparse.Namespace) -> int:
     """Hot-reload .env configuration and display changes."""
     from terrain.foundation.utils.settings import reload_env
@@ -2552,7 +2854,9 @@ Low-level commands:
 
 Run 'terrain <command> --help' for details on any command.
 
-Windows:
+Other commands:
+  terrain update                    update terrain-ai (npm + PyPI) to the latest version
+  terrain update --check            check for updates without installing
   terrain setup                     run setup wizard (API keys, workspace, MCP registration)
         """,
         add_help=False,
@@ -2984,6 +3288,33 @@ Windows:
         description="Reload configuration from workspace .env file and display what changed.",
     )
     reload_parser.set_defaults(func=cmd_reload)
+
+    # update command
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Check and install updates for terrain-ai (npm + PyPI)",
+        description=(
+            "Check for newer versions of terrain-ai on PyPI and npm, "
+            "then upgrade both packages in place."
+        ),
+    )
+    update_parser.add_argument(
+        "--check",
+        dest="check_only",
+        action="store_true",
+        help="Only report available updates; do not install anything",
+    )
+    update_parser.add_argument(
+        "--skip-npm",
+        action="store_true",
+        help="Skip the npm global package update",
+    )
+    update_parser.add_argument(
+        "--skip-pip",
+        action="store_true",
+        help="Skip the PyPI (pip) package update",
+    )
+    update_parser.set_defaults(func=cmd_update)
 
     args = parser.parse_args()
 
