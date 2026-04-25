@@ -664,24 +664,21 @@ def _load_repos(ws: Path) -> list[dict]:
 
 
 def _get_repo_status_entries(ws: Path) -> list[dict]:
-    """Return staleness status for every indexed repo under *ws*.
+    """Return metadata for every indexed repo under *ws*.
 
     Each entry is a dict with:
         artifact_dir  — artifact directory name (stable join key)
         name          — display name from meta.json
         path          — absolute repo path
         indexed_at    — ISO 8601 timestamp string
-        status        — "up-to-date" | "stale" | "unknown"
-        commits_since — int (>=0) or None when unknown
+        status        — always "unknown" (git checks removed for speed)
+        commits_since — always None
         indexed_head  — short SHA (7 chars) recorded at index time, or None
-        current_head  — short SHA (7 chars) of the repo's HEAD now, or None
+        current_head  — always None
     """
-    from terrain.foundation.services.git_service import GitChangeDetector
-
     if not ws.exists():
         return []
 
-    detector = GitChangeDetector()
     entries: list[dict] = []
 
     # JER-101: batch v1 → v2 migration in a single O(n) pass.
@@ -699,51 +696,20 @@ def _get_repo_status_entries(ws: Path) -> list[dict]:
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue
 
-        from terrain.foundation.utils.paths import normalize_repo_path
-
         name = meta.get("repo_name", child.name)
         repo_path_str = meta.get("repo_path", "")
         indexed_at = meta.get("indexed_at", "")
         last_indexed_commit = meta.get("last_indexed_commit") or ""
-
-        if repo_path_str:
-            try:
-                repo_path = Path(normalize_repo_path(repo_path_str))
-            except (TypeError, ValueError):
-                logger.warning(f"meta.json repo_path normalize failed for {child.name}: {repo_path_str!r}")
-                repo_path = Path(repo_path_str)
-        else:
-            repo_path = None
-        commits: int | None = None
-        current_head_full: str | None = None
-
-        # Only run git checks when repo_path actually exists on this machine.
-        # Skips repos whose paths are from a CI build or another machine.
-        if repo_path and repo_path.is_dir():
-            if last_indexed_commit:
-                # Prefer SHA anchor — immune to timezone / rebase / clock skew.
-                commits = detector.count_commits_since_sha(repo_path, last_indexed_commit)
-            elif indexed_at:
-                # Legacy meta.json without a SHA anchor — best-effort timestamp path.
-                commits = detector.count_commits_since(repo_path, indexed_at)
-            current_head_full = detector.get_current_head(repo_path)
-
-        if commits is None:
-            status = "unknown"
-        elif commits == 0:
-            status = "up-to-date"
-        else:
-            status = "stale"
 
         entries.append({
             "artifact_dir": child.name,
             "name": name,
             "path": repo_path_str,
             "indexed_at": indexed_at,
-            "status": status,
-            "commits_since": commits,
+            "status": "unknown",
+            "commits_since": None,
             "indexed_head": last_indexed_commit[:7] if last_indexed_commit else None,
-            "current_head": current_head_full[:7] if current_head_full else None,
+            "current_head": None,
         })
 
     return entries
