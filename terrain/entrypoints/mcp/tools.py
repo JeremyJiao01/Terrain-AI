@@ -260,756 +260,21 @@ def _resolve_artifact_dir(ws_artifact_dir: Path) -> Path:
     return ws_artifact_dir
 
 
-# ---------------------------------------------------------------------------
-# extract_predicates helpers (slice 1/3 of JER-47).
-#
-# We re-parse C source on demand rather than carrying AST state through the
-# graph. Parser construction is expensive (loads tree-sitter shared libs), so
-# the parser + query pair for C is cached at module scope.
-# ---------------------------------------------------------------------------
-
-_EXTRACT_PREDICATES_C_EXTS: tuple[str, ...] = (".c", ".h")
-_EXTRACT_PREDICATES_CACHE: dict[str, Any] | None = None
-
-
-def _extract_predicates_bundle() -> dict[str, Any]:
-    """Return a cached {parser, predicate_query, function_query} bundle for C."""
-    global _EXTRACT_PREDICATES_CACHE
-    if _EXTRACT_PREDICATES_CACHE is None:
-        from terrain.foundation.parsers.parser_loader import load_parsers
-        from terrain.foundation.types import constants as cs
-
-        parsers, queries = load_parsers()
-        c_queries = queries.get(cs.SupportedLanguage.C) or {}
-        _EXTRACT_PREDICATES_CACHE = {
-            "parser": parsers.get(cs.SupportedLanguage.C),
-            "predicate_query": c_queries.get(cs.QUERY_PREDICATES),
-            "function_query": c_queries.get(cs.QUERY_FUNCTIONS),
-            "call_query": c_queries.get(cs.QUERY_CALLS),
-        }
-    return _EXTRACT_PREDICATES_CACHE
-
-
-def _extract_predicates_list_c_files(repo: Path) -> list[Path]:
-    """Return sorted absolute paths of .c / .h files under *repo*."""
-    files: list[Path] = []
-    seen: set[Path] = set()
-    for ext in _EXTRACT_PREDICATES_C_EXTS:
-        for p in repo.rglob(f"*{ext}"):
-            if p in seen or not p.is_file():
-                continue
-            seen.add(p)
-            files.append(p)
-    files.sort()
-    return files
-
-
-def _extract_predicates_function_name(func_node) -> str | None:
-    """Extract the simple name of a C ``function_definition`` node."""
-    declarator = func_node.child_by_field_name("declarator")
-    # Unwrap pointer_declarator / parenthesized_declarator layers.
-    while declarator is not None and declarator.type not in (
-        "identifier",
-        "field_identifier",
-        "qualified_identifier",
-    ):
-        inner = declarator.child_by_field_name("declarator")
-        if inner is None:
-            break
-        declarator = inner
-    if declarator is None or declarator.type not in ("identifier", "field_identifier"):
-        return None
-    text = declarator.text
-    if text is None:
-        return None
-    return text.decode("utf-8", errors="replace")
-
-
-# ---------------------------------------------------------------------------
-# Variable-usage helpers (powering the AST-level mode of find_symbol_in_docs).
-#
-# These walk the tree-sitter AST of every C/C++ source file under the active
-# repository to (a) resolve a short or qualified symbol name to exactly one
-# variable declaration and (b) list every read/write usage. Variable nodes
-# are not indexed in the graph, so everything is computed on demand.
-# ---------------------------------------------------------------------------
-
-# Source-file extensions we scan for variable declarations/usages.
-_SYMBOL_USAGE_C_EXTS: dict[str, str] = {
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".cc": "cpp",
-    ".cxx": "cpp",
-    ".hpp": "cpp",
-    ".hh": "cpp",
-    ".hxx": "cpp",
-}
-
-# Parser cache — load_parsers() is expensive (reads tree-sitter shared libs),
-# so cache the C/C++ parsers across calls.
-_SYMBOL_USAGE_PARSERS: dict[str, Any] | None = None
-
-
-def _symbol_usage_get_parsers() -> dict[str, Any]:
-    global _SYMBOL_USAGE_PARSERS
-    if _SYMBOL_USAGE_PARSERS is None:
-        from terrain.foundation.parsers.parser_loader import load_parsers
-        from terrain.foundation.types import constants as cs
-
-        parsers, _queries = load_parsers()
-        _SYMBOL_USAGE_PARSERS = {
-            "c": parsers.get(cs.SupportedLanguage.C),
-            "cpp": parsers.get(cs.SupportedLanguage.CPP),
-        }
-    return _SYMBOL_USAGE_PARSERS
-
-
-def _symbol_usage_module_qn(repo_path: Path, file_path: Path) -> str:
-    rel = file_path.relative_to(repo_path)
-    return ".".join([repo_path.name, *rel.with_suffix("").parts])
-
-
-def _symbol_usage_enclosing_function(node) -> tuple[str, int] | None:
-    """Walk up to the nearest function_definition; return (name, start_line)."""
-    parent = node.parent
-    while parent is not None:
-        if parent.type == "function_definition":
-            declarator = parent.child_by_field_name("declarator")
-            # Unwrap pointer_declarator / parenthesized_declarator layers.
-            name_node = declarator
-            while name_node is not None and name_node.type not in (
-                "identifier",
-                "field_identifier",
-                "qualified_identifier",
-            ):
-                inner = name_node.child_by_field_name("declarator")
-                if inner is None:
-                    break
-                name_node = inner
-            if name_node is not None and name_node.type in (
-                "identifier",
-                "field_identifier",
-            ):
-                return (
-                    name_node.text.decode("utf-8", errors="replace"),
-                    parent.start_point[0] + 1,
-                )
-            return ("", parent.start_point[0] + 1)
-        parent = parent.parent
-    return None
-
-
-def _symbol_usage_is_static_decl(decl_node) -> bool:
-    """Check whether a `declaration` node carries a `static` storage class."""
-    for i in range(decl_node.named_child_count):
-        child = decl_node.named_child(i)
-        if child.type == "storage_class_specifier":
-            if child.text.decode("utf-8", errors="replace").strip() == "static":
-                return True
-    return False
-
-
-def _symbol_usage_declarator_identifier(declarator_node):
-    """Unwrap pointer/array/function layers to reach the inner identifier."""
-    cur = declarator_node
-    while cur is not None:
-        if cur.type == "identifier":
-            return cur
-        if cur.type == "function_declarator":
-            # This is a function, not a variable — bail out.
-            return None
-        inner = cur.child_by_field_name("declarator")
-        if inner is None:
-            return None
-        cur = inner
-    return None
-
-
-def _symbol_usage_collect_declarations(
-    root,
-    simple_name: str,
-    module_qn: str,
-    path: str,
-) -> list[dict[str, Any]]:
-    """Return all declarations of ``simple_name`` found under ``root``.
-
-    Each entry carries ``kind`` — one of ``global``, ``static_local``,
-    ``enum``, ``typedef``, ``function``, ``param``. Only ``global`` and
-    ``static_local`` are accepted as variable targets further up the stack.
-    """
-    out: list[dict[str, Any]] = []
-
-    def _qn(base: str, name: str) -> str:
-        return f"{base}.{name}"
-
-    def _visit(node):
-        ntype = node.type
-
-        if ntype == "enumerator":
-            name_node = node.child_by_field_name("name")
-            if name_node is not None and name_node.text.decode(
-                "utf-8", errors="replace"
-            ) == simple_name:
-                out.append({
-                    "kind": "enum",
-                    "name": simple_name,
-                    "qualified_name": _qn(module_qn, simple_name),
-                    "path": path,
-                    "line": name_node.start_point[0] + 1,
-                })
-
-        elif ntype == "type_definition":
-            # typedef ... <name>;
-            for i in range(node.named_child_count):
-                child = node.named_child(i)
-                ident = _symbol_usage_declarator_identifier(child)
-                if ident is not None and ident.text.decode(
-                    "utf-8", errors="replace"
-                ) == simple_name:
-                    out.append({
-                        "kind": "typedef",
-                        "name": simple_name,
-                        "qualified_name": _qn(module_qn, simple_name),
-                        "path": path,
-                        "line": ident.start_point[0] + 1,
-                    })
-                    break
-
-        elif ntype == "function_definition":
-            declarator = node.child_by_field_name("declarator")
-            # Unwrap to function_declarator → identifier.
-            cur = declarator
-            while cur is not None and cur.type != "function_declarator":
-                cur = cur.child_by_field_name("declarator")
-            if cur is not None:
-                name_node = cur.child_by_field_name("declarator")
-                if (
-                    name_node is not None
-                    and name_node.type == "identifier"
-                    and name_node.text.decode("utf-8", errors="replace") == simple_name
-                ):
-                    out.append({
-                        "kind": "function",
-                        "name": simple_name,
-                        "qualified_name": _qn(module_qn, simple_name),
-                        "path": path,
-                        "line": name_node.start_point[0] + 1,
-                    })
-
-        elif ntype == "declaration":
-            # Could be a variable declaration or a function prototype.
-            declarator_field = node.child_by_field_name("declarator")
-            declarators = []
-            # A declaration may have multiple init_declarator children
-            # (e.g. `int a, b;`), but tree-sitter exposes only one via
-            # ``declarator``. Walk named children of type init_declarator or
-            # identifier to find all candidates.
-            for i in range(node.named_child_count):
-                child = node.named_child(i)
-                if child.type in ("init_declarator", "identifier", "pointer_declarator", "array_declarator"):
-                    declarators.append(child)
-            if declarator_field is not None and declarator_field not in declarators:
-                declarators.append(declarator_field)
-
-            is_static = _symbol_usage_is_static_decl(node)
-            enclosing = _symbol_usage_enclosing_function(node)
-
-            for d in declarators:
-                # Skip function prototypes (declarator tree contains function_declarator).
-                if d.type == "function_declarator":
-                    continue
-                # For init_declarator, dig into its .declarator field.
-                target = d
-                if d.type == "init_declarator":
-                    target = d.child_by_field_name("declarator") or d
-                ident = _symbol_usage_declarator_identifier(target)
-                if ident is None:
-                    continue
-                if ident.text.decode("utf-8", errors="replace") != simple_name:
-                    continue
-
-                if enclosing is None:
-                    kind = "global"
-                    qn = _qn(module_qn, simple_name)
-                else:
-                    if is_static:
-                        kind = "static_local"
-                        qn = f"{module_qn}.{enclosing[0]}.{simple_name}"
-                    else:
-                        # Non-static local — not a variable symbol worth tracking.
-                        continue
-                out.append({
-                    "kind": kind,
-                    "name": simple_name,
-                    "qualified_name": qn,
-                    "path": path,
-                    "line": ident.start_point[0] + 1,
-                })
-
-        elif ntype == "parameter_declaration":
-            declarator = node.child_by_field_name("declarator")
-            ident = _symbol_usage_declarator_identifier(declarator) if declarator else None
-            if ident is not None and ident.text.decode(
-                "utf-8", errors="replace"
-            ) == simple_name:
-                out.append({
-                    "kind": "param",
-                    "name": simple_name,
-                    "qualified_name": _qn(module_qn, simple_name),
-                    "path": path,
-                    "line": ident.start_point[0] + 1,
-                })
-
-        for i in range(node.named_child_count):
-            _visit(node.named_child(i))
-
-    _visit(root)
-    return out
-
-
-def _symbol_usage_identifier_role(ident_node) -> str:
-    """Classify an identifier node as ``decl``, ``write``, ``skip``, or ``read``."""
-    parent = ident_node.parent
-    if parent is None:
-        return "skip"
-    ptype = parent.type
-
-    if ptype == "init_declarator":
-        if parent.child_by_field_name("declarator") == ident_node:
-            return "decl"
-    if ptype in ("declaration", "parameter_declaration"):
-        if parent.child_by_field_name("declarator") == ident_node:
-            return "decl"
-    if ptype == "function_declarator":
-        if parent.child_by_field_name("declarator") == ident_node:
-            return "decl"
-    if ptype == "pointer_declarator":
-        # part of a declarator unwrap — walk up one more level
-        grand = parent.parent
-        if grand is not None and grand.type in (
-            "init_declarator",
-            "declaration",
-            "parameter_declaration",
-            "function_declarator",
-        ):
-            if grand.child_by_field_name("declarator") == parent:
-                return "decl"
-    if ptype == "enumerator":
-        if parent.child_by_field_name("name") == ident_node:
-            return "decl"
-    if ptype == "field_expression":
-        if parent.child_by_field_name("field") == ident_node:
-            return "skip"
-        # ``ident`` is the ``argument`` of a field_expression. If the
-        # enclosing field_expression chain is the LHS of an assignment or the
-        # target of ++/--, the write pass owns this node — don't also report
-        # it as a read.
-        if parent.child_by_field_name("argument") == ident_node:
-            chain_top = parent
-            while (
-                chain_top.parent is not None
-                and chain_top.parent.type == "field_expression"
-                and chain_top.parent.child_by_field_name("argument") == chain_top
-            ):
-                chain_top = chain_top.parent
-            gp = chain_top.parent
-            if gp is not None:
-                if (
-                    gp.type == "assignment_expression"
-                    and gp.child_by_field_name("left") == chain_top
-                ):
-                    return "skip"
-                if (
-                    gp.type == "update_expression"
-                    and gp.child_by_field_name("argument") == chain_top
-                ):
-                    return "skip"
-    if ptype == "call_expression":
-        if parent.child_by_field_name("function") == ident_node:
-            return "skip"
-    if ptype == "assignment_expression":
-        if parent.child_by_field_name("left") == ident_node:
-            return "write"
-    if ptype == "update_expression":
-        if parent.child_by_field_name("argument") == ident_node:
-            return "write"
-    if ptype == "pointer_expression":
-        op = parent.child_by_field_name("operator")
-        if op is not None and op.text.decode("utf-8", errors="replace") == "&":
-            return "skip"
-
-    return "read"
-
-
-def _symbol_usage_collect_reads(
-    root,
-    simple_name: str,
-    source_lines: list[str],
-    module_qn: str,
-    path: str,
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-
-    def _visit(node):
-        if node.type == "identifier" and node.text.decode(
-            "utf-8", errors="replace"
-        ) == simple_name:
-            role = _symbol_usage_identifier_role(node)
-            if role == "read":
-                line_no = node.start_point[0] + 1
-                enclosing = _symbol_usage_enclosing_function(node)
-                enclosing_qn = (
-                    f"{module_qn}.{enclosing[0]}" if enclosing else module_qn
-                )
-                context = ""
-                if 0 < line_no <= len(source_lines):
-                    raw = source_lines[line_no - 1].strip()
-                    context = raw if len(raw) <= 200 else raw[:199] + "…"
-                out.append({
-                    "mode": "read",
-                    "location": f"{path}:{line_no}",
-                    "enclosing_function": enclosing_qn,
-                    "context": context,
-                })
-        for i in range(node.named_child_count):
-            _visit(node.named_child(i))
-
-    _visit(root)
-    return out
-
-
-# Compound assignment operators recognised by slice 2. The `=` plain direct
-# assignment is handled separately.
-_SYMBOL_USAGE_COMPOUND_OPS: frozenset[str] = frozenset(
-    {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
-)
-
-
-def _symbol_usage_lhs_matches(left_node, simple_name: str) -> bool:
-    """Does the LHS of an assignment (or target of ++/--) refer to ``simple_name``?
-
-    Matches three shapes (MVP):
-      * bare identifier ``simple_name``
-      * ``field_expression`` whose outermost ``argument`` is an identifier
-        matching ``simple_name`` (e.g. ``g_alarm.dci`` with symbol=``g_alarm``).
-      * ``subscript_expression`` whose outermost ``argument`` is an identifier
-        matching ``simple_name`` (e.g. ``g_array[i]`` with symbol=``g_array``).
-    """
-    if left_node is None:
-        return False
-    if left_node.type == "identifier":
-        return left_node.text.decode("utf-8", errors="replace") == simple_name
-    if left_node.type in ("field_expression", "subscript_expression"):
-        arg = left_node.child_by_field_name("argument")
-        # Walk down any inner field/subscript chain to find the outermost argument.
-        while arg is not None and arg.type in ("field_expression", "subscript_expression"):
-            arg = arg.child_by_field_name("argument")
-        if arg is not None and arg.type == "identifier":
-            return arg.text.decode("utf-8", errors="replace") == simple_name
-    return False
-
-
-def _symbol_usage_is_address_of(node, simple_name: str) -> bool:
-    """Return True iff *node* is a ``pointer_expression`` of the form ``&simple_name``."""
-    if node is None or node.type != "pointer_expression":
-        return False
-    op = node.child_by_field_name("operator")
-    if op is None or op.text.decode("utf-8", errors="replace") != "&":
-        return False
-    arg = node.child_by_field_name("argument")
-    if arg is None or arg.type != "identifier":
-        return False
-    return arg.text.decode("utf-8", errors="replace") == simple_name
-
-
-def _symbol_usage_collect_aliases(func_node, simple_name: str) -> frozenset[str]:
-    """Find local pointer variables aliased to ``&simple_name`` within a function.
-
-    Recognises two MVP patterns inside the function body:
-      * ``T *p = &simple_name;`` (init_declarator)
-      * ``p = &simple_name;``    (plain assignment, p was declared earlier)
-
-    Returns the set of local variable names whose value points at ``simple_name``.
-    Flow-insensitive: any later reassignment of ``p`` is ignored — accepted false
-    positive per slice-3 MVP scope.
-    """
-    aliases: set[str] = set()
-
-    def _visit(node):
-        ntype = node.type
-        if ntype == "init_declarator":
-            value = node.child_by_field_name("value")
-            if value is not None and _symbol_usage_is_address_of(value, simple_name):
-                decl = node.child_by_field_name("declarator")
-                ident = _symbol_usage_declarator_identifier(decl) if decl is not None else None
-                if ident is not None:
-                    aliases.add(ident.text.decode("utf-8", errors="replace"))
-        elif ntype == "assignment_expression":
-            op_node = node.child_by_field_name("operator")
-            op_text = op_node.text.decode("utf-8", errors="replace") if op_node is not None else "="
-            if op_text == "=":
-                left = node.child_by_field_name("left")
-                right = node.child_by_field_name("right")
-                if (
-                    left is not None
-                    and left.type == "identifier"
-                    and _symbol_usage_is_address_of(right, simple_name)
-                ):
-                    aliases.add(left.text.decode("utf-8", errors="replace"))
-        for i in range(node.named_child_count):
-            _visit(node.named_child(i))
-
-    _visit(func_node)
-    return frozenset(aliases)
-
-
-def _symbol_usage_collect_writes(
-    root,
-    simple_name: str,
-    source_lines: list[str],
-    module_qn: str,
-    path: str,
-) -> list[dict[str, Any]]:
-    """Collect write sites for ``simple_name`` from one parsed source tree.
-
-    Recognises:
-      * ``assignment_expression`` with ``=`` (``assign_type="direct"``)
-      * ``assignment_expression`` with a compound operator (``+=``, ``|=``, ...)
-        (``assign_type="compound"``)
-      * ``update_expression`` (``x++`` / ``++x`` / ``x--`` / ``--x``)
-        (``assign_type="compound"``, rhs="")
-      * ``call_expression`` of a memcpy-family function with first arg
-        ``&simple_name`` or bare array name (``assign_type="via_memcpy"``)
-      * ``call_expression`` of a non-readonly function with any
-        ``&simple_name`` argument (``assign_type="address_of"``)
-      * ``assignment_expression`` whose left is ``*p`` where ``p`` is a local
-        alias of ``&simple_name`` (``assign_type="pointer_deref_write"``)
-    """
-    from terrain.foundation.types import constants as cs
-
-    out: list[dict[str, Any]] = []
-
-    def _enclosing_qn(node) -> str:
-        enc = _symbol_usage_enclosing_function(node)
-        return f"{module_qn}.{enc[0]}" if enc else module_qn
-
-    def _ctx(line_no: int) -> str:
-        if 0 < line_no <= len(source_lines):
-            raw = source_lines[line_no - 1].strip()
-            return raw if len(raw) <= 200 else raw[:199] + "…"
-        return ""
-
-    def _emit_pointer_deref_write(node):
-        """``*p = rhs`` with ``p`` aliasing ``simple_name`` → write entry."""
-        op_node = node.child_by_field_name("operator")
-        right = node.child_by_field_name("right")
-        op = op_node.text.decode("utf-8", errors="replace") if op_node else "="
-        rhs = (
-            right.text.decode("utf-8", errors="replace").strip()
-            if right is not None
-            else ""
-        )
-        line_no = node.start_point[0] + 1
-        out.append({
-            "mode": "write",
-            "location": f"{path}:{line_no}",
-            "enclosing_function": _enclosing_qn(node),
-            "context": _ctx(line_no),
-            "assign_type": "pointer_deref_write",
-            "op": op,
-            "rhs": rhs,
-        })
-
-    def _emit_call_write(node, fname: str, assign_type: str):
-        line_no = node.start_point[0] + 1
-        rhs = node.text.decode("utf-8", errors="replace").strip()
-        out.append({
-            "mode": "write",
-            "location": f"{path}:{line_no}",
-            "enclosing_function": _enclosing_qn(node),
-            "context": _ctx(line_no),
-            "assign_type": assign_type,
-            "op": fname,
-            "rhs": rhs,
-        })
-
-    def _handle_call(node):
-        """Detect via_memcpy / address_of writes triggered by a ``call_expression``."""
-        func = node.child_by_field_name("function")
-        args_list = node.child_by_field_name("arguments")
-        if func is None or args_list is None or func.type != "identifier":
-            return
-        fname = func.text.decode("utf-8", errors="replace")
-        if fname in cs.READONLY_API_FUNCTIONS:
-            return
-        # Iterate positional arguments (skip comments / non-named children).
-        args = [args_list.named_child(i) for i in range(args_list.named_child_count)]
-        for idx, arg in enumerate(args):
-            is_addr_of = _symbol_usage_is_address_of(arg, simple_name)
-            is_bare_array = (
-                arg.type == "identifier"
-                and arg.text.decode("utf-8", errors="replace") == simple_name
-            )
-            if (
-                idx == 0
-                and fname in cs.MEMCPY_LIKE_FUNCTIONS
-                and (is_addr_of or is_bare_array)
-            ):
-                _emit_call_write(node, fname, "via_memcpy")
-                return
-            if is_addr_of:
-                _emit_call_write(node, fname, "address_of")
-                return
-
-    def _visit(node, alias_set: frozenset[str]):
-        ntype = node.type
-
-        # Re-scope aliases when entering a function definition.
-        if ntype == "function_definition":
-            new_aliases = _symbol_usage_collect_aliases(node, simple_name)
-            for i in range(node.named_child_count):
-                _visit(node.named_child(i), new_aliases)
-            return
-
-        if ntype == "assignment_expression":
-            left = node.child_by_field_name("left")
-            # 1. pointer_deref_write: `*p = rhs` with p in alias_set
-            if left is not None and left.type == "pointer_expression":
-                op_n = left.child_by_field_name("operator")
-                argn = left.child_by_field_name("argument")
-                if (
-                    op_n is not None
-                    and op_n.text.decode("utf-8", errors="replace") == "*"
-                    and argn is not None
-                    and argn.type == "identifier"
-                ):
-                    pname = argn.text.decode("utf-8", errors="replace")
-                    if pname in alias_set:
-                        _emit_pointer_deref_write(node)
-            # 2. direct / compound assignment of simple_name
-            elif _symbol_usage_lhs_matches(left, simple_name):
-                op_node = node.child_by_field_name("operator")
-                right = node.child_by_field_name("right")
-                op = (
-                    op_node.text.decode("utf-8", errors="replace")
-                    if op_node is not None
-                    else "="
-                )
-                if op == "=":
-                    assign_type = "direct"
-                elif op in _SYMBOL_USAGE_COMPOUND_OPS:
-                    assign_type = "compound"
-                else:
-                    assign_type = "compound"
-                rhs = (
-                    right.text.decode("utf-8", errors="replace").strip()
-                    if right is not None
-                    else ""
-                )
-                line_no = node.start_point[0] + 1
-                out.append({
-                    "mode": "write",
-                    "location": f"{path}:{line_no}",
-                    "enclosing_function": _enclosing_qn(node),
-                    "context": _ctx(line_no),
-                    "assign_type": assign_type,
-                    "op": op,
-                    "rhs": rhs,
-                })
-        elif ntype == "update_expression":
-            arg = node.child_by_field_name("argument")
-            if (
-                arg is not None
-                and arg.type == "identifier"
-                and arg.text.decode("utf-8", errors="replace") == simple_name
-            ):
-                op_node = node.child_by_field_name("operator")
-                op = (
-                    op_node.text.decode("utf-8", errors="replace")
-                    if op_node is not None
-                    else "++"
-                )
-                line_no = node.start_point[0] + 1
-                out.append({
-                    "mode": "write",
-                    "location": f"{path}:{line_no}",
-                    "enclosing_function": _enclosing_qn(node),
-                    "context": _ctx(line_no),
-                    "assign_type": "compound",
-                    "op": op,
-                    "rhs": "",
-                })
-        elif ntype == "call_expression":
-            _handle_call(node)
-
-        for i in range(node.named_child_count):
-            _visit(node.named_child(i), alias_set)
-
-    _visit(root, frozenset())
-    return out
-
-
-def _symbol_usage_collect_scopes(root, module_qn: str) -> set[str]:
-    """Return every valid ``qualified_scope`` rooted at this file.
-
-    Includes the file's own module qn plus ``<module>.<func>`` for each
-    top-level function definition. MVP does not expand member functions or
-    namespaces — the handler's scope matcher also accepts suffix segments,
-    which covers the cases named in the issue without a deeper AST walk.
-    """
-    scopes: set[str] = {module_qn}
-
-    def _visit(node):
-        if node.type == "function_definition":
-            declarator = node.child_by_field_name("declarator")
-            cur = declarator
-            while cur is not None and cur.type != "function_declarator":
-                cur = cur.child_by_field_name("declarator")
-            if cur is not None:
-                name_node = cur.child_by_field_name("declarator")
-                while name_node is not None and name_node.type not in (
-                    "identifier",
-                    "field_identifier",
-                ):
-                    inner = name_node.child_by_field_name("declarator")
-                    if inner is None:
-                        break
-                    name_node = inner
-                if name_node is not None and name_node.type in (
-                    "identifier",
-                    "field_identifier",
-                ):
-                    scopes.add(
-                        f"{module_qn}.{name_node.text.decode('utf-8', errors='replace')}"
-                    )
-        for i in range(node.named_child_count):
-            _visit(node.named_child(i))
-
-    _visit(root)
-    return scopes
-
-
-def _symbol_usage_list_source_files(repo: Path) -> list[tuple[Path, str]]:
-    """Return sorted list of (abs_path, language_key) for C/C++ sources in repo."""
-    files: list[tuple[Path, str]] = []
-    seen: set[Path] = set()
-    for ext, lang in _SYMBOL_USAGE_C_EXTS.items():
-        for p in repo.rglob(f"*{ext}"):
-            if p in seen or not p.is_file():
-                continue
-            seen.add(p)
-            files.append((p, lang))
-    files.sort(key=lambda t: t[0])
-    return files
-
-
 class MCPToolsRegistry:
     """Registry that manages workspace-based repo services and tool handlers."""
 
     def __init__(self, workspace: Path) -> None:
         self._workspace = workspace
-        self._workspace.mkdir(parents=True, exist_ok=True)
+        try:
+            self._workspace.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            fallback = Path.home() / ".terrain"
+            logger.warning(
+                "Cannot access workspace {}: {}. Falling back to {}",
+                workspace, exc, fallback,
+            )
+            self._workspace = fallback
+            self._workspace.mkdir(parents=True, exist_ok=True)
 
         self._ingestor: KuzuIngestor | None = None
         self._cypher_gen: CypherGenerator | None = None
@@ -1261,17 +526,7 @@ class MCPToolsRegistry:
                     "List all previously indexed repositories in the workspace. "
                     "Shows repo name, path, last indexed time, which pipeline steps "
                     "have been completed (graph, api_docs, embeddings, wiki), and "
-                    "which one is currently active.\n\n"
-                    "Each repo also carries a `staleness` field: "
-                    "'up-to-date' (HEAD matches the indexed commit), "
-                    "'stale' (HEAD has moved — graph results may be out of date), "
-                    "or 'unknown' (not a git repo, HEAD unreadable, or graph not built). "
-                    "Short SHAs are reported as `indexed_head` and `current_head` so you "
-                    "can tell how far the repo has drifted. "
-                    "`commits_since` gives the integer number of commits HEAD is ahead of "
-                    "indexed_head; it is null when staleness is 'unknown'. "
-                    "Consult staleness before calling switch_repository or running heavy "
-                    "queries; prefer re-indexing stale repos for trustworthy results."
+                    "which one is currently active."
                 ),
                 input_schema={"type": "object", "properties": {}, "required": []},
             ),
@@ -1352,19 +607,6 @@ class MCPToolsRegistry:
                 },
             ),
             # generate_api_docs: handler preserved, use `terrain index` instead.
-            # -----------------------------------------------------------------
-            # Configuration / diagnostics
-            # -----------------------------------------------------------------
-            ToolDefinition(
-                name="get_config",
-                description=(
-                    "Show current MCP server configuration: LLM provider, model, "
-                    "embedding provider, workspace path, and service availability. "
-                    "Useful for debugging connection issues or verifying setup."
-                ),
-                input_schema={"type": "object", "properties": {}, "required": []},
-            ),
-            # reload_config: handler preserved, not exposed to MCP clients.
             # -----------------------------------------------------------------
             # Call graph queries
             # -----------------------------------------------------------------
@@ -1493,106 +735,26 @@ class MCPToolsRegistry:
             ToolDefinition(
                 name="find_symbol_in_docs",
                 description=(
-                    "Find where a symbol is used. Two modes depending on the parameters:\n\n"
-                    "1. **Doc-based reference search (default)** — when neither `mode` nor "
-                    "`qualified_scope` is supplied. Scans the pre-built API docs for "
+                    "Find where a symbol is used. Scans the pre-built API docs for "
                     "'## 全局变量引用' entries (UPPER_CASE identifiers and explicit "
                     "`global` declarations captured at index time). Returns functions "
                     "with their module, file location, and the full '## 全局变量引用' "
                     "section of each match. Use for questions like "
-                    "'Where is CONFIG_FILE used?' / 'Which functions read MAX_RETRY?'.\n\n"
-                    "2. **AST-level variable read/write usage** — when `mode` or "
-                    "`qualified_scope` is supplied. Resolves the symbol against the "
-                    "source tree and lists every read/write site for a C/C++ variable "
-                    "(global or function-scope static). Accepts a short name "
-                    "('g_alarm') or a qualified name ('module.g_alarm' / "
-                    "'module.func.counter'). Returns the resolved qualified_name + "
-                    "kind plus a list of usages with file:line, the enclosing "
-                    "function's qualified name, and the source line. Writes carry "
-                    "'assign_type' ('direct' for '=', 'compound' for '+='/'|='/'++'/..., "
-                    "'via_memcpy' for memcpy-family destinations, 'address_of' for "
-                    "`&sym` passed to a non-readonly function, 'pointer_deref_write' "
-                    "for `*p = ...` where `p` aliases `&sym` within the same function), "
-                    "the raw 'op', and 'rhs' (full call expression for via_memcpy/"
-                    "address_of, empty for ++/--). Rejects enum values, typedefs, "
-                    "functions, and parameters with "
-                    "error='symbol is not a variable (kind=X)'. qualified_scope "
-                    "restricts to one function or module qn (full qn or a dot-segment "
-                    "suffix); unknown scopes return error='scope not found: <scope>'."
+                    "'Where is CONFIG_FILE used?' / 'Which functions read MAX_RETRY?'."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "symbol": {
                             "type": "string",
-                            "description": (
-                                "Name of the symbol to look up "
-                                "(e.g. 'CONFIG_FILE', 'g_alarm', "
-                                "'proj.alarm.g_alarm')."
-                            ),
+                            "description": "Name of the symbol to look up (e.g. 'CONFIG_FILE', 'MAX_RETRY').",
                         },
                         "max_results": {
                             "type": "integer",
-                            "description": (
-                                "Doc-based mode only: maximum number of results "
-                                "to return. Default: 30."
-                            ),
-                        },
-                        "mode": {
-                            "type": "string",
-                            "enum": ["read", "write", "all"],
-                            "description": (
-                                "Opt into AST-level variable usage mode. 'read' "
-                                "lists read sites, 'write' lists assignment/update "
-                                "sites (direct + compound), 'all' merges both "
-                                "sorted by location."
-                            ),
-                        },
-                        "qualified_scope": {
-                            "type": "string",
-                            "description": (
-                                "AST-level mode only: restrict results to a "
-                                "function or module qn (full qn like "
-                                "'proj.alarm_cfg.AlarmCheck_DCI' or a dot-segment "
-                                "suffix like 'alarm_cfg.AlarmCheck_DCI'). "
-                                "Supplying this alone also selects AST-level mode."
-                            ),
+                            "description": "Maximum number of results to return. Default: 30.",
                         },
                     },
                     "required": ["symbol"],
-                },
-            ),
-            # -----------------------------------------------------------------
-            # Predicate extraction (slice 1/3 of JER-47)
-            # -----------------------------------------------------------------
-            ToolDefinition(
-                name="extract_predicates",
-                description=(
-                    "Extract the flat list of predicate nodes inside a C function "
-                    "(if / else_if / while / do_while / for / switch_case / ternary).\n\n"
-                    "Slice 1 MVP: returns only the skeleton — kind, location, "
-                    "expression and nesting_path. Future slices will add "
-                    "symbols_referenced, guarded_block, contains_assignments, "
-                    "contains_calls, has_early_return.\n\n"
-                    "Accepts a short function name ('AlarmCheck_DCI') or a qualified "
-                    "name ending with the function name ('pkg.mod.AlarmCheck_DCI'). "
-                    "If multiple C functions share the simple name, returns "
-                    "success=False with a candidates list so the caller can pass a "
-                    "fully-qualified name on retry."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "qualified_name": {
-                            "type": "string",
-                            "description": (
-                                "C function name — simple ('AlarmCheck_DCI') or "
-                                "qualified ('proj.alarm.AlarmCheck_DCI'). "
-                                "Matching is by last '.'-separated component."
-                            ),
-                        },
-                    },
-                    "required": ["qualified_name"],
                 },
             ),
             # -----------------------------------------------------------------
@@ -1630,12 +792,10 @@ class MCPToolsRegistry:
             "generate_api_docs": self._handle_generate_api_docs,
             "prepare_guidance": self._handle_prepare_guidance,
             "find_callers": self._handle_find_callers,
-            "get_config": self._handle_get_config,
             "reload_config": self._handle_reload_config,
             "trace_call_chain": self._handle_trace_call_chain,
             "get_merge_diff": self._handle_get_merge_diff,
             "find_symbol_in_docs": self._handle_find_symbol_in_docs,
-            "extract_predicates": self._handle_extract_predicates,
         }
         return handlers.get(name)
 
@@ -1906,8 +1066,7 @@ class MCPToolsRegistry:
                 "- `get_api_doc` -- read detailed docs for any function (signature, call tree, source)\n"
                 "- `find_callers` -- find every function that calls a given function\n"
                 "- `trace_call_chain` -- trace the full call chain from entry points to a target\n"
-                "- `find_symbol_in_docs` -- find symbol usage: doc-based global/constant refs by default, "
-                "or pass `mode`/`qualified_scope` for AST-level read/write sites of a C/C++ variable\n\n"
+                "- `find_symbol_in_docs` -- find which functions reference a global/constant symbol\n\n"
                 "Tell the user what was indexed and ask what they would like to explore."
             )
             return result
@@ -2012,28 +1171,23 @@ class MCPToolsRegistry:
     # -------------------------------------------------------------------------
 
     async def _handle_list_repositories(self) -> dict[str, Any]:
-        # Lazy import avoids a cli↔tools circular import at module load time.
-        from terrain.entrypoints.cli.cli import _get_repo_status_entries
+        from terrain.entrypoints.link_ops import batch_migrate_to_v2
 
+        try:
+            batch_migrate_to_v2(self._workspace)
+        except Exception as exc:
+            logger.debug("schema v2 migration failed (best-effort, ignored): {}", exc)
         active_name = None
         active_file = self._workspace / "active.txt"
         if active_file.exists():
             active_name = active_file.read_text(encoding="utf-8", errors="replace").strip()
 
-        # Run in thread pool — _get_repo_status_entries calls git subprocess
-        # and must not block the async event loop.
-        loop = asyncio.get_running_loop()
-        try:
-            status_entries = await loop.run_in_executor(
-                None, _get_repo_status_entries, self._workspace
-            )
-        except Exception as exc:  # pragma: no cover — defensive: never 500 the MCP tool
-            logger.debug("staleness lookup failed: {}", exc)
-            status_entries = []
-        status_by_artifact = {e["artifact_dir"]: e for e in status_entries}
-
         repos: list[dict[str, Any]] = []
-        for child in sorted(self._workspace.iterdir()):
+        try:
+            children = sorted(self._workspace.iterdir())
+        except OSError:
+            children = []
+        for child in children:
             if not child.is_dir():
                 continue
             meta_file = child / "meta.json"
@@ -2044,32 +1198,14 @@ class MCPToolsRegistry:
             except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                 continue
 
-            steps = meta.get("steps", {})
-            status_entry = status_by_artifact.get(child.name)
-            # Half-built repo (no graph yet) — staleness is meaningless.
-            if not steps.get("graph") or status_entry is None:
-                staleness = "unknown"
-                indexed_head = None
-                current_head = None
-                commits_since = None
-            else:
-                staleness = status_entry["status"]
-                indexed_head = status_entry["indexed_head"]
-                current_head = status_entry["current_head"]
-                commits_since = status_entry["commits_since"]
-
             repos.append({
                 "artifact_dir": child.name,
                 "repo_name": meta.get("repo_name", child.name),
                 "repo_path": meta.get("repo_path", "unknown"),
                 "indexed_at": meta.get("indexed_at"),
                 "wiki_page_count": meta.get("wiki_page_count", 0),
-                "steps": steps,
+                "steps": meta.get("steps", {}),
                 "active": child.name == active_name,
-                "staleness": staleness,
-                "indexed_head": indexed_head,
-                "current_head": current_head,
-                "commits_since": commits_since,
             })
 
         return {
@@ -2078,9 +1214,7 @@ class MCPToolsRegistry:
             "repositories": repos,
             "hint": (
                 "Use switch_repository with repo_name to change the active repo. "
-                "Use `terrain index <path>` or build_graph to index a new repo. "
-                "Check `staleness` before trusting graph results: "
-                "'stale' means HEAD has moved since indexing — consider re-indexing."
+                "Use `terrain index <path>` or build_graph to index a new repo."
             ),
         }
 
@@ -2612,8 +1746,8 @@ class MCPToolsRegistry:
                 "Run `terrain index <path>` to generate them."
             )
 
-        safe = qualified_name.replace("/", "_").replace("\\", "_")
-        target = api_dir / "funcs" / f"{safe}.md"
+        from terrain.domains.upper.apidoc.api_doc_generator import _sanitise_filename
+        target = api_dir / "funcs" / f"{_sanitise_filename(qualified_name)}.md"
         if not target.exists():
             raise ToolError({
                 "error": f"API doc not found: {qualified_name}",
@@ -2753,8 +1887,8 @@ class MCPToolsRegistry:
             }
 
             if has_api_docs and r.qualified_name:
-                safe_qn = r.qualified_name.replace("/", "_").replace("\\", "_")
-                doc_file = funcs_dir / f"{safe_qn}.md"
+                from terrain.domains.upper.apidoc.api_doc_generator import _sanitise_filename
+                doc_file = funcs_dir / f"{_sanitise_filename(r.qualified_name)}.md"
                 if doc_file.exists():
                     full_doc = doc_file.read_text(
                         encoding="utf-8", errors="ignore"
@@ -3310,210 +2444,6 @@ class MCPToolsRegistry:
         }
 
     # -------------------------------------------------------------------------
-    # Variable-usage helper — resolve a C/C++ variable symbol and list every
-    # read/write usage. Invoked from _handle_find_symbol_in_docs when the caller
-    # opts into AST-level mode by supplying `mode` or `qualified_scope`.
-    # -------------------------------------------------------------------------
-
-    async def _find_symbol_variable_usage(
-        self,
-        symbol: str,
-        mode: str = "all",
-        qualified_scope: str | None = None,
-    ) -> dict[str, Any]:
-        """Find read/write usages of a C/C++ variable symbol via AST scan.
-
-        mode=``read`` / ``write`` / ``all`` select which categories to scan.
-        ``qualified_scope`` restricts results to a single function or module qn
-        (or a dot-segment suffix thereof); unknown scopes yield
-        ``error="scope not found: <scope>"``.
-        """
-        self._require_active()
-
-        if mode not in ("read", "write", "all"):
-            raise ToolError(
-                f"mode must be one of 'read', 'write', 'all' (got {mode!r})"
-            )
-
-        assert self._active_repo_path is not None
-        repo_path = self._active_repo_path
-
-        is_qualified = "." in symbol
-        simple_name = symbol.rsplit(".", 1)[-1] if is_qualified else symbol
-
-        parsers = _symbol_usage_get_parsers()
-        source_files = _symbol_usage_list_source_files(repo_path)
-
-        # ---------- Phase 1: resolve symbol → qualified declaration ----------
-        all_decls: list[dict[str, Any]] = []
-        for abs_path, lang_key in source_files:
-            parser = parsers.get(lang_key)
-            if parser is None:
-                continue
-            try:
-                source_bytes = abs_path.read_bytes()
-            except OSError:
-                continue
-            tree = parser.parse(source_bytes)
-            module_qn = _symbol_usage_module_qn(repo_path, abs_path)
-            rel = str(abs_path.relative_to(repo_path))
-            all_decls.extend(
-                _symbol_usage_collect_declarations(
-                    tree.root_node, simple_name, module_qn, rel
-                )
-            )
-
-        if not all_decls:
-            return {
-                "success": False,
-                "error": "symbol not found",
-                "symbol": symbol,
-            }
-
-        # Partition by kind — we only accept variable kinds (global, static_local).
-        variable_decls = [d for d in all_decls if d["kind"] in ("global", "static_local")]
-        non_variable_decls = [d for d in all_decls if d["kind"] not in ("global", "static_local")]
-
-        if not variable_decls and non_variable_decls:
-            bad_kind = non_variable_decls[0]["kind"]
-            return {
-                "success": False,
-                "error": f"symbol is not a variable (kind={bad_kind})",
-                "symbol": symbol,
-            }
-
-        # If the user passed a qualified_name, keep only exact matches.
-        if is_qualified:
-            exact = [d for d in variable_decls if d["qualified_name"] == symbol]
-            if not exact:
-                return {
-                    "success": False,
-                    "error": "symbol not found",
-                    "symbol": symbol,
-                }
-            variable_decls = exact
-
-        # De-duplicate (same variable can be declared in both a .h and .c).
-        seen_qn: dict[str, dict[str, Any]] = {}
-        for d in variable_decls:
-            seen_qn.setdefault(d["qualified_name"], d)
-        uniq = list(seen_qn.values())
-
-        if len(uniq) > 1:
-            return {
-                "success": False,
-                "error": "ambiguous",
-                "symbol": symbol,
-                "candidates": sorted(d["qualified_name"] for d in uniq),
-            }
-
-        matched = uniq[0]
-
-        # ---------- Phase 2: read + write scan (single traversal per file) ----------
-        want_reads = mode in ("read", "all")
-        want_writes = mode in ("write", "all")
-
-        reads: list[dict[str, Any]] = []
-        writes: list[dict[str, Any]] = []
-        all_scopes: set[str] = set()
-
-        for abs_path, lang_key in source_files:
-            parser = parsers.get(lang_key)
-            if parser is None:
-                continue
-            try:
-                source_bytes = abs_path.read_bytes()
-            except OSError:
-                continue
-            tree = parser.parse(source_bytes)
-            module_qn = _symbol_usage_module_qn(repo_path, abs_path)
-            rel = str(abs_path.relative_to(repo_path))
-            source_lines = source_bytes.decode("utf-8", errors="replace").splitlines()
-
-            all_scopes |= _symbol_usage_collect_scopes(tree.root_node, module_qn)
-
-            if want_reads:
-                reads.extend(
-                    _symbol_usage_collect_reads(
-                        tree.root_node,
-                        simple_name,
-                        source_lines,
-                        module_qn,
-                        rel,
-                    )
-                )
-            if want_writes:
-                writes.extend(
-                    _symbol_usage_collect_writes(
-                        tree.root_node,
-                        simple_name,
-                        source_lines,
-                        module_qn,
-                        rel,
-                    )
-                )
-
-        # Static-local symbols: restrict to their owning function.
-        if matched["kind"] == "static_local":
-            owner = matched["qualified_name"].rsplit(".", 1)[0]
-            reads = [u for u in reads if u["enclosing_function"] == owner]
-            writes = [u for u in writes if u["enclosing_function"] == owner]
-
-        # qualified_scope: resolve to one or more valid qns, then filter usages.
-        if qualified_scope is not None:
-            if qualified_scope in all_scopes:
-                matching_qns = {qualified_scope}
-            else:
-                suffix_marker = "." + qualified_scope
-                matching_qns = {s for s in all_scopes if s.endswith(suffix_marker)}
-            if not matching_qns:
-                return {
-                    "success": False,
-                    "error": f"scope not found: {qualified_scope}",
-                    "symbol": symbol,
-                }
-
-            def _in_scope(u: dict[str, Any]) -> bool:
-                enc = u["enclosing_function"]
-                return any(
-                    enc == q or enc.startswith(q + ".") for q in matching_qns
-                )
-
-            reads = [u for u in reads if _in_scope(u)]
-            writes = [u for u in writes if _in_scope(u)]
-
-        if mode == "read":
-            usages = reads
-        elif mode == "write":
-            usages = writes
-        else:
-            usages = reads + writes
-
-        def _loc_key(u: dict[str, Any]) -> tuple[str, int]:
-            loc = u["location"]
-            if ":" in loc:
-                p, l = loc.rsplit(":", 1)
-                try:
-                    return (p, int(l))
-                except ValueError:
-                    return (p, 0)
-            return (loc, 0)
-
-        usages.sort(key=_loc_key)
-
-        return {
-            "success": True,
-            "symbol": symbol,
-            "matched": {
-                "qualified_name": matched["qualified_name"],
-                "kind": matched["kind"],
-                "path": matched["path"],
-                "line": matched["line"],
-            },
-            "usages": usages,
-        }
-
-    # -------------------------------------------------------------------------
     # find_symbol_in_docs — search pre-built API docs for global variable refs
     # -------------------------------------------------------------------------
 
@@ -3521,29 +2451,12 @@ class MCPToolsRegistry:
         self,
         symbol: str,
         max_results: int = 30,
-        mode: str | None = None,
-        qualified_scope: str | None = None,
     ) -> dict[str, Any]:
         """Find all functions that reference *symbol* in their '全局变量引用' section.
 
-        At index time, ``_render_func_detail`` writes a ``## 全局变量引用`` section
-        listing UPPER_CASE identifiers and ``global`` declarations found in each
-        function's source code.  This handler first checks for a pre-built
-        ``symbol_index.json`` (O(1) lookup) and falls back to a full scan of
-        ``*.md`` files when the index is absent (older repos).
-
-        When the caller supplies ``mode`` or ``qualified_scope`` the handler
-        switches to AST-level variable usage mode, resolving the symbol against
-        the source tree and returning every read/write site for C/C++ globals
-        and function-scope statics (previously the ``find_symbol_usage`` tool).
+        Checks for a pre-built ``symbol_index.json`` (O(1) lookup) and falls
+        back to a full scan of ``*.md`` files when the index is absent (older repos).
         """
-        if mode is not None or qualified_scope is not None:
-            return await self._find_symbol_variable_usage(
-                symbol,
-                mode=mode if mode is not None else "all",
-                qualified_scope=qualified_scope,
-            )
-
         self._require_active()
 
         api_docs_dir = self._active_artifact_dir / "api_docs" / "funcs"
@@ -3715,120 +2628,6 @@ class MCPToolsRegistry:
                 "symbol_index.json not found; re-run `terrain index <path>` "
                 "for faster lookups."
             ),
-        }
-
-    # -------------------------------------------------------------------------
-    # get_config — show current server configuration
-    # -------------------------------------------------------------------------
-
-    async def _handle_get_config(self) -> dict[str, Any]:
-        """Return current MCP server configuration for debugging and verification."""
-        import os as _os
-
-        def _mask(val: str | None) -> str:
-            """Mask API key for security: show first 4 and last 4 chars."""
-            if not val:
-                return "(not set)"
-            if len(val) < 10:
-                return "****"
-            return val[:4] + "****" + val[-4:]
-
-        # --- LLM configuration ---
-        llm = create_llm_backend()
-        llm_config: dict[str, Any] = {
-            "available": llm.available,
-            "model": llm.model,
-            "base_url": llm.base_url,
-            "api_key": _mask(llm.api_key),
-        }
-
-        # Detect which provider env var was used
-        from terrain.domains.upper.rag.llm_backend import _PROVIDER_ENVS
-        detected_provider = None
-        for key_env, *_ in _PROVIDER_ENVS:
-            if _os.environ.get(key_env):
-                detected_provider = key_env
-                break
-        llm_config["detected_via"] = detected_provider or "(none)"
-
-        # --- Embedding configuration ---
-        embedding_config: dict[str, Any] = {}
-        try:
-            from terrain.domains.core.embedding.qwen3_embedder import create_embedder
-            embedder = create_embedder()
-            embedder_type = type(embedder).__name__
-
-            embedding_config["provider"] = embedder_type
-            if hasattr(embedder, "model"):
-                embedding_config["model"] = embedder.model
-            if hasattr(embedder, "base_url"):
-                embedding_config["base_url"] = embedder.base_url
-            if hasattr(embedder, "api_key"):
-                embedding_config["api_key"] = _mask(embedder.api_key)
-            embedding_config["dimension"] = embedder.get_embedding_dimension()
-            embedding_config["available"] = True
-        except Exception as exc:
-            embedding_config["available"] = False
-            embedding_config["error"] = str(exc)
-
-        # Detect embedding provider source
-        embed_provider = _os.environ.get("EMBEDDING_PROVIDER", "")
-        if not embed_provider:
-            if _os.environ.get("DASHSCOPE_API_KEY"):
-                embed_provider = "qwen3 (auto-detected via DASHSCOPE_API_KEY)"
-            elif _os.environ.get("EMBEDDING_API_KEY") or _os.environ.get("OPENAI_API_KEY"):
-                embed_provider = "openai (auto-detected)"
-            else:
-                embed_provider = "(none)"
-        embedding_config["detected_via"] = embed_provider
-
-        # --- Workspace ---
-        workspace_config: dict[str, Any] = {
-            "path": str(self._workspace),
-            "active_repo": str(self._active_repo_path) if self._active_repo_path else None,
-            "active_artifact_dir": str(self._active_artifact_dir) if self._active_artifact_dir else None,
-        }
-
-        # --- Service status ---
-        # Check if graph database exists (without opening persistent connection)
-        has_graph = (
-            self._active_artifact_dir is not None
-            and (self._active_artifact_dir / "graph.db").exists()
-        )
-        services: dict[str, bool] = {
-            "graph_database": has_graph,
-            "cypher_query": self._cypher_gen is not None and has_graph,
-            "semantic_search": self._semantic_service is not None,
-            "file_editor": self._file_editor is not None,
-        }
-
-        # --- Environment variable overview ---
-        env_keys = [
-            "TERRAIN_WORKSPACE",
-            "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
-            "LITELLM_API_KEY", "LITELLM_BASE_URL", "LITELLM_MODEL",
-            "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
-            "MOONSHOT_API_KEY", "MOONSHOT_MODEL",
-            "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL",
-            "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL", "EMBEDDING_MODEL",
-            "EMBEDDING_PROVIDER",
-        ]
-        env_status: dict[str, str] = {}
-        for key in env_keys:
-            val = _os.environ.get(key)
-            if val is None:
-                env_status[key] = "(not set)"
-            elif "KEY" in key:
-                env_status[key] = _mask(val)
-            else:
-                env_status[key] = val
-
-        return {
-            "llm": llm_config,
-            "embedding": embedding_config,
-            "workspace": workspace_config,
-            "services": services,
-            "environment_variables": env_status,
         }
 
     # -------------------------------------------------------------------------
@@ -4081,90 +2880,3 @@ class MCPToolsRegistry:
             "functions": functions,
         }
 
-    # -------------------------------------------------------------------------
-    # extract_predicates — predicate skeleton for a C function (slice 1/3)
-    # -------------------------------------------------------------------------
-
-    async def _handle_extract_predicates(
-        self,
-        qualified_name: str,
-    ) -> dict[str, Any]:
-        """Extract predicates (if / while / for / switch_case / ternary) from a
-        C function's AST subtree.
-
-        Slice 1 MVP: only the skeleton — kind / location / expression /
-        nesting_path. ``symbols_referenced``, ``guarded_block``,
-        ``contains_assignments``, ``contains_calls``, ``has_early_return`` are
-        reserved for slice 2/3.
-        """
-        self._require_active()
-        assert self._active_repo_path is not None
-        repo_path = self._active_repo_path
-
-        bundle = _extract_predicates_bundle()
-        parser = bundle["parser"]
-        predicate_query = bundle["predicate_query"]
-        function_query = bundle["function_query"]
-        call_query = bundle.get("call_query")
-        if parser is None or predicate_query is None or function_query is None:
-            raise ToolError(
-                "C parser or predicate query unavailable. "
-                "Ensure tree-sitter-c is installed."
-            )
-
-        simple_name = qualified_name.rsplit(".", 1)[-1]
-
-        from tree_sitter import QueryCursor
-        from terrain.foundation.parsers.predicate_processor import extract_predicates
-
-        matches: list[tuple[Any, Path]] = []  # (function_node, abs_path)
-        for abs_path in _extract_predicates_list_c_files(repo_path):
-            try:
-                source_bytes = abs_path.read_bytes()
-            except OSError:
-                continue
-            tree = parser.parse(source_bytes)
-            cursor = QueryCursor(function_query)
-            captures = cursor.captures(tree.root_node)
-            for func_node in captures.get("function", []):
-                name = _extract_predicates_function_name(func_node)
-                if name == simple_name:
-                    matches.append((func_node, abs_path))
-
-        if not matches:
-            return {
-                "success": False,
-                "error": "function not found",
-                "function": qualified_name,
-            }
-
-        if len(matches) > 1:
-            candidates = []
-            for _node, abs_path in matches:
-                try:
-                    rel = str(abs_path.relative_to(repo_path))
-                except ValueError:
-                    rel = str(abs_path)
-                candidates.append(f"{rel}:{_node.start_point[0] + 1}")
-            return {
-                "success": False,
-                "error": "ambiguous",
-                "function": qualified_name,
-                "candidates": sorted(candidates),
-            }
-
-        func_node, abs_path = matches[0]
-        try:
-            rel_file_path = str(abs_path.relative_to(repo_path))
-        except ValueError:
-            rel_file_path = str(abs_path)
-
-        predicates = extract_predicates(
-            func_node, predicate_query, rel_file_path, call_query=call_query
-        )
-
-        return {
-            "success": True,
-            "function": qualified_name,
-            "predicates": predicates,
-        }

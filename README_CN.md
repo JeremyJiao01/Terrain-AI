@@ -202,7 +202,6 @@ terrain --help              # 显示帮助
 
 | 工具 | 说明 |
 |---|---|
-| `get_config` | 显示服务器配置和服务可用性 |
 | `rebuild_embeddings` | 构建或重建向量嵌入 |
 
 ### 流水线

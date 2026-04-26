@@ -85,7 +85,7 @@ class TestToolRegistration:
             "find_api", "get_api_doc",
             "find_callers", "trace_call_chain",
             "get_repository_info", "list_repositories",
-            "switch_repository", "get_config",
+            "switch_repository",
         }
         missing = expected - names
         assert not missing, f"Missing expected tools: {missing}"

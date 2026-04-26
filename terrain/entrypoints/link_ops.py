@@ -237,7 +237,12 @@ def batch_migrate_to_v2(ws: Path) -> None:
     repo_metas: dict[str, dict[str, Any]] = {}   # dir_name → meta
     needs_migration: list[str] = []
 
-    for child in sorted(ws.iterdir()):
+    try:
+        children = sorted(ws.iterdir())
+    except OSError:
+        return
+
+    for child in children:
         if not child.is_dir():
             continue
         meta = _read_meta(child / "meta.json")

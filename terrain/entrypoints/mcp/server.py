@@ -270,9 +270,17 @@ async def main() -> None:
     _t_main = _time.monotonic()
     logger.debug("=== main() entered ===")
 
-    workspace = Path(
-        os.environ.get("TERRAIN_WORKSPACE", Path.home() / ".terrain")
-    ).expanduser().resolve()
+    env_ws = os.environ.get("TERRAIN_WORKSPACE")
+    if env_ws:
+        workspace = Path(env_ws).expanduser().resolve()
+        logger.debug("  using TERRAIN_WORKSPACE env var as workspace: {}", workspace)
+    else:
+        cwd_terrain = Path.cwd().resolve() / ".terrain"
+        if cwd_terrain.is_dir():
+            workspace = cwd_terrain
+            logger.debug("  using cwd .terrain/ as workspace: {}", workspace)
+        else:
+            workspace = (Path.home() / ".terrain").resolve()
     logger.debug("  workspace: {}", workspace)
 
     logger.debug("  creating MCPToolsRegistry (includes _try_auto_load)...")

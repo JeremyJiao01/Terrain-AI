@@ -190,7 +190,6 @@ class TestUserFlow:
         test_calls = [
             ("list_repositories", {}),
             ("get_repository_info", {}),
-            ("get_config", {}),
             ("find_api", {"query": "function", "top_k": 2}),
         ]
         for tool_name, args in test_calls:

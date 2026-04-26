@@ -222,7 +222,6 @@ terrain --help              # Show help
 
 | Tool | Description |
 |---|---|
-| `get_config` | Show server configuration and service availability |
 | `rebuild_embeddings` | Build or rebuild vector embeddings |
 
 ### Pipeline
