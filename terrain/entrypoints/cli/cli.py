@@ -1024,6 +1024,76 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# verify — read-only health check of .terrain/ artifacts (CI-friendly)
+# ---------------------------------------------------------------------------
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Health-check artifacts of the active repo: ok / corrupt / missing."""
+    ws = _get_workspace_root()
+    active_file = ws / "active.txt"
+    active_name = active_file.read_text(encoding="utf-8", errors="replace").strip() if active_file.exists() else ""
+    if not active_name or not (ws / active_name).is_dir():
+        if getattr(args, "json", False):
+            print(json.dumps([], ensure_ascii=False))
+        else:
+            print("no active repo")
+        return 0
+
+    art = ws / active_name
+
+    def _check_meta(p: Path) -> None:
+        json.loads(p.read_text(encoding="utf-8", errors="strict"))
+
+    def _check_graph(p: Path) -> None:
+        import kuzu  # local import keeps import cost off the hot path
+        kuzu.Database(str(p), read_only=True)
+
+    def _check_vectors(p: Path) -> None:
+        import pickle as _pk
+        with open(p, "rb") as fh:
+            _pk.load(fh)
+
+    def _check_api_docs(p: Path) -> None:
+        list((p / "funcs").iterdir())  # raises if funcs/ missing or unreadable
+
+    checks: list[tuple[str, Path, Any]] = [
+        ("meta.json",   art / "meta.json",    _check_meta),
+        ("graph.db",    art / "graph.db",     _check_graph),
+        ("vectors.pkl", art / "vectors.pkl",  _check_vectors),
+        ("api_docs/",   art / "api_docs",     _check_api_docs),
+    ]
+
+    entries: list[dict[str, Any]] = []
+    for name, path, fn in checks:
+        if not path.exists():
+            entries.append({"artifact": name, "status": "missing", "path": str(path)})
+            continue
+        try:
+            fn(path)
+            entries.append({"artifact": name, "status": "ok", "path": str(path)})
+        except Exception as e:
+            entries.append({
+                "artifact": name, "status": "corrupt", "path": str(path),
+                "error": f"{type(e).__name__}: {e}",
+            })
+
+    if getattr(args, "json", False):
+        print(json.dumps(entries, ensure_ascii=False, indent=2))
+    else:
+        for e in entries:
+            extra = f"  ({e['error']})" if e["status"] == "corrupt" else ""
+            print(f"{e['status']:<8}{e['artifact']:<14}{e['path']}{extra}")
+        ok_count = sum(1 for e in entries if e["status"] == "ok")
+        bad_count = len(entries) - ok_count
+        if bad_count:
+            print(f"\n{bad_count} artifact{'s' if bad_count != 1 else ''} not ok — run 'terrain index --rebuild' to regenerate.")
+        else:
+            print(f"\n{ok_count} artifacts ok")
+
+    return 1 if any(e["status"] != "ok" for e in entries) else 0
+
+
+# ---------------------------------------------------------------------------
 # config — view / modify LLM and embedding configuration
 # ---------------------------------------------------------------------------
 
@@ -2803,6 +2873,7 @@ Workspace commands:
   terrain status                    show active repository
   terrain list                      list all indexed repositories
   terrain repo                      interactively switch repository (↑/↓)
+  terrain verify                    health-check .terrain/ artifacts (CI-friendly)
 
 Indexing commands:
   terrain index [path]              full pipeline: graph → api-docs → embeddings
@@ -3028,6 +3099,22 @@ Other commands:
         help="Output machine-readable JSON with repo staleness info",
     )
     status_parser.set_defaults(func=cmd_status)
+
+    # verify command — read-only artifact health check
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Verify .terrain/ artifacts are loadable (read-only, CI-friendly)",
+        description="Try-load every artifact under the active repo's .terrain/ directory "
+                    "and report ok / corrupt / missing. Exits non-zero if any artifact is "
+                    "not ok — suitable for CI pre-flight checks.",
+    )
+    verify_parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output machine-readable JSON array instead of human-readable lines",
+    )
+    verify_parser.set_defaults(func=cmd_verify)
 
     # config command
     config_parser = subparsers.add_parser(
