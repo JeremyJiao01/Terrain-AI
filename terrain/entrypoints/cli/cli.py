@@ -687,7 +687,8 @@ def _interactive_select(repos: list[dict]) -> int | None:
             for i, r in enumerate(repos):
                 marker = _c("1;32", "▶") if i == selected else " "
                 active_tag = f"  {_c('33', '(active)')}" if r["active"] else ""
-                sys.stdout.write(f"\r\033[2K  {marker} {r['name']}{active_tag}\r\n")
+                path_hint = f"  {_c('2', r['path'])}" if r.get("path") else ""
+                sys.stdout.write(f"\r\033[2K  {marker} {r['name']}{active_tag}{path_hint}\r\n")
             drawn = True
         else:
             for i, r in enumerate(repos):
@@ -762,7 +763,8 @@ def _numbered_select(repos: list[dict]) -> int | None:
     """Plain-text numbered fallback for non-interactive terminals."""
     for i, r in enumerate(repos):
         active_tag = "  (active)" if r["active"] else ""
-        print(f"  {i + 1}. {r['name']}{active_tag}")
+        path_hint = f"  {r['path']}" if r.get("path") else ""
+        print(f"  {i + 1}. {r['name']}{active_tag}{path_hint}")
     try:
         raw = input(f"\nEnter number [1-{len(repos)}], q to cancel: ").strip()
         if raw.lower() == "q":
@@ -940,34 +942,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         print(f"  debug      {_c('2', 'OFF')}   — terrain status --debug on to enable")
 
-    # ── Repos staleness ──
-    repo_entries = _get_repo_status_entries(ws)
-    if repo_entries:
+    # ── Repos ──
+    if total > 0:
         print()
-        _STATUS_ICONS = {
-            "up-to-date": _c("32", "✅") if _ANSI else "ok ",
-            "stale":      _c("33", "⚠️") if _ANSI else "!! ",
-            "unknown":    _c("2",  "❓") if _ANSI else "?  ",
-        }
-        _STATUS_LABELS = {
-            "up-to-date": _c("32", "up-to-date"),
-            "stale":      _c("33", "stale"),
-            "unknown":    _c("2",  "unknown"),
-        }
-        name_w = max(len(e["name"]) for e in repo_entries)
-        for entry in repo_entries:
-            icon = _STATUS_ICONS[entry["status"]]
-            label = _STATUS_LABELS[entry["status"]]
-            commits = entry["commits_since"]
-            indexed_at = entry["indexed_at"]
-            if commits is None:
-                detail = "no git repo detected"
-            elif commits == 0:
-                detail = f"0 commits since last index"
-            else:
-                detail = f"{commits} commit{'s' if commits != 1 else ''} since last index"
-            name_padded = entry["name"].ljust(name_w)
-            print(f"  {name_padded}  {icon}  {label:<12}  ({detail})")
+        name_w = max(len(r["name"]) for r in repos)
+        for r in repos:
+            tag = _c("32", "*") if r["active"] else " "
+            print(f"  {tag} {r['name'].ljust(name_w)}  {_c('2', r['path'])}")
     elif ws.exists():
         print(f"  repos      {_c('2', '(none indexed)')}")
 
